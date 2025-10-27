@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: site-monitoring-worker
+    env: node
+    rootDir: monitoring-worker
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 18
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: WORKER_SECRET
+        sync: false
+      - key: PORT
+        value: 3001

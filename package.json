@@ -1,0 +1,25 @@
+{
+  "name": "site-monitoring-worker",
+  "version": "1.0.0",
+  "description": "Website monitoring worker for MFA Buster - scans publisher sites for quality metrics",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "node test-worker.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
+    "express": "^4.19.2",
+    "puppeteer": "^24.15.0",
+    "cheerio": "^1.0.0",
+    "axios": "^1.7.0",
+    "node-fetch": "^3.3.2",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
