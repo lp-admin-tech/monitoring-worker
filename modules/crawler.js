@@ -7,10 +7,22 @@ export class WebsiteCrawler {
 
   async initBrowser() {
     if (!this.browser) {
-      this.browser = await puppeteer.launch({
+      const launchOptions = {
         headless: 'new',
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-      });
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--disable-gpu'
+        ]
+      };
+
+      if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+        launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+      }
+
+      this.browser = await puppeteer.launch(launchOptions);
     }
   }
 

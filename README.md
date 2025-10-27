@@ -125,4 +125,15 @@ Health check endpoint.
 
 This worker can be deployed to any Node.js hosting platform that supports Puppeteer (Render, Railway, etc.).
 
-For Render deployment, use the included `render.yaml` configuration.
+### Render Deployment
+
+1. Use the included `render.yaml` configuration
+2. The build process automatically installs Chrome for Puppeteer
+3. Environment variables are configured in the `render.yaml` file
+4. Set your `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, and `WORKER_SECRET` in the Render dashboard
+
+The deployment process will:
+- Install all npm dependencies
+- Download and install Chrome via Puppeteer
+- Configure the correct cache directory for Chrome binaries
+- Start the monitoring worker on the specified port

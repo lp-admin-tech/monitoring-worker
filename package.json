@@ -5,6 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
+    "postinstall": "node -e \"const puppeteer = require('puppeteer'); puppeteer.executablePath()\" || npx puppeteer browsers install chrome || true",
     "start": "node index.js",
     "dev": "node --watch index.js",
     "test": "node test-worker.js"

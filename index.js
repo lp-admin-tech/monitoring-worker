@@ -303,9 +303,18 @@ app.post('/audit', async (req, res) => {
       return res.status(400).json({ error: 'Missing publisherId or domain' });
     }
 
-    const result = await auditWebsite(publisherId, domain);
+    // Respond immediately and process in background
+    res.json({
+      success: true,
+      message: `Audit started for ${domain}`,
+      publisherId,
+      domain
+    });
 
-    res.json(result);
+    // Process audit asynchronously in background
+    auditWebsite(publisherId, domain).catch(error => {
+      console.error(`Background audit error for ${domain}:`, error);
+    });
 
   } catch (error) {
     console.error('Audit endpoint error:', error);

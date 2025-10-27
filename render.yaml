@@ -3,11 +3,17 @@ services:
     name: site-monitoring-worker
     env: node
     rootDir: monitoring-worker
-    buildCommand: npm install
+    buildCommand: |
+      npm install
+      npx puppeteer browsers install chrome
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
         value: 18
+      - key: PUPPETEER_CACHE_DIR
+        value: /opt/render/.cache/puppeteer
+      - key: PUPPETEER_SKIP_DOWNLOAD
+        value: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_KEY
