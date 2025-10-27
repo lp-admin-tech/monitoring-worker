@@ -61,8 +61,14 @@ export class AdAnalyzer {
           adElements.push(el);
           totalAds++;
 
-          const position = $el.offset();
-          if (position && position.top < 800) {
+          // Estimate above-the-fold placement based on DOM position
+          // Check if element appears early in the body (rough heuristic)
+          const allElements = $('body *');
+          const elementIndex = allElements.index(el);
+          const totalElements = allElements.length;
+
+          // Consider first 20% of DOM elements as potentially above fold
+          if (totalElements > 0 && elementIndex >= 0 && elementIndex < totalElements * 0.2) {
             adsAboveFold++;
           }
 
