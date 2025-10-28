@@ -85,11 +85,19 @@ export class SEOAnalyzer {
     if (contentHeight > viewportHeight * 2) estimatedDepth = 0.6;
     if (contentHeight > viewportHeight * 4) estimatedDepth = 0.8;
 
-    const adsAboveFold = $('[id*="ad"], [class*="ad"], iframe[src*="doubleclick"]')
-      .filter((i, el) => {
-        const offset = $(el).offset();
-        return offset && offset.top < viewportHeight;
-      }).length;
+    const allElements = $('body *').toArray();
+    const adElements = $('[id*="ad"], [class*="ad"], iframe[src*="doubleclick"]').toArray();
+
+    let adsAboveFold = 0;
+    adElements.forEach(adEl => {
+      const adIndex = allElements.indexOf(adEl);
+      const bodyLength = allElements.length;
+      const estimatedPosition = (adIndex / bodyLength) * 100;
+
+      if (estimatedPosition < 30) {
+        adsAboveFold++;
+      }
+    });
 
     if (adsAboveFold > 2) estimatedDepth -= 0.1;
 

@@ -33,8 +33,4 @@ services:
       - key: PORT
         value: 3001
       - key: REQUEST_TIMEOUT
-<<<<<<< HEAD
         value: 900000
-=======
-        value: 900
->>>>>>> ee084e6962ed51ade7331deda866a715af27d0bd

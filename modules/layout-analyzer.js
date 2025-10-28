@@ -44,34 +44,36 @@ export class LayoutAnalyzer {
       '[data-ad-slot]'
     ];
 
-    const viewportHeight = 800;
+    const allElements = $('body *').toArray();
+    const bodyLength = allElements.length;
+
     let adsAboveFold = 0;
     let overlapping = false;
 
     const adElements = [];
     adSelectors.forEach(selector => {
       $(selector).each((i, el) => {
-        const $el = $(el);
-        const offset = $el.offset();
+        const adIndex = allElements.indexOf(el);
+        const estimatedPosition = (adIndex / bodyLength) * 100;
 
-        if (offset && offset.top < viewportHeight) {
+        if (estimatedPosition < 30) {
           adsAboveFold++;
-          adElements.push({ el: $el, offset });
+          adElements.push({ el: $(el), position: estimatedPosition });
         }
       });
     });
 
     const navElements = $('nav, header, [role="navigation"], .menu, .navbar');
     navElements.each((i, navEl) => {
-      const navOffset = $(navEl).offset();
-      if (!navOffset) return;
+      const navIndex = allElements.indexOf(navEl);
+      const navPosition = (navIndex / bodyLength) * 100;
 
-      adElements.forEach(({ el, offset }) => {
+      adElements.forEach(({ el, position }) => {
         const zIndex = parseInt(el.css('z-index')) || 0;
         const navZIndex = parseInt($(navEl).css('z-index')) || 0;
 
         if (
-          Math.abs(offset.top - navOffset.top) < 100 &&
+          Math.abs(position - navPosition) < 5 &&
           zIndex > navZIndex
         ) {
           overlapping = true;
@@ -97,10 +99,13 @@ export class LayoutAnalyzer {
       };
     }
 
-    const contentOffset = mainContent.first().offset();
-    const viewportHeight = 800;
+    const allElements = $('body *').toArray();
+    const bodyLength = allElements.length;
+    const contentElement = mainContent.first()[0];
+    const contentIndex = allElements.indexOf(contentElement);
+    const estimatedPosition = (contentIndex / bodyLength) * 100;
 
-    const hasContent = contentOffset && contentOffset.top < viewportHeight;
+    const hasContent = estimatedPosition < 50;
 
     const bodyChildren = $('body').children();
     let contentFirst = false;
@@ -134,7 +139,7 @@ export class LayoutAnalyzer {
     return {
       hasContent: hasContent && hasSubstantialContent,
       contentFirst,
-      contentPosition: contentOffset ? contentOffset.top : null,
+      contentPosition: estimatedPosition,
       adsBeforeContent
     };
   }
@@ -150,15 +155,16 @@ export class LayoutAnalyzer {
       };
     }
 
-    const navOffset = navElements.first().offset();
-    const navTop = navOffset ? navOffset.top : null;
+    const allElements = $('body *').toArray();
+    const bodyLength = allElements.length;
+    const navElement = navElements.first()[0];
+    const navIndex = allElements.indexOf(navElement);
+    const estimatedPosition = (navIndex / bodyLength) * 100;
 
     let position = 'Below Fold';
-    if (navTop !== null) {
-      if (navTop < 150) position = 'Top';
-      else if (navTop < 500) position = 'Above Fold';
-      else if (navTop < 1000) position = 'Near Fold';
-    }
+    if (estimatedPosition < 10) position = 'Top';
+    else if (estimatedPosition < 25) position = 'Above Fold';
+    else if (estimatedPosition < 40) position = 'Near Fold';
 
     const stickyAds = $('[style*="position: fixed"], [style*="position:fixed"]').filter((i, el) => {
       const html = $(el).html() || '';
@@ -170,7 +176,7 @@ export class LayoutAnalyzer {
     return {
       position,
       accessible,
-      offsetTop: navTop
+      offsetTop: estimatedPosition
     };
   }
 
