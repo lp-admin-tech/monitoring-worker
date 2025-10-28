@@ -42,15 +42,21 @@ async function auditWebsite(publisherId, domain) {
 
   try {
     console.log(`[DB] Creating audit record in site_audits table...`);
-    const { data: auditRecord } = await supabase
+    const { data: auditRecord, error: insertError } = await supabase
       .from('site_audits')
       .insert({
         publisher_id: publisherId,
         domain,
+        site_url: domain,
         scan_status: 'in_progress'
       })
       .select()
       .single();
+
+    if (insertError) {
+      console.error(`[DB] ERROR creating audit record:`, insertError);
+      throw new Error(`Failed to create audit record: ${insertError.message}`);
+    }
 
     const auditId = auditRecord?.id;
     console.log(`[DB] Audit record created with ID: ${auditId}`);
@@ -61,13 +67,17 @@ async function auditWebsite(publisherId, domain) {
 
     if (!crawlResult.success) {
       console.error(`[MODULE: CRAWLER] FAILED - Error: ${crawlResult.error}`);
-      await supabase
+      const { error: failUpdateError } = await supabase
         .from('site_audits')
         .update({
           scan_status: 'failed',
           error_message: crawlResult.error
         })
         .eq('id', auditId);
+
+      if (failUpdateError) {
+        console.error(`[DB] ERROR updating failed status:`, failUpdateError);
+      }
 
       console.log(`[AUDIT END] Failed for ${domain}`);
       return { success: false, error: crawlResult.error };
@@ -192,101 +202,137 @@ async function auditWebsite(publisherId, domain) {
 
     const htmlSnapshot = crawlResult.htmlContent.substring(0, 5000);
 
+    const safeInt = (value) => {
+      if (typeof value === 'number' && !isNaN(value)) return Math.round(value);
+      if (typeof value === 'string') {
+        const parsed = parseInt(value, 10);
+        if (!isNaN(parsed)) return parsed;
+      }
+      if (typeof value === 'boolean') {
+        console.warn(`[TYPE-SAFETY] WARNING: Boolean ${value} passed to safeInt, converting to 0`);
+        return 0;
+      }
+      return 0;
+    };
+
+    const safeFloat = (value) => {
+      if (typeof value === 'number' && !isNaN(value)) return value;
+      if (typeof value === 'string') {
+        const parsed = parseFloat(value);
+        if (!isNaN(parsed)) return parsed;
+      }
+      return null;
+    };
+
+    const safeBool = (value) => {
+      if (typeof value === 'boolean') return value;
+      if (value === 'true' || value === 1) return true;
+      if (value === 'false' || value === 0) return false;
+      return false;
+    };
+
+    console.log(`[TYPE-SAFETY] content_value_score type: ${typeof policyCompliance.checks.contentPolicy.contentValueScore}, value: ${policyCompliance.checks.contentPolicy.contentValueScore}`);
+
     console.log(`[DB] Updating site_audits table with all results...`);
-    await supabase
+    const { error: updateError } = await supabase
       .from('site_audits')
       .update({
         scanned_at: new Date().toISOString(),
-        load_time: crawlResult.loadTime,
-        has_privacy_policy: contentData.hasPrivacyPolicy,
-        has_contact_page: contentData.hasContactPage,
-        ads_txt_valid: adsTxtValid,
-        content_length: contentData.contentLength,
-        content_uniqueness: contentData.contentUniqueness,
-        ad_density: adData.adDensity,
-        total_ads: adData.totalAds,
-        ads_above_fold: adData.adsAboveFold,
-        ads_in_content: adData.adsInContent,
-        ads_sidebar: adData.adsSidebar,
-        sticky_ads_count: adData.stickyAds,
-        auto_refresh_ads: adData.autoRefreshAds,
-        ad_to_content_ratio: adData.adToContentRatio,
-        page_speed_score: pageSpeedScore,
-        mobile_friendly: mobileFriendly,
-        popups_detected: crawlResult.popupCount,
-        broken_links: brokenLinks,
-        has_featured_images: imageData.hasFeaturedImages,
-        total_images: imageData.totalImages,
-        images_with_alt: imageData.imagesWithAlt,
-        optimized_images: imageData.optimizedImages,
-        videos_count: imageData.videosCount,
-        has_publish_dates: publishingData.hasPublishDates,
-        has_author_info: publishingData.hasAuthorInfo,
+        load_time: safeInt(crawlResult.loadTime),
+        has_privacy_policy: safeBool(contentData.hasPrivacyPolicy),
+        has_contact_page: safeBool(contentData.hasContactPage),
+        ads_txt_valid: safeBool(adsTxtValid),
+        content_length: safeInt(contentData.contentLength),
+        content_uniqueness: safeFloat(contentData.contentUniqueness),
+        ad_density: safeFloat(adData.adDensity),
+        total_ads: safeInt(adData.totalAds),
+        ads_above_fold: safeInt(adData.adsAboveFold),
+        ads_in_content: safeInt(adData.adsInContent),
+        ads_sidebar: safeInt(adData.adsSidebar),
+        sticky_ads_count: safeInt(adData.stickyAds),
+        auto_refresh_ads: safeBool(adData.autoRefreshAds),
+        ad_to_content_ratio: safeFloat(adData.adToContentRatio),
+        page_speed_score: safeFloat(pageSpeedScore),
+        mobile_friendly: safeBool(mobileFriendly),
+        popups_detected: safeInt(crawlResult.popupCount),
+        broken_links: safeInt(brokenLinks),
+        has_featured_images: safeBool(imageData.hasFeaturedImages),
+        total_images: safeInt(imageData.totalImages),
+        images_with_alt: safeInt(imageData.imagesWithAlt),
+        optimized_images: safeInt(imageData.optimizedImages),
+        videos_count: safeInt(imageData.videosCount),
+        has_publish_dates: safeBool(publishingData.hasPublishDates),
+        has_author_info: safeBool(publishingData.hasAuthorInfo),
         latest_post_date: publishingData.latestPostDate?.toISOString(),
-        post_frequency_days: publishingData.postFrequencyDays,
-        total_posts_found: publishingData.totalPostsFound,
-        content_freshness_score: publishingData.contentFreshnessScore,
-        domain_age_days: domainData.domainAgeDays,
+        post_frequency_days: safeFloat(publishingData.postFrequencyDays),
+        total_posts_found: safeInt(publishingData.totalPostsFound),
+        content_freshness_score: safeFloat(publishingData.contentFreshnessScore),
+        domain_age_days: safeInt(domainData.domainAgeDays),
         domain_created_date: domainData.domainCreatedDate?.toISOString(),
-        ssl_valid: domainData.sslValid,
-        domain_authority_score: domainData.domainAuthorityScore,
-        mfa_score: scoreResult.websiteQualityScore,
+        ssl_valid: safeBool(domainData.sslValid),
+        domain_authority_score: safeFloat(domainData.domainAuthorityScore),
+        mfa_score: safeFloat(scoreResult.websiteQualityScore),
         safe_browsing_status: safeBrowsingResult.isSafe ? 'safe' : 'unsafe',
         safe_browsing_threats: safeBrowsingResult.threats || [],
-        seo_score: seoData.score,
-        seo_meta_quality: seoData.metaQuality,
-        seo_keyword_spam_score: seoData.keywordSpamScore,
+        seo_score: safeFloat(seoData.score),
+        seo_meta_quality: safeFloat(seoData.metaQuality),
+        seo_keyword_spam_score: safeFloat(seoData.keywordSpamScore),
         seo_navigation_status: seoData.navigationStatus,
-        seo_categories_checked: seoData.categoriesChecked,
-        seo_categories_with_articles: seoData.categoriesWithArticles,
-        seo_has_sitemap: seoData.sitemap,
-        seo_has_robots_txt: seoData.robotsTxt,
+        seo_categories_checked: safeInt(seoData.categoriesChecked),
+        seo_categories_with_articles: safeInt(seoData.categoriesWithArticles),
+        seo_has_sitemap: safeBool(seoData.sitemap),
+        seo_has_robots_txt: safeBool(seoData.robotsTxt),
         seo_issues: seoData.issues,
-        engagement_score: engagementData.score,
-        engagement_scroll_depth: engagementData.avgScrollDepth,
-        engagement_session_time: engagementData.sessionTimeEstimate,
-        engagement_clickable_links: engagementData.clickableLinks,
-        engagement_navigation_blocked: engagementData.navigationBlocked,
-        engagement_redirects_detected: engagementData.redirectsDetected,
+        engagement_score: safeFloat(engagementData.score),
+        engagement_scroll_depth: safeFloat(engagementData.avgScrollDepth),
+        engagement_session_time: safeFloat(engagementData.sessionTimeEstimate),
+        engagement_clickable_links: safeInt(engagementData.clickableLinks),
+        engagement_navigation_blocked: safeBool(engagementData.navigationBlocked),
+        engagement_redirects_detected: safeBool(engagementData.redirectsDetected),
         engagement_issues: engagementData.issues,
-        layout_score: layoutData.score,
+        layout_score: safeFloat(layoutData.score),
         layout_menu_position: layoutData.menuPosition,
-        layout_content_above_fold: layoutData.contentAboveFold,
-        layout_content_before_ads: layoutData.contentBeforeAds,
-        layout_menu_accessible: layoutData.menuAccessible,
-        layout_overlapping_ads: layoutData.overlappingAds,
+        layout_content_above_fold: safeBool(layoutData.contentAboveFold),
+        layout_content_before_ads: safeBool(layoutData.contentBeforeAds),
+        layout_menu_accessible: safeBool(layoutData.menuAccessible),
+        layout_overlapping_ads: safeBool(layoutData.overlappingAds),
         layout_issues: layoutData.issues,
         ad_networks_detected: adNetworks.networks,
-        ad_networks_count: adNetworks.count,
-        has_google_ads: adNetworks.hasGoogleAds,
-        has_multiple_ad_networks: adNetworks.hasMultipleNetworks,
-        policy_compliance_score: policyCompliance.overallScore,
+        ad_networks_count: safeInt(adNetworks.count),
+        has_google_ads: safeBool(adNetworks.hasGoogleAds),
+        has_multiple_ad_networks: safeBool(adNetworks.hasMultipleNetworks),
+        policy_compliance_score: safeInt(policyCompliance.overallScore),
         policy_compliance_level: policyCompliance.complianceLevel,
         policy_critical_issues: policyCompliance.criticalIssues,
-        policy_user_consent_score: policyCompliance.checks.userConsent.score,
-        policy_cookie_compliance_score: policyCompliance.checks.cookieCompliance.score,
+        policy_user_consent_score: safeInt(policyCompliance.checks.userConsent.score),
+        policy_cookie_compliance_score: safeInt(policyCompliance.checks.cookieCompliance.score),
         policy_content_violations: policyCompliance.checks.contentPolicy.issues,
-        policy_ad_placement_score: policyCompliance.checks.adPlacement.score,
-        policy_technical_compliance_score: policyCompliance.checks.technicalCompliance.score,
-        policy_invalid_traffic_risk_score: policyCompliance.checks.invalidTraffic.score,
-        policy_transparency_score: policyCompliance.checks.transparency.score,
-        policy_data_handling_score: policyCompliance.checks.dataHandling.score,
+        policy_ad_placement_score: safeInt(policyCompliance.checks.adPlacement.score),
+        policy_technical_compliance_score: safeInt(policyCompliance.checks.technicalCompliance.score),
+        policy_invalid_traffic_risk_score: safeInt(policyCompliance.checks.invalidTraffic.score),
+        policy_transparency_score: safeInt(policyCompliance.checks.transparency.score),
+        policy_data_handling_score: safeInt(policyCompliance.checks.dataHandling.score),
         policy_recommendations: policyCompliance.recommendations,
-        has_consent_mechanism: policyCompliance.checks.userConsent.hasConsentMechanism,
-        has_opt_out_option: policyCompliance.checks.userConsent.hasOptOut,
-        mentions_third_party_ads: policyCompliance.checks.userConsent.mentionsThirdParties,
-        has_cookie_policy: policyCompliance.checks.cookieCompliance.cookiePolicyExists,
-        has_pii_protection: policyCompliance.checks.cookieCompliance.hasPIIProtection,
-        coppa_compliant: policyCompliance.checks.contentPolicy.isCoppaCompliant,
-        content_value_score: policyCompliance.checks.contentPolicy.contentValueScore,
-        encourages_ad_clicks: policyCompliance.checks.invalidTraffic.encouragesClicks,
-        has_hidden_iframes: policyCompliance.checks.technicalCompliance.hiddenIframes > 0,
-        has_about_page: policyCompliance.checks.transparency.hasAboutPage,
-        has_sponsored_content_disclosure: policyCompliance.checks.transparency.hasDisclaimer,
+        has_consent_mechanism: safeBool(policyCompliance.checks.userConsent.hasConsentMechanism),
+        has_opt_out_option: safeBool(policyCompliance.checks.userConsent.hasOptOut),
+        mentions_third_party_ads: safeBool(policyCompliance.checks.userConsent.mentionsThirdParties),
+        has_cookie_policy: safeBool(policyCompliance.checks.cookieCompliance.cookiePolicyExists),
+        has_pii_protection: safeBool(policyCompliance.checks.cookieCompliance.hasPIIProtection),
+        coppa_compliant: safeBool(policyCompliance.checks.contentPolicy.isCoppaCompliant),
+        content_value_score: safeInt(policyCompliance.checks.contentPolicy.contentValueScore),
+        encourages_ad_clicks: safeBool(policyCompliance.checks.invalidTraffic.encouragesClicks),
+        has_hidden_iframes: safeBool(policyCompliance.checks.technicalCompliance.hiddenIframes > 0),
+        has_about_page: safeBool(policyCompliance.checks.transparency.hasAboutPage),
+        has_sponsored_content_disclosure: safeBool(policyCompliance.checks.transparency.hasDisclaimer),
         raw_html_snapshot: htmlSnapshot,
         scan_status: 'completed'
       })
       .eq('id', auditId);
+
+    if (updateError) {
+      console.error(`[DB] ERROR updating audit record:`, updateError);
+      throw new Error(`Failed to update audit record: ${updateError.message}`);
+    }
 
     console.log(`[DB] Database updated successfully`);
 
