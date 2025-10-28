@@ -5,7 +5,7 @@ services:
     rootDir: monitoring-worker
     buildCommand: |
       npm install
-      npx puppeteer browsers install chrome
+      npx playwright install chromium
     startCommand: npm start
     autoDeploy: true
     scaling:
@@ -20,10 +20,8 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 18
-      - key: PUPPETEER_CACHE_DIR
-        value: /opt/render/.cache/puppeteer
-      - key: PUPPETEER_SKIP_DOWNLOAD
-        value: false
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/.cache/ms-playwright
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_KEY
