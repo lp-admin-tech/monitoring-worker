@@ -7,6 +7,16 @@ services:
       npm install
       npx puppeteer browsers install chrome
     startCommand: npm start
+    autoDeploy: true
+    scaling:
+      minInstances: 0
+      maxInstances: 1
+    autoscaling:
+      enabled: true
+      minInstances: 0
+      maxInstances: 1
+      targetMemoryPercent: 80
+      targetCPUPercent: 80
     envVars:
       - key: NODE_VERSION
         value: 18
@@ -22,3 +32,5 @@ services:
         sync: false
       - key: PORT
         value: 3001
+      - key: REQUEST_TIMEOUT
+        value: 900000
