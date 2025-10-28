@@ -69,14 +69,14 @@ export class SEOAnalyzer {
   }
 
   analyzeScrollDepth($) {
-    const bodyHeight = $('body').height() || 1;
     const mainContent = $('main, article, [role="main"], .content, .post-content');
 
     if (mainContent.length === 0) {
       return { estimatedDepth: 0.2, quality: 'Poor' };
     }
 
-    const contentHeight = mainContent.first().height() || 0;
+    const contentText = mainContent.first().text();
+    const contentHeight = Math.max(contentText.length / 5, 800);
     const viewportHeight = 800;
 
     const foldContent = contentHeight / viewportHeight;
@@ -185,8 +185,9 @@ export class SEOAnalyzer {
       totalAdArea += width * height;
     });
 
+    const mainText = $('main, article, .content').first().text();
     const contentArea = $('main, article, .content').length > 0
-      ? ($('main, article, .content').first().height() || 1000) * 800
+      ? Math.max(mainText.length / 2, 1000) * 800
       : 800000;
 
     return Math.min(totalAdArea / contentArea, 1);
