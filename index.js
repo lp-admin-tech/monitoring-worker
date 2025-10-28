@@ -42,15 +42,21 @@ async function auditWebsite(publisherId, domain) {
 
   try {
     console.log(`[DB] Creating audit record in site_audits table...`);
-    const { data: auditRecord } = await supabase
+    const { data: auditRecord, error: insertError } = await supabase
       .from('site_audits')
       .insert({
         publisher_id: publisherId,
         domain,
+        site_url: domain,
         scan_status: 'in_progress'
       })
       .select()
       .single();
+
+    if (insertError) {
+      console.error(`[DB] ERROR creating audit record:`, insertError);
+      throw new Error(`Failed to create audit record: ${insertError.message}`);
+    }
 
     const auditId = auditRecord?.id;
     console.log(`[DB] Audit record created with ID: ${auditId}`);
@@ -61,13 +67,17 @@ async function auditWebsite(publisherId, domain) {
 
     if (!crawlResult.success) {
       console.error(`[MODULE: CRAWLER] FAILED - Error: ${crawlResult.error}`);
-      await supabase
+      const { error: failUpdateError } = await supabase
         .from('site_audits')
         .update({
           scan_status: 'failed',
           error_message: crawlResult.error
         })
         .eq('id', auditId);
+
+      if (failUpdateError) {
+        console.error(`[DB] ERROR updating failed status:`, failUpdateError);
+      }
 
       console.log(`[AUDIT END] Failed for ${domain}`);
       return { success: false, error: crawlResult.error };
@@ -193,7 +203,7 @@ async function auditWebsite(publisherId, domain) {
     const htmlSnapshot = crawlResult.htmlContent.substring(0, 5000);
 
     console.log(`[DB] Updating site_audits table with all results...`);
-    await supabase
+    const { error: updateError } = await supabase
       .from('site_audits')
       .update({
         scanned_at: new Date().toISOString(),
@@ -287,6 +297,11 @@ async function auditWebsite(publisherId, domain) {
         scan_status: 'completed'
       })
       .eq('id', auditId);
+
+    if (updateError) {
+      console.error(`[DB] ERROR updating audit record:`, updateError);
+      throw new Error(`Failed to update audit record: ${updateError.message}`);
+    }
 
     console.log(`[DB] Database updated successfully`);
 
