@@ -180,6 +180,7 @@ export class TechnicalChecker {
       };
 
       const timeout = setTimeout(() => {
+        console.log(`[SSL-CHECK] Timeout for domain: ${domain}`);
         resolve(false);
       }, 5000);
 
@@ -190,6 +191,7 @@ export class TechnicalChecker {
           const cert = socket.getPeerCertificate();
 
           if (!cert || Object.keys(cert).length === 0) {
+            console.log(`[SSL-CHECK] No certificate found for domain: ${domain}`);
             socket.destroy();
             resolve(false);
             return;
@@ -201,21 +203,26 @@ export class TechnicalChecker {
 
           const isValid = now >= validFrom && now <= validTo;
 
+          console.log(`[SSL-CHECK] Domain: ${domain}, CN: ${cert.subject?.CN || 'unknown'}, Valid: ${isValid}, ValidFrom: ${validFrom.toISOString()}, ValidTo: ${validTo.toISOString()}`);
+
           socket.destroy();
           resolve(isValid);
         });
 
-        socket.on('error', () => {
+        socket.on('error', (err) => {
+          console.log(`[SSL-CHECK] Socket error for domain ${domain}:`, err.message);
           clearTimeout(timeout);
           resolve(false);
         });
 
         socket.setTimeout(5000, () => {
+          console.log(`[SSL-CHECK] Socket timeout for domain: ${domain}`);
           socket.destroy();
           clearTimeout(timeout);
           resolve(false);
         });
       } catch (error) {
+        console.log(`[SSL-CHECK] Exception for domain ${domain}:`, error.message);
         clearTimeout(timeout);
         resolve(false);
       }
