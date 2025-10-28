@@ -34,9 +34,14 @@ const app = express();
 app.use(express.json());
 
 async function auditWebsite(publisherId, domain) {
-  console.log(`Starting audit for ${domain} (Publisher: ${publisherId})`);
+  console.log(`========================================`);
+  console.log(`[AUDIT START] Domain: ${domain}`);
+  console.log(`[AUDIT START] Publisher ID: ${publisherId}`);
+  console.log(`[AUDIT START] Timestamp: ${new Date().toISOString()}`);
+  console.log(`========================================`);
 
   try {
+    console.log(`[DB] Creating audit record in site_audits table...`);
     const { data: auditRecord } = await supabase
       .from('site_audits')
       .insert({
@@ -48,10 +53,14 @@ async function auditWebsite(publisherId, domain) {
       .single();
 
     const auditId = auditRecord?.id;
+    console.log(`[DB] Audit record created with ID: ${auditId}`);
 
+    console.log(`[MODULE: CRAWLER] Starting website crawl...`);
     const crawlResult = await crawler.crawlSite(domain);
+    console.log(`[MODULE: CRAWLER] Crawl completed - Success: ${crawlResult.success}`);
 
     if (!crawlResult.success) {
+      console.error(`[MODULE: CRAWLER] FAILED - Error: ${crawlResult.error}`);
       await supabase
         .from('site_audits')
         .update({
@@ -60,46 +69,59 @@ async function auditWebsite(publisherId, domain) {
         })
         .eq('id', auditId);
 
-      console.error(`Crawl failed for ${domain}: ${crawlResult.error}`);
+      console.log(`[AUDIT END] Failed for ${domain}`);
       return { success: false, error: crawlResult.error };
     }
 
-    console.log(`Crawl successful for ${domain}, analyzing content...`);
-
+    console.log(`[MODULE: CONTENT-ANALYZER] Analyzing content quality...`);
     const contentData = contentAnalyzer.analyzeContent(
       crawlResult.htmlContent,
       crawlResult.links
     );
+    console.log(`[MODULE: CONTENT-ANALYZER] Content length: ${contentData.contentLength} chars`);
 
+    console.log(`[MODULE: AD-ANALYZER] Analyzing ad density...`);
     const adData = adAnalyzer.analyzeAdDensity(crawlResult.htmlContent);
+    console.log(`[MODULE: AD-ANALYZER] Total ads detected: ${adData.totalAds}, Ad density: ${adData.adDensity.toFixed(2)}`);
 
+    console.log(`[MODULE: AD-ANALYZER] Checking for click interference...`);
     const hasClickInterference = adAnalyzer.detectClickInterference(
       crawlResult.htmlContent
     );
+    console.log(`[MODULE: AD-ANALYZER] Click interference: ${hasClickInterference ? 'YES' : 'NO'}`);
 
+    console.log(`[MODULE: AD-ANALYZER] Detecting ad networks...`);
     const adNetworks = adAnalyzer.detectAdNetworks(crawlResult.htmlContent);
+    console.log(`[MODULE: AD-ANALYZER] Ad networks found: ${adNetworks.count} - ${adNetworks.networks.join(', ')}`);
 
+    console.log(`[MODULE: CONTENT-ANALYZER] Analyzing images...`);
     const imageData = contentAnalyzer.analyzeImages(crawlResult.htmlContent);
+    console.log(`[MODULE: CONTENT-ANALYZER] Total images: ${imageData.totalImages}`);
 
+    console.log(`[MODULE: CONTENT-ANALYZER] Analyzing publishing metadata...`);
     const publishingData = contentAnalyzer.analyzePublishingMetadata(
       crawlResult.htmlContent,
       crawlResult.links
     );
+    console.log(`[MODULE: CONTENT-ANALYZER] Posts found: ${publishingData.totalPostsFound}`);
 
+    console.log(`[MODULE: SEO-ANALYZER] Analyzing SEO and engagement...`);
     const seoEngagementData = seoAnalyzer.analyzeSEOAndEngagement(
       crawlResult.htmlContent,
       crawlResult.links,
       crawlResult.loadTime,
       crawlResult.metrics
     );
+    console.log(`[MODULE: SEO-ANALYZER] SEO score: ${seoEngagementData.score.toFixed(2)}`);
 
     const seoData = seoEngagementData;
     const engagementData = seoEngagementData;
 
+    console.log(`[MODULE: LAYOUT-ANALYZER] Analyzing layout quality...`);
     const layoutData = layoutAnalyzer.analyzeLayout(crawlResult.htmlContent);
+    console.log(`[MODULE: LAYOUT-ANALYZER] Layout score: ${layoutData.score.toFixed(2)}, Menu position: ${layoutData.menuPosition}`);
 
-    console.log(`Performing technical checks for ${domain}...`);
-
+    console.log(`[TECHNICAL-CHECKS] Running parallel technical checks...`);
     const [adsTxtValid, mobileFriendly, brokenLinks, safeBrowsingResult, domainData] = await Promise.all([
       technicalChecker.checkAdsTxt(domain),
       crawler.checkMobileFriendly(domain),
@@ -107,12 +129,16 @@ async function auditWebsite(publisherId, domain) {
       contentAnalyzer.checkSafeBrowsing(domain),
       technicalChecker.checkDomainAge(domain)
     ]);
+    console.log(`[TECHNICAL-CHECKS] Completed - Ads.txt: ${adsTxtValid ? 'Valid' : 'Invalid'}, Mobile friendly: ${mobileFriendly ? 'Yes' : 'No'}`);
 
+    console.log(`[MODULE: TECHNICAL-CHECKER] Calculating page speed score...`);
     const pageSpeedScore = technicalChecker.calculatePageSpeedScore(
       crawlResult.loadTime,
       crawlResult.metrics
     );
+    console.log(`[MODULE: TECHNICAL-CHECKER] Page speed score: ${pageSpeedScore}/100`);
 
+    console.log(`[MODULE: MFA-SCORER] Preparing audit data...`);
     const auditData = {
       contentLength: contentData.contentLength,
       contentUniqueness: contentData.contentUniqueness,
@@ -151,21 +177,22 @@ async function auditWebsite(publisherId, domain) {
       safeBrowsing: safeBrowsingResult
     };
 
-    console.log(`Calculating website quality score for ${domain}...`);
-
+    console.log(`[MODULE: MFA-SCORER] Calculating website quality score...`);
     const scoreResult = mfaScorer.calculateWebsiteQualityScore(auditData, seoData, engagementData, layoutData);
+    console.log(`[MODULE: MFA-SCORER] Website Quality Score: ${scoreResult.websiteQualityScore}/${scoreResult.maxScore}`);
 
-    console.log(`Running policy compliance checks for ${domain}...`);
-
+    console.log(`[MODULE: POLICY-COMPLIANCE-CHECKER] Running full compliance checks...`);
     const policyCompliance = await policyChecker.checkFullCompliance(
       domain,
       crawlResult.htmlContent,
       crawlResult.links,
       auditData
     );
+    console.log(`[MODULE: POLICY-COMPLIANCE-CHECKER] Compliance Score: ${policyCompliance.overallScore}/100 (${policyCompliance.complianceLevel})`);
 
     const htmlSnapshot = crawlResult.htmlContent.substring(0, 5000);
 
+    console.log(`[DB] Updating site_audits table with all results...`);
     await supabase
       .from('site_audits')
       .update({
@@ -261,9 +288,15 @@ async function auditWebsite(publisherId, domain) {
       })
       .eq('id', auditId);
 
-    console.log(
-      `Audit completed for ${domain}. Website Quality Score: ${scoreResult.websiteQualityScore}/60, Policy Compliance: ${policyCompliance.overallScore}/100 (${policyCompliance.complianceLevel})`
-    );
+    console.log(`[DB] Database updated successfully`);
+    console.log(`========================================`);
+    console.log(`[AUDIT COMPLETE] Domain: ${domain}`);
+    console.log(`[AUDIT COMPLETE] Website Quality Score: ${scoreResult.websiteQualityScore}/${scoreResult.maxScore}`);
+    console.log(`[AUDIT COMPLETE] Policy Compliance: ${policyCompliance.overallScore}/100 (${policyCompliance.complianceLevel})`);
+    console.log(`[AUDIT COMPLETE] SEO Score: ${seoData.score.toFixed(2)}`);
+    console.log(`[AUDIT COMPLETE] Engagement Score: ${engagementData.score.toFixed(2)}`);
+    console.log(`[AUDIT COMPLETE] Layout Score: ${layoutData.score.toFixed(2)}`);
+    console.log(`========================================`);
 
     return {
       success: true,
@@ -286,7 +319,12 @@ async function auditWebsite(publisherId, domain) {
     };
 
   } catch (error) {
-    console.error(`Audit error for ${domain}:`, error);
+    console.error(`========================================`);
+    console.error(`[AUDIT ERROR] Domain: ${domain}`);
+    console.error(`[AUDIT ERROR] Error Type: ${error.name}`);
+    console.error(`[AUDIT ERROR] Error Message: ${error.message}`);
+    console.error(`[AUDIT ERROR] Stack Trace:`, error.stack);
+    console.error(`========================================`);
     return { success: false, error: error.message };
   }
 }
