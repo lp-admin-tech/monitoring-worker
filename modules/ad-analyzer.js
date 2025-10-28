@@ -109,9 +109,11 @@ export class AdAnalyzer {
       totalAdPixels += width * height;
     });
 
-    const bodyHeight = $('body').height() || 1;
+    // Estimate body height from content elements (cheerio doesn't support .height())
+    const bodyElements = $('body *').length;
+    const estimatedBodyHeight = Math.max(bodyElements * 50, 3000); // Rough estimate based on elements
     const viewportWidth = 1920;
-    const contentPixels = bodyHeight * viewportWidth;
+    const contentPixels = estimatedBodyHeight * viewportWidth;
     const adToContentRatio = contentPixels > 0 ? totalAdPixels / contentPixels : 0;
 
     return {
