@@ -416,6 +416,7 @@ export class SEOAnalyzer {
   }
 
   analyzeSEO(htmlContent, links) {
+    const $ = load(htmlContent);
 
     const metaQuality = this.analyzeMetaTags($);
     const keywordSpamScore = this.analyzeKeywordDensity($);
