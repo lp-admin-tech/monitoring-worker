@@ -289,6 +289,42 @@ async function auditWebsite(publisherId, domain) {
       .eq('id', auditId);
 
     console.log(`[DB] Database updated successfully`);
+
+    console.log(`[MFA-SCORE] Triggering composite MFA score calculation...`);
+    try {
+      const scoreResponse = await fetch(
+        `${SUPABASE_URL}/functions/v1/calculate-composite-mfa-score`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            publisherIds: [publisherId],
+            forceRecalculate: true
+          }),
+        }
+      );
+
+      if (scoreResponse.ok) {
+        const scoreResult = await scoreResponse.json();
+        console.log(`[MFA-SCORE] Composite score calculated successfully`);
+        if (scoreResult.scores && scoreResult.scores[0]) {
+          const score = scoreResult.scores[0];
+          console.log(`[MFA-SCORE] Overall MFA Score: ${score.overallScore.toFixed(2)}/100`);
+          console.log(`[MFA-SCORE] Risk Level: ${score.riskLevel}`);
+          console.log(`[MFA-SCORE] Risk Flags: ${score.riskFlags.join(', ') || 'None'}`);
+          console.log(`[MFA-SCORE] Recommendations: ${score.recommendations.length} items`);
+        }
+      } else {
+        const errorText = await scoreResponse.text();
+        console.error(`[MFA-SCORE] Failed to calculate composite score:`, errorText);
+      }
+    } catch (scoreError) {
+      console.error(`[MFA-SCORE] Error calculating composite score:`, scoreError.message);
+    }
+
     console.log(`========================================`);
     console.log(`[AUDIT COMPLETE] Domain: ${domain}`);
     console.log(`[AUDIT COMPLETE] Website Quality Score: ${scoreResult.websiteQualityScore}/${scoreResult.maxScore}`);
