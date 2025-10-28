@@ -4,7 +4,7 @@ Automated website quality monitoring and MFA scoring system for publisher sites.
 
 ## Features
 
-- **Website Crawling**: Automated crawling with Puppeteer
+- **Website Crawling**: Automated crawling with Playwright
 - **Content Analysis**: Length, uniqueness, privacy policy, contact pages
 - **Enhanced Ad Metrics**:
   - Total ad count and placement analysis
@@ -112,7 +112,7 @@ Health check endpoint.
 
 ## Modules
 
-- `crawler.js` - Website crawling with Puppeteer
+- `crawler.js` - Website crawling with Playwright
 - `content-analyzer.js` - Content quality analysis
 - `ad-analyzer.js` - Comprehensive ad placement, density, and interference analysis
 - `content-metadata-analyzer.js` - Image analysis and publishing metadata extraction
@@ -123,17 +123,17 @@ Health check endpoint.
 
 ## Deployment
 
-This worker can be deployed to any Node.js hosting platform that supports Puppeteer (Render, Railway, etc.).
+This worker can be deployed to any Node.js hosting platform that supports Playwright (Render, Railway, etc.).
 
 ### Render Deployment
 
 1. Use the included `render.yaml` configuration
-2. The build process automatically installs Chrome for Puppeteer
+2. The build process automatically installs Chrome for Playwright
 3. Environment variables are configured in the `render.yaml` file
 4. Set your `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, and `WORKER_SECRET` in the Render dashboard
 
 The deployment process will:
 - Install all npm dependencies
-- Download and install Chrome via Puppeteer
+- Download and install Chrome via Playwright
 - Configure the correct cache directory for Chrome binaries
 - Start the monitoring worker on the specified port

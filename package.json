@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "postinstall": "node -e \"const puppeteer = require('puppeteer'); puppeteer.executablePath()\" || npx puppeteer browsers install chrome || true",
+    "postinstall": "npx playwright install --with-deps",
     "start": "node index.js",
     "dev": "node --watch index.js",
     "test": "node test-worker.js"
@@ -13,7 +13,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
     "express": "^4.19.2",
-    "puppeteer": "^24.15.0",
+    "playwright": "^1.48.0",
     "cheerio": "^1.0.0",
     "axios": "^1.7.0",
     "node-fetch": "^3.3.2",
