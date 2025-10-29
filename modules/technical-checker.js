@@ -1,7 +1,5 @@
-import axios from 'axios';
 import fetch from 'node-fetch';
-import https from 'https';
-import tls from 'tls';
+import { chromium } from 'playwright';
 
 export class TechnicalChecker {
   async checkAdsTxt(domain) {
@@ -10,12 +8,17 @@ export class TechnicalChecker {
         ? `${domain}/ads.txt`
         : `https://${domain}/ads.txt`;
 
-      const response = await axios.get(url, {
+      const response = await fetch(url, {
         timeout: 10000,
-        validateStatus: (status) => status === 200
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
       });
 
-      return response.data.includes('google.com');
+      if (!response.ok) return false;
+
+      const data = await response.text();
+      return data.includes('google.com');
     } catch (error) {
       return false;
     }
@@ -34,7 +37,17 @@ export class TechnicalChecker {
           ? link
           : `https://${domain}${link}`;
 
-        await axios.head(url, { timeout: 5000 });
+        const response = await fetch(url, {
+          method: 'HEAD',
+          timeout: 5000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        });
+
+        if (!response.ok) {
+          brokenCount++;
+        }
       } catch (error) {
         brokenCount++;
       }
@@ -58,7 +71,7 @@ export class TechnicalChecker {
     return Math.max(0, score);
   }
 
-  async checkDomainAge(domain) {
+  async checkDomainAge(domain, browser = null) {
     try {
       const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
 
@@ -73,7 +86,7 @@ export class TechnicalChecker {
         domainAgeDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
       }
 
-      const sslValid = await this.checkSSL(cleanDomain);
+      const sslValid = await this.checkSSL(cleanDomain, browser);
 
       const domainAuthorityScore = this.calculateDomainAuthority(domainAgeDays, sslValid);
 
@@ -170,63 +183,101 @@ export class TechnicalChecker {
     }
   }
 
-  async checkSSL(domain) {
-    return new Promise((resolve) => {
-      const options = {
-        host: domain,
-        port: 443,
-        method: 'GET',
-        rejectUnauthorized: false
-      };
+  async checkSSL(domain, browser = null) {
+    let context = null;
+    let page = null;
+    const shouldCloseBrowser = !browser;
 
-      const timeout = setTimeout(() => {
-        console.log(`[SSL-CHECK] Timeout for domain: ${domain}`);
-        resolve(false);
-      }, 5000);
+    try {
+      if (!browser) {
+        browser = await chromium.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+      }
+
+      context = await browser.newContext({
+        ignoreHTTPSErrors: false,
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+      });
+
+      page = await context.newPage();
+
+      const url = domain.startsWith('http') ? domain : `https://${domain}`;
+
+      let sslValid = false;
+      let certInfo = null;
+
+      page.on('response', (response) => {
+        if (response.url() === url) {
+          const securityDetails = response.securityDetails();
+          if (securityDetails) {
+            certInfo = securityDetails;
+          }
+        }
+      });
 
       try {
-        const socket = tls.connect(options, () => {
-          clearTimeout(timeout);
-
-          const cert = socket.getPeerCertificate();
-
-          if (!cert || Object.keys(cert).length === 0) {
-            console.log(`[SSL-CHECK] No certificate found for domain: ${domain}`);
-            socket.destroy();
-            resolve(false);
-            return;
-          }
-
-          const now = new Date();
-          const validFrom = new Date(cert.valid_from);
-          const validTo = new Date(cert.valid_to);
-
-          const isValid = now >= validFrom && now <= validTo;
-
-          console.log(`[SSL-CHECK] Domain: ${domain}, CN: ${cert.subject?.CN || 'unknown'}, Valid: ${isValid}, ValidFrom: ${validFrom.toISOString()}, ValidTo: ${validTo.toISOString()}`);
-
-          socket.destroy();
-          resolve(isValid);
+        await page.goto(url, {
+          waitUntil: 'commit',
+          timeout: 10000
         });
 
-        socket.on('error', (err) => {
-          console.log(`[SSL-CHECK] Socket error for domain ${domain}:`, err.message);
-          clearTimeout(timeout);
-          resolve(false);
-        });
+        if (certInfo) {
+          const now = Date.now();
+          const validFrom = certInfo.validFrom() * 1000;
+          const validTo = certInfo.validTo() * 1000;
 
-        socket.setTimeout(5000, () => {
-          console.log(`[SSL-CHECK] Socket timeout for domain: ${domain}`);
-          socket.destroy();
-          clearTimeout(timeout);
-          resolve(false);
-        });
-      } catch (error) {
-        console.log(`[SSL-CHECK] Exception for domain ${domain}:`, error.message);
-        clearTimeout(timeout);
-        resolve(false);
+          sslValid = now >= validFrom && now <= validTo;
+
+          console.log(`[SSL-CHECK] Domain: ${domain}, Protocol: ${certInfo.protocol()}, Issuer: ${certInfo.issuer()}, Valid: ${sslValid}`);
+        } else {
+          console.log(`[SSL-CHECK] No SSL certificate info found for domain: ${domain} (might be HTTP)`);
+          sslValid = false;
+        }
+      } catch (sslError) {
+        if (sslError.message.includes('SSL') ||
+            sslError.message.includes('ERR_CERT') ||
+            sslError.message.includes('net::ERR_SSL') ||
+            sslError.message.includes('SSL handshake failed') ||
+            sslError.message.includes('certificate')) {
+          console.log(`[SSL-ERROR] SSL invalid or handshake failed for ${domain}: ${sslError.message}`);
+          sslValid = false;
+        } else {
+          throw sslError;
+        }
       }
-    });
+
+      await page.close();
+      await context.close();
+      if (shouldCloseBrowser && browser) {
+        await browser.close();
+      }
+
+      return sslValid;
+    } catch (error) {
+      console.log(`[SSL-CHECK] Browser check error for domain ${domain}:`, error.message);
+
+      if (page) {
+        try {
+          await page.close();
+        } catch (e) {}
+      }
+
+      if (context) {
+        try {
+          await context.close();
+        } catch (e) {}
+      }
+
+      if (shouldCloseBrowser && browser) {
+        try {
+          await browser.close();
+        } catch (e) {}
+      }
+
+      return false;
+    }
   }
 
   calculateDomainAuthority(domainAgeDays, sslValid) {

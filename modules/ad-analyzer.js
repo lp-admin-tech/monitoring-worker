@@ -1,6 +1,11 @@
 import { load } from 'cheerio';
+import { chromium } from 'playwright';
 
 export class AdAnalyzer {
+  constructor() {
+    this.browser = null;
+  }
+
   analyzeAdDensity(htmlContent) {
     const $ = load(htmlContent);
 
@@ -61,13 +66,10 @@ export class AdAnalyzer {
           adElements.push(el);
           totalAds++;
 
-          // Estimate above-the-fold placement based on DOM position
-          // Check if element appears early in the body (rough heuristic)
           const allElements = $('body *');
           const elementIndex = allElements.index(el);
           const totalElements = allElements.length;
 
-          // Consider first 20% of DOM elements as potentially above fold
           if (totalElements > 0 && elementIndex >= 0 && elementIndex < totalElements * 0.2) {
             adsAboveFold++;
           }
@@ -109,9 +111,8 @@ export class AdAnalyzer {
       totalAdPixels += width * height;
     });
 
-    // Estimate body height from content elements (cheerio doesn't support .height())
     const bodyElements = $('body *').length;
-    const estimatedBodyHeight = Math.max(bodyElements * 50, 3000); // Rough estimate based on elements
+    const estimatedBodyHeight = Math.max(bodyElements * 50, 3000);
     const viewportWidth = 1920;
     const contentPixels = estimatedBodyHeight * viewportWidth;
     const adToContentRatio = contentPixels > 0 ? totalAdPixels / contentPixels : 0;
@@ -126,6 +127,136 @@ export class AdAnalyzer {
       autoRefreshAds,
       adToContentRatio
     };
+  }
+
+  async captureAdSectionScreenshots(domain, browser = null) {
+    let context = null;
+    let page = null;
+    const shouldCloseBrowser = !browser;
+
+    try {
+      if (!browser) {
+        browser = await chromium.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+      }
+
+      context = await browser.newContext({
+        viewport: { width: 1920, height: 1080 },
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        ignoreHTTPSErrors: true
+      });
+
+      await context.route('**/*', (route) => {
+        const resourceType = route.request().resourceType();
+        if (['font', 'media'].includes(resourceType)) {
+          route.abort();
+        } else {
+          route.continue();
+        }
+      });
+
+      page = await context.newPage();
+
+      const url = domain.startsWith('http') ? domain : `https://${domain}`;
+      await page.goto(url, {
+        waitUntil: 'networkidle',
+        timeout: 30000
+      }).catch(() => page.waitForLoadState('domcontentloaded'));
+
+      const adSectionScreenshots = await page.evaluate(async () => {
+        const adSelectors = [
+          'iframe[src*="doubleclick"]',
+          'iframe[src*="googlesyndication"]',
+          '.adsbygoogle',
+          '[data-ad-slot]',
+          '[id*="ad"]',
+          '[class*="ad"]'
+        ];
+
+        const screenshots = [];
+        const processedElements = new Set();
+
+        for (const selector of adSelectors) {
+          const elements = document.querySelectorAll(selector);
+
+          for (let i = 0; i < Math.min(elements.length, 5); i++) {
+            const el = elements[i];
+            if (processedElements.has(el)) continue;
+            processedElements.add(el);
+
+            const rect = el.getBoundingClientRect();
+            if (rect.width > 50 && rect.height > 50) {
+              screenshots.push({
+                selector: selector,
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height
+              });
+            }
+          }
+
+          if (screenshots.length >= 5) break;
+        }
+
+        return screenshots;
+      });
+
+      const capturedScreenshots = [];
+      for (const adSection of adSectionScreenshots) {
+        try {
+          const screenshot = await page.screenshot({
+            clip: {
+              x: Math.max(0, adSection.x),
+              y: Math.max(0, adSection.y),
+              width: Math.min(adSection.width, 1920),
+              height: Math.min(adSection.height, 1080)
+            },
+            type: 'jpeg',
+            quality: 60
+          });
+
+          capturedScreenshots.push({
+            selector: adSection.selector,
+            screenshot: screenshot.toString('base64')
+          });
+        } catch (e) {
+          console.error('[AD-ANALYZER] Screenshot error:', e.message);
+        }
+      }
+
+      await page.close();
+      await context.close();
+      if (shouldCloseBrowser && browser) {
+        await browser.close();
+      }
+
+      return capturedScreenshots;
+    } catch (error) {
+      console.error('[AD-ANALYZER] Ad section capture error:', error.message);
+
+      if (page) {
+        try {
+          await page.close();
+        } catch (e) {}
+      }
+
+      if (context) {
+        try {
+          await context.close();
+        } catch (e) {}
+      }
+
+      if (shouldCloseBrowser && browser) {
+        try {
+          await browser.close();
+        } catch (e) {}
+      }
+
+      return [];
+    }
   }
 
   detectClickInterference(htmlContent) {
@@ -234,5 +365,12 @@ export class AdAnalyzer {
                     detectedNetworks.includes('Google AdX'),
       hasMultipleNetworks: detectedNetworks.length > 1
     };
+  }
+
+  async close() {
+    if (this.browser) {
+      await this.browser.close();
+      this.browser = null;
+    }
   }
 }

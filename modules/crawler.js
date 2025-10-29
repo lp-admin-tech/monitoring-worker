@@ -1,9 +1,28 @@
 import { chromium } from 'playwright';
+import { createClient } from '@supabase/supabase-js';
+
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15'
+];
 
 export class WebsiteCrawler {
   constructor() {
     this.browser = null;
-    this.cdpSessions = new Map();
+    this.supabase = null;
+    if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
+      this.supabase = createClient(
+        process.env.SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_KEY
+      );
+    }
+  }
+
+  getRandomUserAgent() {
+    return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
   }
 
   async initBrowser() {
@@ -16,7 +35,9 @@ export class WebsiteCrawler {
           '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas',
           '--disable-gpu',
-          '--disable-blink-features=AutomationControlled'
+          '--disable-blink-features=AutomationControlled',
+          '--disable-web-security',
+          '--disable-features=IsolateOrigins,site-per-process'
         ]
       };
 
@@ -31,65 +52,125 @@ export class WebsiteCrawler {
   async crawlSite(domain) {
     let context = null;
     let page = null;
-    let cdpSession = null;
+    let tracePath = null;
 
     try {
       await this.initBrowser();
+
       context = await this.browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        userAgent: this.getRandomUserAgent(),
+        viewport: { width: 1920, height: 1080 },
         bypassCSP: true,
         javaScriptEnabled: true,
+        ignoreHTTPSErrors: true,
         extraHTTPHeaders: {
-          'Accept-Language': 'en-US,en;q=0.9'
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
         }
       });
 
       await context.addInitScript(() => {
         Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
         window.chrome = { runtime: {} };
       });
 
+      const harData = [];
+      const requestStats = {
+        total: 0,
+        scripts: 0,
+        stylesheets: 0,
+        images: 0,
+        xhr: 0,
+        fetch: 0,
+        thirdParty: 0,
+        totalSize: 0,
+        blocked: 0
+      };
+
       await context.route('**/*', (route) => {
-        const resourceType = route.request().resourceType();
+        const request = route.request();
+        const resourceType = request.resourceType();
+        requestStats.total++;
+
         if (['image', 'font', 'media'].includes(resourceType)) {
+          requestStats.blocked++;
+          requestStats.images++;
           route.abort();
         } else {
+          if (resourceType === 'script') requestStats.scripts++;
+          if (resourceType === 'stylesheet') requestStats.stylesheets++;
+          if (resourceType === 'xhr') requestStats.xhr++;
+          if (resourceType === 'fetch') requestStats.fetch++;
           route.continue();
         }
       });
 
       page = await context.newPage();
 
-      const client = await page.context().newCDPSession(page);
-      cdpSession = client;
+      page.on('response', async (response) => {
+        try {
+          const request = response.request();
+          const url = request.url();
+          const headers = response.headers();
+          const contentLength = parseInt(headers['content-length'] || '0');
+          requestStats.totalSize += contentLength;
 
-      await client.send('Performance.enable');
-      await client.send('Network.enable');
+          const domainUrl = new URL(domain.startsWith('http') ? domain : `https://${domain}`);
+          const requestUrl = new URL(url);
+          if (requestUrl.hostname !== domainUrl.hostname) {
+            requestStats.thirdParty++;
+          }
+
+          harData.push({
+            url,
+            method: request.method(),
+            status: response.status(),
+            size: contentLength,
+            timing: response.timing(),
+            resourceType: request.resourceType()
+          });
+        } catch (e) {}
+      });
 
       const url = domain.startsWith('http') ? domain : `https://${domain}`;
+
+      let sslError = false;
+      page.on('response', response => {
+        if (response.status() === 0) {
+          sslError = true;
+        }
+      });
+
       const startTime = Date.now();
 
-      const navigationPromise = page.goto(url, {
-        waitUntil: 'networkidle',
-        timeout: 30000
-      });
+      try {
+        await page.goto(url, {
+          waitUntil: 'networkidle',
+          timeout: 30000
+        });
+      } catch (error) {
+        if (error.message.includes('SSL') || error.message.includes('ERR_CERT') || error.message.includes('net::')) {
+          console.log(`[SSL-ERROR] SSL handshake failed for ${domain}: ${error.message}`);
+          sslError = true;
+        } else {
+          throw error;
+        }
+      }
 
-      await Promise.race([
-        navigationPromise,
-        page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {})
-      ]);
-
-      await page.waitForLoadState('domcontentloaded');
-
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
       const loadTime = Date.now() - startTime;
 
-      const performanceMetrics = await client.send('Performance.getMetrics');
-      const metricsMap = {};
-      performanceMetrics.metrics.forEach(metric => {
-        metricsMap[metric.name] = metric.value;
-      });
+      const screenshot = await page.screenshot({
+        fullPage: false,
+        type: 'jpeg',
+        quality: 75
+      }).catch(() => null);
 
-      const [htmlContent, pageData] = await Promise.all([
+      const screenshotBase64 = screenshot ? screenshot.toString('base64') : null;
+
+      const [htmlContent, pageData, performanceMetrics, layoutShiftData] = await Promise.all([
         page.content(),
         page.evaluate(() => {
           try {
@@ -101,77 +182,98 @@ export class WebsiteCrawler {
             }, 0);
 
             const performanceData = performance.getEntriesByType('navigation')[0];
+            const paintData = performance.getEntriesByType('paint');
+
+            const fcp = paintData.find(entry => entry.name === 'first-contentful-paint')?.startTime || 0;
+            const lcp = paintData.find(entry => entry.name === 'largest-contentful-paint')?.startTime || 0;
 
             return {
               links,
               popupCount,
+              fcp,
+              lcp,
               metrics: {
                 JSHeapUsedSize: performance.memory ? performance.memory.usedJSHeapSize : 0,
                 JSHeapTotalSize: performance.memory ? performance.memory.totalJSHeapSize : 0,
                 Timestamp: Date.now() / 1000,
                 Documents: document.querySelectorAll('*').length,
                 Frames: window.frames.length,
-                JSEventListeners: 0,
                 Nodes: document.querySelectorAll('*').length,
                 LayoutDuration: performanceData ? performanceData.domComplete - performanceData.domLoading : 0,
                 ScriptDuration: performanceData ? performanceData.domContentLoadedEventEnd - performanceData.domContentLoadedEventStart : 0,
-                TaskDuration: performanceData ? performanceData.loadEventEnd - performanceData.loadEventStart : 0
+                TaskDuration: performanceData ? performanceData.loadEventEnd - performanceData.loadEventStart : 0,
+                DomContentLoaded: performanceData ? performanceData.domContentLoadedEventEnd : 0,
+                LoadComplete: performanceData ? performanceData.loadEventEnd : 0
               }
             };
           } catch (e) {
             return {
               links: [],
               popupCount: 0,
+              fcp: 0,
+              lcp: 0,
               metrics: {
                 JSHeapUsedSize: 0,
                 JSHeapTotalSize: 0,
                 Timestamp: Date.now() / 1000,
                 Documents: 0,
                 Frames: 0,
-                JSEventListeners: 0,
                 Nodes: 0,
                 LayoutDuration: 0,
                 ScriptDuration: 0,
-                TaskDuration: 0
+                TaskDuration: 0,
+                DomContentLoaded: 0,
+                LoadComplete: 0
               }
             };
           }
+        }),
+        page.evaluate(() => {
+          const metrics = performance.getEntriesByType('navigation')[0];
+          return {
+            domInteractive: metrics?.domInteractive || 0,
+            domComplete: metrics?.domComplete || 0,
+            loadEventEnd: metrics?.loadEventEnd || 0,
+            transferSize: metrics?.transferSize || 0,
+            encodedBodySize: metrics?.encodedBodySize || 0
+          };
+        }),
+        page.evaluate(() => {
+          const layoutShifts = performance.getEntriesByType('layout-shift');
+          let cls = 0;
+          layoutShifts.forEach(entry => {
+            if (!entry.hadRecentInput) {
+              cls += entry.value;
+            }
+          });
+          return { cls, shiftCount: layoutShifts.length };
         })
       ]);
 
-      const links = pageData.links;
-      const popupCount = pageData.popupCount;
-      const metrics = {
-        ...pageData.metrics,
-        LayoutCount: metricsMap.LayoutCount || 0,
-        RecalcStyleCount: metricsMap.RecalcStyleCount || 0,
-        RecalcStyleDuration: metricsMap.RecalcStyleDuration || 0
-      };
-
-      if (cdpSession) {
-        await cdpSession.detach().catch(() => {});
-      }
       await page.close();
       await context.close();
 
       return {
         success: true,
         htmlContent,
-        links,
+        links: pageData.links,
         loadTime,
-        popupCount,
-        metrics
+        popupCount: pageData.popupCount,
+        metrics: pageData.metrics,
+        performanceMetrics: {
+          ...performanceMetrics,
+          fcp: pageData.fcp,
+          lcp: pageData.lcp,
+          cls: layoutShiftData.cls,
+          layoutShiftCount: layoutShiftData.shiftCount
+        },
+        requestStats,
+        harData: harData.slice(0, 50),
+        screenshot: screenshotBase64,
+        sslError: sslError || false
       };
     } catch (error) {
       console.error('[CRAWLER] Error details:', error);
-
-      if (cdpSession) {
-        try {
-          await cdpSession.detach();
-        } catch (e) {
-          console.error('[CRAWLER] Error detaching CDP session:', e.message);
-        }
-      }
 
       if (page) {
         try {
@@ -204,9 +306,10 @@ export class WebsiteCrawler {
       await this.initBrowser();
       context = await this.browser.newContext({
         viewport: { width: 375, height: 667 },
-        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
+        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
         hasTouch: true,
-        isMobile: true
+        isMobile: true,
+        ignoreHTTPSErrors: true
       });
 
       await context.addInitScript(() => {
@@ -231,6 +334,12 @@ export class WebsiteCrawler {
         timeout: 30000
       }).catch(() => page.waitForLoadState('domcontentloaded'));
 
+      const screenshot = await page.screenshot({
+        fullPage: false,
+        type: 'jpeg',
+        quality: 60
+      }).catch(() => null);
+
       const isMobileFriendly = await page.evaluate(() => {
         try {
           const viewport = document.querySelector('meta[name="viewport"]');
@@ -242,7 +351,11 @@ export class WebsiteCrawler {
 
       await page.close();
       await context.close();
-      return isMobileFriendly;
+
+      return {
+        isMobileFriendly,
+        screenshot: screenshot ? screenshot.toString('base64') : null
+      };
     } catch (error) {
       console.error('[CRAWLER] Mobile check error:', error.message);
 
@@ -258,178 +371,7 @@ export class WebsiteCrawler {
         } catch (e) {}
       }
 
-      return false;
-    }
-  }
-
-  async interceptAndAnalyzeRequests(domain) {
-    let context = null;
-    let page = null;
-
-    try {
-      await this.initBrowser();
-      context = await this.browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      });
-
-      const requestStats = {
-        total: 0,
-        blocked: 0,
-        scripts: 0,
-        stylesheets: 0,
-        xhr: 0,
-        fetch: 0,
-        thirdParty: 0,
-        totalSize: 0
-      };
-
-      await context.route('**/*', (route) => {
-        requestStats.total++;
-        const request = route.request();
-        const resourceType = request.resourceType();
-
-        if (['image', 'font', 'media'].includes(resourceType)) {
-          requestStats.blocked++;
-          route.abort();
-        } else {
-          if (resourceType === 'script') requestStats.scripts++;
-          if (resourceType === 'stylesheet') requestStats.stylesheets++;
-          if (resourceType === 'xhr') requestStats.xhr++;
-          if (resourceType === 'fetch') requestStats.fetch++;
-
-          const url = new URL(request.url());
-          const domainUrl = new URL(domain.startsWith('http') ? domain : `https://${domain}`);
-          if (url.hostname !== domainUrl.hostname) {
-            requestStats.thirdParty++;
-          }
-
-          route.continue();
-        }
-      });
-
-      page = await context.newPage();
-
-      page.on('response', async (response) => {
-        try {
-          const headers = response.headers();
-          const contentLength = headers['content-length'];
-          if (contentLength) {
-            requestStats.totalSize += parseInt(contentLength, 10);
-          }
-        } catch (e) {}
-      });
-
-      const url = domain.startsWith('http') ? domain : `https://${domain}`;
-      await page.goto(url, {
-        waitUntil: 'networkidle',
-        timeout: 30000
-      }).catch(() => page.waitForLoadState('domcontentloaded'));
-
-      await page.close();
-      await context.close();
-
-      return requestStats;
-    } catch (error) {
-      console.error('[CRAWLER] Request analysis error:', error.message);
-
-      if (page) {
-        try {
-          await page.close();
-        } catch (e) {}
-      }
-
-      if (context) {
-        try {
-          await context.close();
-        } catch (e) {}
-      }
-
-      return null;
-    }
-  }
-
-  async captureNetworkTimings(domain) {
-    let context = null;
-    let page = null;
-    let cdpSession = null;
-
-    try {
-      await this.initBrowser();
-      context = await this.browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      });
-
-      await context.route('**/*', (route) => {
-        const resourceType = route.request().resourceType();
-        if (['image', 'font', 'media'].includes(resourceType)) {
-          route.abort();
-        } else {
-          route.continue();
-        }
-      });
-
-      page = await context.newPage();
-      const client = await page.context().newCDPSession(page);
-      cdpSession = client;
-
-      await client.send('Network.enable');
-
-      const networkEvents = [];
-
-      client.on('Network.responseReceived', (params) => {
-        networkEvents.push({
-          url: params.response.url,
-          status: params.response.status,
-          mimeType: params.response.mimeType,
-          timing: params.response.timing
-        });
-      });
-
-      const url = domain.startsWith('http') ? domain : `https://${domain}`;
-      await page.goto(url, {
-        waitUntil: 'networkidle',
-        timeout: 30000
-      }).catch(() => page.waitForLoadState('domcontentloaded'));
-
-      const timings = networkEvents.filter(e => e.timing).map(e => ({
-        url: e.url,
-        dns: e.timing.dnsEnd - e.timing.dnsStart,
-        connect: e.timing.connectEnd - e.timing.connectStart,
-        ssl: e.timing.sslEnd - e.timing.sslStart,
-        send: e.timing.sendEnd - e.timing.sendStart,
-        wait: e.timing.receiveHeadersEnd - e.timing.sendEnd,
-        receive: e.timing.receiveHeadersEnd
-      }));
-
-      if (cdpSession) {
-        await cdpSession.detach().catch(() => {});
-      }
-      await page.close();
-      await context.close();
-
-      return timings;
-    } catch (error) {
-      console.error('[CRAWLER] Network timing error:', error.message);
-
-      if (cdpSession) {
-        try {
-          await cdpSession.detach();
-        } catch (e) {}
-      }
-
-      if (page) {
-        try {
-          await page.close();
-        } catch (e) {}
-      }
-
-      if (context) {
-        try {
-          await context.close();
-        } catch (e) {}
-      }
-
-      return [];
+      return { isMobileFriendly: false, screenshot: null };
     }
   }
 
@@ -440,7 +382,8 @@ export class WebsiteCrawler {
     try {
       await this.initBrowser();
       context = await this.browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        userAgent: this.getRandomUserAgent(),
+        ignoreHTTPSErrors: true
       });
 
       await context.route('**/*', (route) => {
@@ -486,6 +429,16 @@ export class WebsiteCrawler {
           }
         });
 
+        const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
+        let previousLevel = 0;
+        headings.forEach(heading => {
+          const level = parseInt(heading.tagName.substring(1));
+          if (level - previousLevel > 1) {
+            problems.push({ type: 'heading-skip', element: heading.tagName });
+          }
+          previousLevel = level;
+        });
+
         return problems;
       });
 
@@ -515,11 +468,70 @@ export class WebsiteCrawler {
     }
   }
 
+  async captureFullPageMetrics(domain) {
+    let context = null;
+    let page = null;
+
+    try {
+      await this.initBrowser();
+      context = await this.browser.newContext({
+        userAgent: this.getRandomUserAgent(),
+        viewport: { width: 1920, height: 1080 },
+        ignoreHTTPSErrors: true
+      });
+
+      await context.route('**/*', (route) => {
+        const resourceType = route.request().resourceType();
+        if (['font', 'media'].includes(resourceType)) {
+          route.abort();
+        } else {
+          route.continue();
+        }
+      });
+
+      page = await context.newPage();
+
+      const url = domain.startsWith('http') ? domain : `https://${domain}`;
+      await page.goto(url, {
+        waitUntil: 'networkidle',
+        timeout: 30000
+      }).catch(() => page.waitForLoadState('domcontentloaded'));
+
+      const fullPageScreenshot = await page.screenshot({
+        fullPage: true,
+        type: 'jpeg',
+        quality: 50
+      }).catch(() => null);
+
+      await page.close();
+      await context.close();
+
+      return {
+        fullPageScreenshot: fullPageScreenshot ? fullPageScreenshot.toString('base64') : null
+      };
+    } catch (error) {
+      console.error('[CRAWLER] Full page metrics error:', error.message);
+
+      if (page) {
+        try {
+          await page.close();
+        } catch (e) {}
+      }
+
+      if (context) {
+        try {
+          await context.close();
+        } catch (e) {}
+      }
+
+      return null;
+    }
+  }
+
   async close() {
     if (this.browser) {
       await this.browser.close();
       this.browser = null;
     }
-    this.cdpSessions.clear();
   }
 }

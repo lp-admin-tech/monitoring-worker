@@ -62,18 +62,18 @@ async function auditWebsite(publisherId, domain) {
     console.log(`[DB] Audit record created with ID: ${auditId}`);
 
     console.log(`[MODULE: CRAWLER] Starting comprehensive website crawl...`);
-    const [crawlResult, requestStats, networkTimings, accessibilityData] = await Promise.all([
-      crawler.crawlSite(domain),
-      crawler.interceptAndAnalyzeRequests(domain).catch(() => null),
-      crawler.captureNetworkTimings(domain).catch(() => []),
-      crawler.checkAccessibility(domain).catch(() => null)
-    ]);
+    const crawlResult = await crawler.crawlSite(domain);
     console.log(`[MODULE: CRAWLER] Crawl completed - Success: ${crawlResult.success}`);
 
-    if (requestStats) {
-      console.log(`[MODULE: CRAWLER] Request Stats - Total: ${requestStats.total}, Scripts: ${requestStats.scripts}, Third-party: ${requestStats.thirdParty}`);
+    if (crawlResult.requestStats) {
+      console.log(`[MODULE: CRAWLER] Request Stats - Total: ${crawlResult.requestStats.total}, Scripts: ${crawlResult.requestStats.scripts}, Third-party: ${crawlResult.requestStats.thirdParty}`);
     }
 
+    console.log(`[MODULE: CRAWLER] Checking mobile-friendliness...`);
+    const mobileFriendlyResult = await crawler.checkMobileFriendly(domain).catch(() => ({ isMobileFriendly: false, screenshot: null }));
+
+    console.log(`[MODULE: CRAWLER] Checking accessibility...`);
+    const accessibilityData = await crawler.checkAccessibility(domain).catch(() => null);
     if (accessibilityData) {
       console.log(`[MODULE: CRAWLER] Accessibility - Issues found: ${accessibilityData.issues.length}`);
     }
@@ -145,14 +145,13 @@ async function auditWebsite(publisherId, domain) {
     console.log(`[MODULE: LAYOUT-ANALYZER] Layout score: ${layoutData.score.toFixed(2)}, Menu position: ${layoutData.menuPosition}`);
 
     console.log(`[TECHNICAL-CHECKS] Running parallel technical checks...`);
-    const [adsTxtValid, mobileFriendly, brokenLinks, safeBrowsingResult, domainData] = await Promise.all([
+    const [adsTxtValid, brokenLinks, safeBrowsingResult, domainData] = await Promise.all([
       technicalChecker.checkAdsTxt(domain),
-      crawler.checkMobileFriendly(domain),
       technicalChecker.checkBrokenLinks(domain, crawlResult.links),
       contentAnalyzer.checkSafeBrowsing(domain),
-      technicalChecker.checkDomainAge(domain)
+      technicalChecker.checkDomainAge(domain, crawler.browser)
     ]);
-    console.log(`[TECHNICAL-CHECKS] Completed - Ads.txt: ${adsTxtValid ? 'Valid' : 'Invalid'}, Mobile friendly: ${mobileFriendly ? 'Yes' : 'No'}`);
+    console.log(`[TECHNICAL-CHECKS] Completed - Ads.txt: ${adsTxtValid ? 'Valid' : 'Invalid'}, Mobile friendly: ${mobileFriendlyResult.isMobileFriendly ? 'Yes' : 'No'}`);
 
     console.log(`[MODULE: TECHNICAL-CHECKER] Calculating page speed score...`);
     const pageSpeedScore = technicalChecker.calculatePageSpeedScore(
@@ -160,6 +159,9 @@ async function auditWebsite(publisherId, domain) {
       crawlResult.metrics
     );
     console.log(`[MODULE: TECHNICAL-CHECKER] Page speed score: ${pageSpeedScore}/100`);
+
+    const requestStats = crawlResult.requestStats || {};
+    const mobileFriendly = mobileFriendlyResult.isMobileFriendly;
 
     console.log(`[MODULE: MFA-SCORER] Preparing audit data...`);
     const auditData = {
