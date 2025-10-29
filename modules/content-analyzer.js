@@ -1,13 +1,18 @@
 import { load } from 'cheerio';
 import fetch from 'node-fetch';
+import { createAIHelper } from './ai-helper.js';
+import { WebsiteCrawler } from './crawler.js';
 
 export class ContentAnalyzer {
-  constructor() {
+  constructor(supabaseClient = null, geminiApiKey = null) {
+    this.supabase = supabaseClient;
     this.safeBrowsingApiKey = process.env.GOOGLE_SAFE_BROWSING_API_KEY;
     this.safeBrowsingApiUrl = 'https://safebrowsing.googleapis.com/v4/threatMatches:find';
+    this.aiHelper = supabaseClient && geminiApiKey ? createAIHelper(supabaseClient, geminiApiKey) : null;
+    this.crawler = new WebsiteCrawler();
   }
 
-  analyzeContent(htmlContent, links) {
+  async analyzeContent(htmlContent, links) {
     const $ = load(htmlContent);
 
     const textContent = $('body').text().trim();
@@ -23,11 +28,30 @@ export class ContentAnalyzer {
       /contact/i.test(link)
     ) || $('a:contains("Contact"), a:contains("contact")').length > 0;
 
-    return {
+    const metrics = {
       contentLength,
       contentUniqueness,
       hasPrivacyPolicy,
       hasContactPage
+    };
+
+    let aiAnalysis = null;
+    if (this.aiHelper) {
+      try {
+        aiAnalysis = await this.aiHelper.analyze({
+          type: 'content_quality',
+          context: 'Assessing overall content quality, uniqueness, and required page presence',
+          metrics,
+          html: htmlContent
+        });
+      } catch (error) {
+        console.error('[CONTENT-ANALYZER] AI analysis error:', error.message);
+      }
+    }
+
+    return {
+      ...metrics,
+      aiAnalysis
     };
   }
 
@@ -40,7 +64,7 @@ export class ContentAnalyzer {
     return (uniqueWords.size / words.length) * 100;
   }
 
-  analyzeImages(htmlContent) {
+  async analyzeImages(htmlContent) {
     const $ = load(htmlContent);
 
     const allImages = $('img');
@@ -77,16 +101,35 @@ export class ContentAnalyzer {
     const videos = $('video, iframe[src*="youtube"], iframe[src*="vimeo"], iframe[src*="dailymotion"]');
     const videosCount = videos.length;
 
-    return {
+    const metrics = {
       totalImages,
       imagesWithAlt,
       hasFeaturedImages,
       optimizedImages,
       videosCount
     };
+
+    let aiAnalysis = null;
+    if (this.aiHelper) {
+      try {
+        aiAnalysis = await this.aiHelper.analyze({
+          type: 'images_media',
+          context: 'Evaluating image optimization, accessibility (alt tags), and media usage',
+          metrics,
+          html: htmlContent
+        });
+      } catch (error) {
+        console.error('[CONTENT-ANALYZER] AI analysis error:', error.message);
+      }
+    }
+
+    return {
+      ...metrics,
+      aiAnalysis
+    };
   }
 
-  analyzePublishingMetadata(htmlContent, links) {
+  async analyzePublishingMetadata(htmlContent, links) {
     const $ = load(htmlContent);
 
     let hasPublishDates = false;
@@ -185,13 +228,32 @@ export class ContentAnalyzer {
       }
     }
 
-    return {
+    const metrics = {
       hasPublishDates,
       hasAuthorInfo,
       latestPostDate,
       postFrequencyDays,
       totalPostsFound,
       contentFreshnessScore
+    };
+
+    let aiAnalysis = null;
+    if (this.aiHelper) {
+      try {
+        aiAnalysis = await this.aiHelper.analyze({
+          type: 'publishing_metadata',
+          context: 'Analyzing content freshness, publishing frequency, and author attribution',
+          metrics,
+          html: htmlContent
+        });
+      } catch (error) {
+        console.error('[CONTENT-ANALYZER] AI analysis error:', error.message);
+      }
+    }
+
+    return {
+      ...metrics,
+      aiAnalysis
     };
   }
 
@@ -334,5 +396,378 @@ export class ContentAnalyzer {
     };
 
     return descriptions[threatType] || 'Unknown threat detected';
+  }
+
+  analyzeCategoryPage(htmlContent, categoryUrl) {
+    const $ = load(htmlContent);
+
+    const categoryName = this.extractCategoryName(categoryUrl, $);
+
+    const articleSelectors = [
+      'article',
+      '[class*="post"]',
+      '[class*="entry"]',
+      '[itemtype*="BlogPosting"]',
+      '[class*="article"]',
+      '.blog-item',
+      '.news-item'
+    ];
+
+    let articleCount = 0;
+    const articleLinks = [];
+
+    articleSelectors.forEach(selector => {
+      const elements = $(selector);
+      if (elements.length > articleCount) {
+        articleCount = elements.length;
+      }
+
+      elements.each((i, el) => {
+        const $el = $(el);
+        const link = $el.find('a').first().attr('href');
+        if (link && !articleLinks.includes(link)) {
+          articleLinks.push(link);
+        }
+      });
+    });
+
+    const allLinks = $('a[href*="blog"], a[href*="article"], a[href*="post"], a[href*="news"]');
+    allLinks.each((i, el) => {
+      const href = $(el).attr('href');
+      if (href && !articleLinks.includes(href)) {
+        articleLinks.push(href);
+      }
+    });
+
+    if (articleLinks.length > articleCount) {
+      articleCount = articleLinks.length;
+    }
+
+    const hasPublishedArticles = articleCount > 0;
+    const isEmpty = !hasPublishedArticles;
+
+    return {
+      categoryName,
+      articleCount,
+      hasPublishedArticles,
+      isEmpty,
+      articleLinks: articleLinks.slice(0, 10)
+    };
+  }
+
+  extractCategoryName(categoryUrl, $) {
+    try {
+      const url = new URL(categoryUrl);
+      const pathSegments = url.pathname.split('/').filter(Boolean);
+
+      if (pathSegments.length > 0) {
+        return pathSegments[pathSegments.length - 1]
+          .replace(/-/g, ' ')
+          .replace(/_/g, ' ')
+          .split(' ')
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ');
+      }
+
+      const title = $('title').text().trim();
+      if (title) {
+        return title.split('|')[0].split('-')[0].trim();
+      }
+
+      const h1 = $('h1').first().text().trim();
+      if (h1) {
+        return h1;
+      }
+
+      return 'Unknown Category';
+    } catch (error) {
+      return 'Unknown Category';
+    }
+  }
+
+  async auditCategories(domain, publisherId = null) {
+    console.log(`\n[CATEGORY-AUDIT] Starting category audit for ${domain}`);
+    const results = [];
+
+    try {
+      const crawlResults = await this.crawler.crawlCategoryPages(domain);
+      console.log(`[CATEGORY-AUDIT] Crawled ${crawlResults.length} category URLs`);
+
+      for (const crawlResult of crawlResults) {
+        const auditResult = await this.processCategoryResult(
+          domain,
+          publisherId,
+          crawlResult
+        );
+        results.push(auditResult);
+        await this.saveToDatabase(auditResult);
+      }
+
+      console.log(`[CATEGORY-AUDIT] Completed audit for ${domain}`);
+      return results;
+    } catch (error) {
+      console.error(`[CATEGORY-AUDIT] Error auditing categories for ${domain}:`, error);
+      throw error;
+    } finally {
+      await this.crawler.close();
+    }
+  }
+
+  async processCategoryResult(domain, publisherId, crawlResult) {
+    const { categoryUrl, success, is_404, htmlContent, error } = crawlResult;
+
+    if (!success || error) {
+      return {
+        publisher_id: publisherId,
+        domain,
+        category_url: categoryUrl,
+        category_name: null,
+        has_published_articles: false,
+        article_count: 0,
+        is_404: is_404 || false,
+        is_empty: false,
+        ai_suggested_topics: [],
+        ai_analysis: null,
+        error_message: error || 'Failed to crawl category page'
+      };
+    }
+
+    if (is_404) {
+      return {
+        publisher_id: publisherId,
+        domain,
+        category_url: categoryUrl,
+        category_name: null,
+        has_published_articles: false,
+        article_count: 0,
+        is_404: true,
+        is_empty: false,
+        ai_suggested_topics: [],
+        ai_analysis: { reason: 'Category page not found', recommendation: 'Remove or fix broken link' }
+      };
+    }
+
+    const categoryAnalysis = this.analyzeCategoryPage(htmlContent, categoryUrl);
+
+    let aiAnalysis = null;
+    let aiSuggestedTopics = [];
+
+    if (categoryAnalysis.isEmpty && this.aiHelper) {
+      try {
+        aiAnalysis = await this.generateAIAnalysis(domain, categoryUrl, categoryAnalysis);
+        aiSuggestedTopics = await this.generateContentTopics(domain, categoryAnalysis.categoryName);
+      } catch (error) {
+        console.error('[CATEGORY-AUDIT] AI generation error:', error);
+      }
+    }
+
+    return {
+      publisher_id: publisherId,
+      domain,
+      category_url: categoryUrl,
+      category_name: categoryAnalysis.categoryName,
+      has_published_articles: categoryAnalysis.hasPublishedArticles,
+      article_count: categoryAnalysis.articleCount,
+      is_404: false,
+      is_empty: categoryAnalysis.isEmpty,
+      ai_suggested_topics: aiSuggestedTopics,
+      ai_analysis: aiAnalysis
+    };
+  }
+
+  async generateAIAnalysis(domain, categoryUrl, categoryAnalysis) {
+    if (!this.aiHelper) {
+      return {
+        reason: 'Empty category with no published content',
+        recommendation: 'Add articles or remove category from navigation'
+      };
+    }
+
+    try {
+      const metrics = {
+        category_name: categoryAnalysis.categoryName,
+        article_count: categoryAnalysis.articleCount,
+        has_articles: categoryAnalysis.hasPublishedArticles,
+        is_empty: categoryAnalysis.isEmpty
+      };
+
+      const context = `Empty category detected on ${domain} at ${categoryUrl}`;
+
+      const analysis = await this.aiHelper.analyze({
+        type: 'category',
+        context,
+        metrics,
+        html: null
+      });
+
+      return analysis;
+    } catch (error) {
+      console.error('[CATEGORY-AUDIT] AI analysis error:', error);
+      return {
+        reason: 'Empty category with no published content',
+        recommendation: 'Add articles or remove category from navigation'
+      };
+    }
+  }
+
+  async generateContentTopics(domain, categoryName) {
+    if (!this.aiHelper) {
+      return this.generateFallbackTopics(categoryName);
+    }
+
+    try {
+      const metrics = {
+        domain,
+        category_name: categoryName
+      };
+
+      const context = `Suggest 2 content topics for empty category "${categoryName}" on ${domain}`;
+
+      const topicsAnalysis = await this.aiHelper.analyze({
+        type: 'content_suggestions',
+        context,
+        metrics,
+        html: null
+      });
+
+      const topics = this.extractTopicsFromAI(topicsAnalysis);
+      return topics.slice(0, 2);
+    } catch (error) {
+      console.error('[CATEGORY-AUDIT] Topic generation error:', error);
+      return this.generateFallbackTopics(categoryName);
+    }
+  }
+
+  extractTopicsFromAI(aiResponse) {
+    try {
+      const { recommendation } = aiResponse;
+
+      if (!recommendation) {
+        return [];
+      }
+
+      const topics = recommendation
+        .split(/[,;]/)
+        .map(topic => topic.trim())
+        .filter(topic => topic.length > 3 && topic.length < 100)
+        .slice(0, 2);
+
+      return topics;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  generateFallbackTopics(categoryName) {
+    const topicTemplates = [
+      `Introduction to ${categoryName}`,
+      `Latest trends in ${categoryName}`,
+      `${categoryName} best practices`,
+      `Getting started with ${categoryName}`,
+      `${categoryName} tips and tricks`
+    ];
+
+    return topicTemplates.slice(0, 2);
+  }
+
+  async saveToDatabase(auditResult) {
+    if (!this.supabase) {
+      console.warn('[CATEGORY-AUDIT] Supabase client not available, skipping database save');
+      return;
+    }
+
+    try {
+      const { error } = await this.supabase
+        .from('category_audits')
+        .insert({
+          publisher_id: auditResult.publisher_id,
+          domain: auditResult.domain,
+          category_url: auditResult.category_url,
+          category_name: auditResult.category_name,
+          has_published_articles: auditResult.has_published_articles,
+          article_count: auditResult.article_count,
+          is_404: auditResult.is_404,
+          is_empty: auditResult.is_empty,
+          ai_suggested_topics: auditResult.ai_suggested_topics,
+          ai_analysis: auditResult.ai_analysis,
+          error_message: auditResult.error_message,
+          crawled_at: new Date().toISOString()
+        });
+
+      if (error) {
+        console.error('[CATEGORY-AUDIT] Database insert error:', error);
+      } else {
+        console.log(`[CATEGORY-AUDIT] Saved result for ${auditResult.category_url}`);
+      }
+    } catch (error) {
+      console.error('[CATEGORY-AUDIT] Database save exception:', error);
+    }
+  }
+
+  async getAuditResults(domain, options = {}) {
+    if (!this.supabase) {
+      console.warn('[CATEGORY-AUDIT] Supabase client not available');
+      return [];
+    }
+
+    try {
+      let query = this.supabase
+        .from('category_audits')
+        .select('*')
+        .eq('domain', domain)
+        .order('crawled_at', { ascending: false });
+
+      if (options.isEmpty !== undefined) {
+        query = query.eq('is_empty', options.isEmpty);
+      }
+
+      if (options.is404 !== undefined) {
+        query = query.eq('is_404', options.is404);
+      }
+
+      if (options.limit) {
+        query = query.limit(options.limit);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error('[CATEGORY-AUDIT] Query error:', error);
+        return [];
+      }
+
+      return data || [];
+    } catch (error) {
+      console.error('[CATEGORY-AUDIT] Query exception:', error);
+      return [];
+    }
+  }
+
+  async getEmptyCategories(domain) {
+    return this.getAuditResults(domain, { isEmpty: true });
+  }
+
+  async get404Categories(domain) {
+    return this.getAuditResults(domain, { is404: true });
+  }
+
+  async getSummary(domain) {
+    try {
+      const allResults = await this.getAuditResults(domain);
+
+      const summary = {
+        total_categories: allResults.length,
+        empty_categories: allResults.filter(r => r.is_empty).length,
+        not_found_categories: allResults.filter(r => r.is_404).length,
+        active_categories: allResults.filter(r => r.has_published_articles).length,
+        total_articles: allResults.reduce((sum, r) => sum + (r.article_count || 0), 0),
+        suggested_topics_count: allResults.reduce((sum, r) => sum + (r.ai_suggested_topics?.length || 0), 0)
+      };
+
+      return summary;
+    } catch (error) {
+      console.error('[CATEGORY-AUDIT] Summary error:', error);
+      return null;
+    }
   }
 }

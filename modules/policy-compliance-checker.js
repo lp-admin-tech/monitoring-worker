@@ -1,8 +1,10 @@
 import { load } from 'cheerio';
 import fetch from 'node-fetch';
+import { createAIHelper } from './ai-helper.js';
 
 export class PolicyComplianceChecker {
-  constructor() {
+  constructor(supabaseClient = null, geminiApiKey = null) {
+    this.aiHelper = supabaseClient && geminiApiKey ? createAIHelper(supabaseClient, geminiApiKey) : null;
     this.coppaKeywords = [
       'kid', 'child', 'children', 'teen', 'youth', 'junior', 'baby',
       'toddler', 'preschool', 'elementary', 'school', 'student'
@@ -28,12 +30,31 @@ export class PolicyComplianceChecker {
     const criticalIssues = this.identifyCriticalIssues(checks);
     const recommendations = this.generateComplianceRecommendations(checks);
 
-    return {
+    const metrics = {
       overallScore,
       criticalIssues,
       checks,
       recommendations,
       complianceLevel: this.getComplianceLevel(overallScore, criticalIssues)
+    };
+
+    let aiAnalysis = null;
+    if (this.aiHelper) {
+      try {
+        aiAnalysis = await this.aiHelper.analyze({
+          type: 'policy_compliance',
+          context: 'Comprehensive compliance audit covering GDPR, CCPA, ad policies, content guidelines, and technical requirements',
+          metrics,
+          html: htmlContent
+        });
+      } catch (error) {
+        console.error('[POLICY-CHECKER] AI analysis error:', error.message);
+      }
+    }
+
+    return {
+      ...metrics,
+      aiAnalysis
     };
   }
 

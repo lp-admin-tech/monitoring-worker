@@ -1,7 +1,12 @@
 import { load } from 'cheerio';
+import { createAIHelper } from './ai-helper.js';
 
 export class LayoutAnalyzer {
-  analyzeLayout(htmlContent) {
+  constructor(supabaseClient = null, geminiApiKey = null) {
+    this.aiHelper = supabaseClient && geminiApiKey ? createAIHelper(supabaseClient, geminiApiKey) : null;
+  }
+
+  async analyzeLayout(htmlContent) {
     const $ = load(htmlContent);
 
     const adPlacement = this.analyzeAdPlacement($);
@@ -16,7 +21,7 @@ export class LayoutAnalyzer {
       mobileFriendliness
     });
 
-    return {
+    const metrics = {
       adsAboveFold: adPlacement.adsAboveFold,
       overlappingAds: adPlacement.overlapping,
       menuPosition: navigationPlacement.position,
@@ -31,6 +36,25 @@ export class LayoutAnalyzer {
         navigationPlacement,
         mobileFriendliness
       })
+    };
+
+    let aiAnalysis = null;
+    if (this.aiHelper) {
+      try {
+        aiAnalysis = await this.aiHelper.analyze({
+          type: 'layout_structure',
+          context: 'Evaluating page layout, ad placement impact on UX, navigation accessibility, and mobile responsiveness',
+          metrics,
+          html: htmlContent
+        });
+      } catch (error) {
+        console.error('[LAYOUT-ANALYZER] AI analysis error:', error.message);
+      }
+    }
+
+    return {
+      ...metrics,
+      aiAnalysis
     };
   }
 

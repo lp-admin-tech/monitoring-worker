@@ -1,7 +1,11 @@
 import fetch from 'node-fetch';
 import { chromium } from 'playwright';
+import { createAIHelper } from './ai-helper.js';
 
 export class TechnicalChecker {
+  constructor(supabaseClient = null, geminiApiKey = null) {
+    this.aiHelper = supabaseClient && geminiApiKey ? createAIHelper(supabaseClient, geminiApiKey) : null;
+  }
   async checkAdsTxt(domain) {
     try {
       const url = domain.startsWith('http')
@@ -56,7 +60,7 @@ export class TechnicalChecker {
     return brokenCount;
   }
 
-  calculatePageSpeedScore(loadTime, metrics) {
+  async calculatePageSpeedScore(loadTime, metrics) {
     let score = 100;
 
     if (loadTime > 3000) score -= 20;
@@ -68,7 +72,31 @@ export class TechnicalChecker {
       if (metrics.LayoutDuration > 500) score -= 10;
     }
 
-    return Math.max(0, score);
+    const speedMetrics = {
+      score: Math.max(0, score),
+      loadTime,
+      scriptDuration: metrics?.ScriptDuration || 0,
+      layoutDuration: metrics?.LayoutDuration || 0
+    };
+
+    let aiAnalysis = null;
+    if (this.aiHelper) {
+      try {
+        aiAnalysis = await this.aiHelper.analyze({
+          type: 'page_speed',
+          context: 'Analyzing page load performance, script execution time, and layout rendering speed',
+          metrics: speedMetrics,
+          html: null
+        });
+      } catch (error) {
+        console.error('[TECHNICAL-CHECKER] AI analysis error:', error.message);
+      }
+    }
+
+    return {
+      ...speedMetrics,
+      aiAnalysis
+    };
   }
 
   async checkDomainAge(domain, browser = null) {
@@ -90,11 +118,30 @@ export class TechnicalChecker {
 
       const domainAuthorityScore = this.calculateDomainAuthority(domainAgeDays, sslValid);
 
-      return {
+      const metrics = {
         domainCreatedDate,
         domainAgeDays,
         sslValid,
         domainAuthorityScore
+      };
+
+      let aiAnalysis = null;
+      if (this.aiHelper) {
+        try {
+          aiAnalysis = await this.aiHelper.analyze({
+            type: 'domain_authority',
+            context: 'Evaluating domain age, SSL certificate validity, and overall domain authority score',
+            metrics,
+            html: null
+          });
+        } catch (error) {
+          console.error('[TECHNICAL-CHECKER] AI analysis error:', error.message);
+        }
+      }
+
+      return {
+        ...metrics,
+        aiAnalysis
       };
     } catch (error) {
       console.error('Domain age check error:', error.message);
@@ -102,7 +149,8 @@ export class TechnicalChecker {
         domainCreatedDate: null,
         domainAgeDays: null,
         sslValid: false,
-        domainAuthorityScore: 0
+        domainAuthorityScore: 0,
+        aiAnalysis: null
       };
     }
   }
@@ -203,25 +251,27 @@ export class TechnicalChecker {
 
       page = await context.newPage();
 
-      const url = domain.startsWith('http') ? domain : `https://${domain}`;
+      const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      const httpsUrl = `https://${cleanDomain}`;
 
       let sslValid = false;
       let certInfo = null;
+      let pageLoadedSuccessfully = false;
 
       page.on('response', (response) => {
-        if (response.url() === url) {
-          const securityDetails = response.securityDetails();
-          if (securityDetails) {
-            certInfo = securityDetails;
-          }
+        const securityDetails = response.securityDetails();
+        if (securityDetails && !certInfo) {
+          certInfo = securityDetails;
         }
       });
 
       try {
-        await page.goto(url, {
-          waitUntil: 'commit',
-          timeout: 10000
+        const response = await page.goto(httpsUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000
         });
+
+        pageLoadedSuccessfully = response && response.ok();
 
         if (certInfo) {
           const now = Date.now();
@@ -231,6 +281,9 @@ export class TechnicalChecker {
           sslValid = now >= validFrom && now <= validTo;
 
           console.log(`[SSL-CHECK] Domain: ${domain}, Protocol: ${certInfo.protocol()}, Issuer: ${certInfo.issuer()}, Valid: ${sslValid}`);
+        } else if (pageLoadedSuccessfully && page.url().startsWith('https://')) {
+          console.log(`[SSL-CHECK] Page loaded via HTTPS for ${domain}, assuming valid SSL`);
+          sslValid = true;
         } else {
           console.log(`[SSL-CHECK] No SSL certificate info found for domain: ${domain} (might be HTTP)`);
           sslValid = false;

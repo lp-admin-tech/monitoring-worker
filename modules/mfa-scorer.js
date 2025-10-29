@@ -1,4 +1,9 @@
+import { createAIHelper } from './ai-helper.js';
+
 export class MFAScorer {
+  constructor(supabaseClient = null, geminiApiKey = null) {
+    this.aiHelper = supabaseClient && geminiApiKey ? createAIHelper(supabaseClient, geminiApiKey) : null;
+  }
   /**
    * Calculates website quality score ONLY (0-60 points)
    * Does NOT include GAM metrics - those are calculated by the composite scoring edge function
@@ -8,7 +13,7 @@ export class MFAScorer {
    * - Technical Quality: 15 points
    * - SEO & Engagement: 10 points
    */
-  calculateWebsiteQualityScore(auditData, seoData = null, engagementData = null, layoutData = null) {
+  async calculateWebsiteQualityScore(auditData, seoData = null, engagementData = null, layoutData = null) {
     let score = 0;
     const breakdown = {
       contentQuality: 0,
@@ -246,7 +251,7 @@ export class MFAScorer {
     // Cap score at 60 (max for website quality component)
     score = Math.max(0, Math.min(60, score));
 
-    return {
+    const metrics = {
       websiteQualityScore: score,
       maxScore: 60,
       breakdown,
@@ -256,6 +261,25 @@ export class MFAScorer {
         technicalQuality: breakdown.technicalQuality,
         seoEngagement: breakdown.seoEngagement
       }
+    };
+
+    let aiAnalysis = null;
+    if (this.aiHelper) {
+      try {
+        aiAnalysis = await this.aiHelper.analyze({
+          type: 'mfa_quality_score',
+          context: 'Overall website quality assessment based on content, ad compliance, technical setup, and SEO/engagement factors',
+          metrics,
+          html: null
+        });
+      } catch (error) {
+        console.error('[MFA-SCORER] AI analysis error:', error.message);
+      }
+    }
+
+    return {
+      ...metrics,
+      aiAnalysis
     };
   }
 

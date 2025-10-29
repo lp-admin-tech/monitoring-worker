@@ -147,13 +147,16 @@ export class WebsiteCrawler {
 
       try {
         await page.goto(url, {
-          waitUntil: 'networkidle',
-          timeout: 30000
+          waitUntil: 'domcontentloaded',
+          timeout: 45000
         });
+        await page.waitForTimeout(2000);
       } catch (error) {
         if (error.message.includes('SSL') || error.message.includes('ERR_CERT') || error.message.includes('net::')) {
           console.log(`[SSL-ERROR] SSL handshake failed for ${domain}: ${error.message}`);
           sslError = true;
+        } else if (error.message.includes('Timeout')) {
+          console.log(`[TIMEOUT] Page load timeout for ${domain}, continuing with partial data`);
         } else {
           throw error;
         }
@@ -291,9 +294,24 @@ export class WebsiteCrawler {
         }
       }
 
+      let errorMessage = error.message;
+
+      if (error.message.includes('Timeout')) {
+        errorMessage = `Website is down or not responding. The page failed to load within 45 seconds.`;
+      } else if (error.message.includes('net::ERR_NAME_NOT_RESOLVED')) {
+        errorMessage = `Website is offline. Domain name could not be resolved (DNS failure).`;
+      } else if (error.message.includes('net::ERR_CONNECTION_REFUSED')) {
+        errorMessage = `Website is offline. Connection was refused by the server.`;
+      } else if (error.message.includes('net::ERR_CONNECTION_TIMED_OUT')) {
+        errorMessage = `Website is down. Connection timed out.`;
+      } else if (error.message.includes('SSL') || error.message.includes('ERR_CERT')) {
+        errorMessage = `Website has SSL certificate issues and cannot be accessed securely.`;
+      }
+
       return {
         success: false,
-        error: error.message
+        error: errorMessage,
+        isOffline: true
       };
     }
   }
@@ -330,9 +348,10 @@ export class WebsiteCrawler {
       const url = domain.startsWith('http') ? domain : `https://${domain}`;
 
       await page.goto(url, {
-        waitUntil: 'networkidle',
-        timeout: 30000
+        waitUntil: 'domcontentloaded',
+        timeout: 45000
       }).catch(() => page.waitForLoadState('domcontentloaded'));
+      await page.waitForTimeout(2000).catch(() => {});
 
       const screenshot = await page.screenshot({
         fullPage: false,
@@ -399,9 +418,10 @@ export class WebsiteCrawler {
 
       const url = domain.startsWith('http') ? domain : `https://${domain}`;
       await page.goto(url, {
-        waitUntil: 'networkidle',
-        timeout: 30000
+        waitUntil: 'domcontentloaded',
+        timeout: 45000
       }).catch(() => page.waitForLoadState('domcontentloaded'));
+      await page.waitForTimeout(2000).catch(() => {});
 
       const accessibilitySnapshot = await page.accessibility.snapshot();
 
@@ -493,9 +513,10 @@ export class WebsiteCrawler {
 
       const url = domain.startsWith('http') ? domain : `https://${domain}`;
       await page.goto(url, {
-        waitUntil: 'networkidle',
-        timeout: 30000
+        waitUntil: 'domcontentloaded',
+        timeout: 45000
       }).catch(() => page.waitForLoadState('domcontentloaded'));
+      await page.waitForTimeout(2000).catch(() => {});
 
       const fullPageScreenshot = await page.screenshot({
         fullPage: true,
@@ -525,6 +546,138 @@ export class WebsiteCrawler {
       }
 
       return null;
+    }
+  }
+
+  async crawlCategoryPages(domain) {
+    const categoryUrls = this.generateCategoryUrls(domain);
+    const results = [];
+
+    for (const categoryUrl of categoryUrls) {
+      try {
+        const result = await this.crawlCategoryPage(categoryUrl);
+        results.push(result);
+      } catch (error) {
+        results.push({
+          categoryUrl,
+          success: false,
+          is_404: false,
+          error: error.message
+        });
+      }
+    }
+
+    return results;
+  }
+
+  generateCategoryUrls(domain) {
+    const baseUrl = domain.startsWith('http') ? domain : `https://${domain}`;
+
+    const commonPaths = [
+      '/blog',
+      '/category',
+      '/categories',
+      '/news',
+      '/articles',
+      '/posts',
+      '/blog/category',
+      '/category/news',
+      '/category/technology',
+      '/category/business',
+      '/category/sports',
+      '/category/entertainment',
+      '/category/health',
+      '/category/lifestyle'
+    ];
+
+    return commonPaths.map(path => `${baseUrl}${path}`);
+  }
+
+  async crawlCategoryPage(categoryUrl) {
+    let context = null;
+    let page = null;
+
+    try {
+      await this.initBrowser();
+
+      context = await this.browser.newContext({
+        userAgent: this.getRandomUserAgent(),
+        viewport: { width: 1920, height: 1080 },
+        ignoreHTTPSErrors: true
+      });
+
+      await context.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      });
+
+      await context.route('**/*', (route) => {
+        const resourceType = route.request().resourceType();
+        if (['image', 'font', 'media'].includes(resourceType)) {
+          route.abort();
+        } else {
+          route.continue();
+        }
+      });
+
+      page = await context.newPage();
+
+      const response = await page.goto(categoryUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000
+      });
+
+      const statusCode = response.status();
+      const is_404 = statusCode === 404;
+
+      if (is_404) {
+        await page.close();
+        await context.close();
+        return {
+          categoryUrl,
+          success: true,
+          is_404: true,
+          htmlContent: '',
+          statusCode
+        };
+      }
+
+      await page.waitForTimeout(2000);
+
+      const htmlContent = await page.content();
+
+      await page.close();
+      await context.close();
+
+      return {
+        categoryUrl,
+        success: true,
+        is_404: false,
+        htmlContent,
+        statusCode
+      };
+    } catch (error) {
+      console.error(`[CRAWLER] Category crawl error for ${categoryUrl}:`, error.message);
+
+      if (page) {
+        try {
+          await page.close();
+        } catch (e) {}
+      }
+
+      if (context) {
+        try {
+          await context.close();
+        } catch (e) {}
+      }
+
+      const is_404 = error.message.includes('404') || error.message.includes('Not Found');
+
+      return {
+        categoryUrl,
+        success: false,
+        is_404,
+        error: error.message
+      };
     }
   }
 

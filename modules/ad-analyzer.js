@@ -1,12 +1,14 @@
 import { load } from 'cheerio';
 import { chromium } from 'playwright';
+import { createAIHelper } from './ai-helper.js';
 
 export class AdAnalyzer {
-  constructor() {
+  constructor(supabaseClient = null, geminiApiKey = null) {
     this.browser = null;
+    this.aiHelper = supabaseClient && geminiApiKey ? createAIHelper(supabaseClient, geminiApiKey) : null;
   }
 
-  analyzeAdDensity(htmlContent) {
+  async analyzeAdDensity(htmlContent) {
     const $ = load(htmlContent);
 
     const adSelectors = [
@@ -117,7 +119,7 @@ export class AdAnalyzer {
     const contentPixels = estimatedBodyHeight * viewportWidth;
     const adToContentRatio = contentPixels > 0 ? totalAdPixels / contentPixels : 0;
 
-    return {
+    const metrics = {
       adDensity,
       totalAds,
       adsAboveFold,
@@ -126,6 +128,25 @@ export class AdAnalyzer {
       stickyAds,
       autoRefreshAds,
       adToContentRatio
+    };
+
+    let aiAnalysis = null;
+    if (this.aiHelper) {
+      try {
+        aiAnalysis = await this.aiHelper.analyze({
+          type: 'ad_density',
+          context: 'Analyzing ad placement, density, and user experience impact on the webpage',
+          metrics,
+          html: htmlContent
+        });
+      } catch (error) {
+        console.error('[AD-ANALYZER] AI analysis error:', error.message);
+      }
+    }
+
+    return {
+      ...metrics,
+      aiAnalysis
     };
   }
 
@@ -280,7 +301,7 @@ export class AdAnalyzer {
     return hasInterference;
   }
 
-  detectAdNetworks(htmlContent) {
+  async detectAdNetworks(htmlContent) {
     const $ = load(htmlContent);
     const detectedNetworks = [];
 
@@ -358,12 +379,31 @@ export class AdAnalyzer {
       }
     });
 
-    return {
+    const metrics = {
       networks: detectedNetworks,
       count: detectedNetworks.length,
       hasGoogleAds: detectedNetworks.includes('Google AdSense') ||
                     detectedNetworks.includes('Google AdX'),
       hasMultipleNetworks: detectedNetworks.length > 1
+    };
+
+    let aiAnalysis = null;
+    if (this.aiHelper) {
+      try {
+        aiAnalysis = await this.aiHelper.analyze({
+          type: 'ad_networks',
+          context: 'Evaluating the ad network setup, diversification, and potential conflicts',
+          metrics,
+          html: htmlContent
+        });
+      } catch (error) {
+        console.error('[AD-ANALYZER] AI analysis error:', error.message);
+      }
+    }
+
+    return {
+      ...metrics,
+      aiAnalysis
     };
   }
 

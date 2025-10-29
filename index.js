@@ -1,572 +1,1078 @@
-import express from 'express';
+import { chromium } from 'playwright';
 import { createClient } from '@supabase/supabase-js';
-import { WebsiteCrawler } from './modules/crawler.js';
-import { ContentAnalyzer } from './modules/content-analyzer.js';
-import { AdAnalyzer } from './modules/ad-analyzer.js';
-import { TechnicalChecker } from './modules/technical-checker.js';
-import { MFAScorer } from './modules/mfa-scorer.js';
-import { SEOAnalyzer } from './modules/seo-analyzer.js';
-import { LayoutAnalyzer } from './modules/layout-analyzer.js';
-import { PolicyComplianceChecker } from './modules/policy-compliance-checker.js';
+import crypto from 'crypto';
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
-const PORT = process.env.PORT || 3001;
-const WORKER_SECRET = process.env.WORKER_SECRET || 'your-secret-key';
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15'
+];
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-  console.error('Missing required environment variables');
-  process.exit(1);
-}
+export class AdvancedWebsiteCrawler {
+  constructor(options = {}) {
+    this.browser = null;
+    this.supabase = null;
+    this.cache = new Map();
+    this.cacheTimeout = options.cacheTimeout || 3600000;
+    this.maxRetries = options.maxRetries || 3;
+    this.concurrency = options.concurrency || 3;
+    this.deepCrawl = options.deepCrawl || false;
+    this.maxDepth = options.maxDepth || 2;
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+    console.log('[CRAWLER-INIT] Initializing AdvancedWebsiteCrawler');
+    console.log('[CRAWLER-INIT] Configuration:', {
+      cacheTimeout: this.cacheTimeout,
+      maxRetries: this.maxRetries,
+      concurrency: this.concurrency,
+      deepCrawl: this.deepCrawl,
+      maxDepth: this.maxDepth
+    });
 
-const crawler = new WebsiteCrawler();
-const contentAnalyzer = new ContentAnalyzer();
-const adAnalyzer = new AdAnalyzer();
-const technicalChecker = new TechnicalChecker();
-const mfaScorer = new MFAScorer();
-const seoAnalyzer = new SEOAnalyzer();
-const layoutAnalyzer = new LayoutAnalyzer();
-const policyChecker = new PolicyComplianceChecker();
-
-const app = express();
-app.use(express.json());
-
-async function auditWebsite(publisherId, domain) {
-  console.log(`========================================`);
-  console.log(`[AUDIT START] Domain: ${domain}`);
-  console.log(`[AUDIT START] Publisher ID: ${publisherId}`);
-  console.log(`[AUDIT START] Timestamp: ${new Date().toISOString()}`);
-  console.log(`========================================`);
-
-  try {
-    console.log(`[DB] Creating audit record in site_audits table...`);
-    const { data: auditRecord, error: insertError } = await supabase
-      .from('site_audits')
-      .insert({
-        publisher_id: publisherId,
-        domain,
-        site_url: domain,
-        scan_status: 'in_progress'
-      })
-      .select()
-      .single();
-
-    if (insertError) {
-      console.error(`[DB] ERROR creating audit record:`, insertError);
-      throw new Error(`Failed to create audit record: ${insertError.message}`);
-    }
-
-    const auditId = auditRecord?.id;
-    console.log(`[DB] Audit record created with ID: ${auditId}`);
-
-    console.log(`[MODULE: CRAWLER] Starting comprehensive website crawl...`);
-    const crawlResult = await crawler.crawlSite(domain);
-    console.log(`[MODULE: CRAWLER] Crawl completed - Success: ${crawlResult.success}`);
-
-    if (crawlResult.requestStats) {
-      console.log(`[MODULE: CRAWLER] Request Stats - Total: ${crawlResult.requestStats.total}, Scripts: ${crawlResult.requestStats.scripts}, Third-party: ${crawlResult.requestStats.thirdParty}`);
-    }
-
-    console.log(`[MODULE: CRAWLER] Checking mobile-friendliness...`);
-    const mobileFriendlyResult = await crawler.checkMobileFriendly(domain).catch(() => ({ isMobileFriendly: false, screenshot: null }));
-
-    console.log(`[MODULE: CRAWLER] Checking accessibility...`);
-    const accessibilityData = await crawler.checkAccessibility(domain).catch(() => null);
-    if (accessibilityData) {
-      console.log(`[MODULE: CRAWLER] Accessibility - Issues found: ${accessibilityData.issues.length}`);
-    }
-
-    if (!crawlResult.success) {
-      console.error(`[MODULE: CRAWLER] FAILED - Error: ${crawlResult.error}`);
-      const { error: failUpdateError } = await supabase
-        .from('site_audits')
-        .update({
-          scan_status: 'failed',
-          error_message: crawlResult.error
-        })
-        .eq('id', auditId);
-
-      if (failUpdateError) {
-        console.error(`[DB] ERROR updating failed status:`, failUpdateError);
-      }
-
-      console.log(`[AUDIT END] Failed for ${domain}`);
-      return { success: false, error: crawlResult.error };
-    }
-
-    console.log(`[MODULE: CONTENT-ANALYZER] Analyzing content quality...`);
-    const contentData = contentAnalyzer.analyzeContent(
-      crawlResult.htmlContent,
-      crawlResult.links
-    );
-    console.log(`[MODULE: CONTENT-ANALYZER] Content length: ${contentData.contentLength} chars`);
-
-    console.log(`[MODULE: AD-ANALYZER] Analyzing ad density...`);
-    const adData = adAnalyzer.analyzeAdDensity(crawlResult.htmlContent);
-    console.log(`[MODULE: AD-ANALYZER] Total ads detected: ${adData.totalAds}, Ad density: ${adData.adDensity.toFixed(2)}`);
-
-    console.log(`[MODULE: AD-ANALYZER] Checking for click interference...`);
-    const hasClickInterference = adAnalyzer.detectClickInterference(
-      crawlResult.htmlContent
-    );
-    console.log(`[MODULE: AD-ANALYZER] Click interference: ${hasClickInterference ? 'YES' : 'NO'}`);
-
-    console.log(`[MODULE: AD-ANALYZER] Detecting ad networks...`);
-    const adNetworks = adAnalyzer.detectAdNetworks(crawlResult.htmlContent);
-    console.log(`[MODULE: AD-ANALYZER] Ad networks found: ${adNetworks.count} - ${adNetworks.networks.join(', ')}`);
-
-    console.log(`[MODULE: CONTENT-ANALYZER] Analyzing images...`);
-    const imageData = contentAnalyzer.analyzeImages(crawlResult.htmlContent);
-    console.log(`[MODULE: CONTENT-ANALYZER] Total images: ${imageData.totalImages}`);
-
-    console.log(`[MODULE: CONTENT-ANALYZER] Analyzing publishing metadata...`);
-    const publishingData = contentAnalyzer.analyzePublishingMetadata(
-      crawlResult.htmlContent,
-      crawlResult.links
-    );
-    console.log(`[MODULE: CONTENT-ANALYZER] Posts found: ${publishingData.totalPostsFound}`);
-
-    console.log(`[MODULE: SEO-ANALYZER] Analyzing SEO and engagement...`);
-    const seoEngagementData = seoAnalyzer.analyzeSEOAndEngagement(
-      crawlResult.htmlContent,
-      crawlResult.links,
-      crawlResult.loadTime,
-      crawlResult.metrics
-    );
-    console.log(`[MODULE: SEO-ANALYZER] SEO score: ${seoEngagementData.score.toFixed(2)}`);
-
-    const seoData = seoEngagementData;
-    const engagementData = seoEngagementData;
-
-    console.log(`[MODULE: LAYOUT-ANALYZER] Analyzing layout quality...`);
-    const layoutData = layoutAnalyzer.analyzeLayout(crawlResult.htmlContent);
-    console.log(`[MODULE: LAYOUT-ANALYZER] Layout score: ${layoutData.score.toFixed(2)}, Menu position: ${layoutData.menuPosition}`);
-
-    console.log(`[TECHNICAL-CHECKS] Running parallel technical checks...`);
-    const [adsTxtValid, brokenLinks, safeBrowsingResult, domainData] = await Promise.all([
-      technicalChecker.checkAdsTxt(domain),
-      technicalChecker.checkBrokenLinks(domain, crawlResult.links),
-      contentAnalyzer.checkSafeBrowsing(domain),
-      technicalChecker.checkDomainAge(domain, crawler.browser)
-    ]);
-    console.log(`[TECHNICAL-CHECKS] Completed - Ads.txt: ${adsTxtValid ? 'Valid' : 'Invalid'}, Mobile friendly: ${mobileFriendlyResult.isMobileFriendly ? 'Yes' : 'No'}`);
-
-    console.log(`[MODULE: TECHNICAL-CHECKER] Calculating page speed score...`);
-    const pageSpeedScore = technicalChecker.calculatePageSpeedScore(
-      crawlResult.loadTime,
-      crawlResult.metrics
-    );
-    console.log(`[MODULE: TECHNICAL-CHECKER] Page speed score: ${pageSpeedScore}/100`);
-
-    const requestStats = crawlResult.requestStats || {};
-    const mobileFriendly = mobileFriendlyResult.isMobileFriendly;
-
-    console.log(`[MODULE: MFA-SCORER] Preparing audit data...`);
-    const auditData = {
-      contentLength: contentData.contentLength,
-      contentUniqueness: contentData.contentUniqueness,
-      hasPrivacyPolicy: contentData.hasPrivacyPolicy,
-      hasContactPage: contentData.hasContactPage,
-      adDensity: adData.adDensity,
-      totalAds: adData.totalAds,
-      adsAboveFold: adData.adsAboveFold,
-      adsInContent: adData.adsInContent,
-      adsSidebar: adData.adsSidebar,
-      stickyAds: adData.stickyAds,
-      autoRefreshAds: adData.autoRefreshAds,
-      adToContentRatio: adData.adToContentRatio,
-      hasClickInterference,
-      adsTxtValid,
-      mobileFriendly,
-      pageSpeedScore,
-      brokenLinks,
-      popupsDetected: crawlResult.popupCount,
-      loadTime: crawlResult.loadTime,
-      hasFeaturedImages: imageData.hasFeaturedImages,
-      totalImages: imageData.totalImages,
-      imagesWithAlt: imageData.imagesWithAlt,
-      optimizedImages: imageData.optimizedImages,
-      videosCount: imageData.videosCount,
-      hasPublishDates: publishingData.hasPublishDates,
-      hasAuthorInfo: publishingData.hasAuthorInfo,
-      latestPostDate: publishingData.latestPostDate,
-      postFrequencyDays: publishingData.postFrequencyDays,
-      totalPostsFound: publishingData.totalPostsFound,
-      contentFreshnessScore: publishingData.contentFreshnessScore,
-      domainAgeDays: domainData.domainAgeDays,
-      domainCreatedDate: domainData.domainCreatedDate,
-      sslValid: domainData.sslValid,
-      domainAuthorityScore: domainData.domainAuthorityScore,
-      safeBrowsing: safeBrowsingResult,
-      performanceTotalRequests: performanceInsights.totalRequests,
-      performanceThirdPartyRequests: performanceInsights.thirdPartyRequests,
-      performanceTransferSize: performanceInsights.totalTransferSize,
-      performanceScriptRequests: performanceInsights.scriptRequests,
-      accessibilityIssuesCount: performanceInsights.accessibilityIssues,
-      accessibilityMissingAltTags: performanceInsights.missingAltTags
-    };
-
-    console.log(`[MODULE: MFA-SCORER] Calculating website quality score...`);
-    const scoreResult = mfaScorer.calculateWebsiteQualityScore(auditData, seoData, engagementData, layoutData);
-    console.log(`[MODULE: MFA-SCORER] Website Quality Score: ${scoreResult.websiteQualityScore}/${scoreResult.maxScore}`);
-
-    console.log(`[MODULE: POLICY-COMPLIANCE-CHECKER] Running full compliance checks...`);
-    const policyCompliance = await policyChecker.checkFullCompliance(
-      domain,
-      crawlResult.htmlContent,
-      crawlResult.links,
-      auditData
-    );
-    console.log(`[MODULE: POLICY-COMPLIANCE-CHECKER] Compliance Score: ${policyCompliance.overallScore}/100 (${policyCompliance.complianceLevel})`);
-
-    const htmlSnapshot = crawlResult.htmlContent.substring(0, 5000);
-
-    const performanceInsights = {
-      totalRequests: requestStats?.total || 0,
-      thirdPartyRequests: requestStats?.thirdParty || 0,
-      totalTransferSize: requestStats?.totalSize || 0,
-      scriptRequests: requestStats?.scripts || 0,
-      stylesheetRequests: requestStats?.stylesheets || 0,
-      accessibilityIssues: accessibilityData?.issues.length || 0,
-      missingAltTags: accessibilityData?.issues.filter(i => i.type === 'missing-alt').length || 0,
-      missingLabels: accessibilityData?.issues.filter(i => i.type === 'missing-label').length || 0,
-      networkLatency: networkTimings.length > 0 ? networkTimings[0].wait : 0
-    };
-
-    console.log(`[PERFORMANCE-INSIGHTS] Total requests: ${performanceInsights.totalRequests}, Third-party: ${performanceInsights.thirdPartyRequests}`);
-    console.log(`[PERFORMANCE-INSIGHTS] Transfer size: ${Math.round(performanceInsights.totalTransferSize / 1024)}KB`);
-    console.log(`[PERFORMANCE-INSIGHTS] Accessibility issues: ${performanceInsights.accessibilityIssues}`);
-
-    const safeInt = (value) => {
-      if (typeof value === 'number' && !isNaN(value)) return Math.round(value);
-      if (typeof value === 'string') {
-        const parsed = parseInt(value, 10);
-        if (!isNaN(parsed)) return parsed;
-      }
-      if (typeof value === 'boolean') {
-        console.warn(`[TYPE-SAFETY] WARNING: Boolean ${value} passed to safeInt, converting to 0`);
-        return 0;
-      }
-      return 0;
-    };
-
-    const safeFloat = (value) => {
-      if (typeof value === 'number' && !isNaN(value)) return value;
-      if (typeof value === 'string') {
-        const parsed = parseFloat(value);
-        if (!isNaN(parsed)) return parsed;
-      }
-      return null;
-    };
-
-    const safeBool = (value) => {
-      if (typeof value === 'boolean') return value;
-      if (value === 'true' || value === 1) return true;
-      if (value === 'false' || value === 0) return false;
-      return false;
-    };
-
-    console.log(`[TYPE-SAFETY] content_value_score type: ${typeof policyCompliance.checks.contentPolicy.contentValueScore}, value: ${policyCompliance.checks.contentPolicy.contentValueScore}`);
-
-    console.log(`[DB] Updating site_audits table with all results...`);
-    const { error: updateError } = await supabase
-      .from('site_audits')
-      .update({
-        scanned_at: new Date().toISOString(),
-        load_time: safeInt(crawlResult.loadTime),
-        has_privacy_policy: safeBool(contentData.hasPrivacyPolicy),
-        has_contact_page: safeBool(contentData.hasContactPage),
-        ads_txt_valid: safeBool(adsTxtValid),
-        content_length: safeInt(contentData.contentLength),
-        content_uniqueness: safeFloat(contentData.contentUniqueness),
-        ad_density: safeFloat(adData.adDensity),
-        total_ads: safeInt(adData.totalAds),
-        ads_above_fold: safeInt(adData.adsAboveFold),
-        ads_in_content: safeInt(adData.adsInContent),
-        ads_sidebar: safeInt(adData.adsSidebar),
-        sticky_ads_count: safeInt(adData.stickyAds),
-        auto_refresh_ads: safeBool(adData.autoRefreshAds),
-        ad_to_content_ratio: safeFloat(adData.adToContentRatio),
-        page_speed_score: safeFloat(pageSpeedScore),
-        mobile_friendly: safeBool(mobileFriendly),
-        popups_detected: safeInt(crawlResult.popupCount),
-        broken_links: safeInt(brokenLinks),
-        has_featured_images: safeBool(imageData.hasFeaturedImages),
-        total_images: safeInt(imageData.totalImages),
-        images_with_alt: safeInt(imageData.imagesWithAlt),
-        optimized_images: safeInt(imageData.optimizedImages),
-        videos_count: safeInt(imageData.videosCount),
-        has_publish_dates: safeBool(publishingData.hasPublishDates),
-        has_author_info: safeBool(publishingData.hasAuthorInfo),
-        latest_post_date: publishingData.latestPostDate?.toISOString(),
-        post_frequency_days: safeFloat(publishingData.postFrequencyDays),
-        total_posts_found: safeInt(publishingData.totalPostsFound),
-        content_freshness_score: safeFloat(publishingData.contentFreshnessScore),
-        domain_age_days: safeInt(domainData.domainAgeDays),
-        domain_created_date: domainData.domainCreatedDate?.toISOString(),
-        ssl_valid: safeBool(domainData.sslValid),
-        domain_authority_score: safeFloat(domainData.domainAuthorityScore),
-        mfa_score: safeFloat(scoreResult.websiteQualityScore),
-        performance_total_requests: safeInt(performanceInsights.totalRequests),
-        performance_third_party_requests: safeInt(performanceInsights.thirdPartyRequests),
-        performance_transfer_size: safeInt(performanceInsights.totalTransferSize),
-        performance_script_requests: safeInt(performanceInsights.scriptRequests),
-        accessibility_issues_count: safeInt(performanceInsights.accessibilityIssues),
-        accessibility_missing_alt_tags: safeInt(performanceInsights.missingAltTags),
-        safe_browsing_status: safeBrowsingResult.isSafe ? 'safe' : 'unsafe',
-        safe_browsing_threats: safeBrowsingResult.threats || [],
-        seo_score: safeFloat(seoData.score),
-        seo_meta_quality: safeFloat(seoData.metaQuality),
-        seo_keyword_spam_score: safeFloat(seoData.keywordSpamScore),
-        seo_navigation_status: seoData.navigationStatus,
-        seo_categories_checked: safeInt(seoData.categoriesChecked),
-        seo_categories_with_articles: safeInt(seoData.categoriesWithArticles),
-        seo_has_sitemap: safeBool(seoData.sitemap),
-        seo_has_robots_txt: safeBool(seoData.robotsTxt),
-        seo_issues: seoData.issues,
-        engagement_score: safeFloat(engagementData.score),
-        engagement_scroll_depth: safeFloat(engagementData.avgScrollDepth),
-        engagement_session_time: safeFloat(engagementData.sessionTimeEstimate),
-        engagement_clickable_links: safeInt(engagementData.clickableLinks),
-        engagement_navigation_blocked: safeBool(engagementData.navigationBlocked),
-        engagement_redirects_detected: safeBool(engagementData.redirectsDetected),
-        engagement_issues: engagementData.issues,
-        layout_score: safeFloat(layoutData.score),
-        layout_menu_position: layoutData.menuPosition,
-        layout_content_above_fold: safeBool(layoutData.contentAboveFold),
-        layout_content_before_ads: safeBool(layoutData.contentBeforeAds),
-        layout_menu_accessible: safeBool(layoutData.menuAccessible),
-        layout_overlapping_ads: safeBool(layoutData.overlappingAds),
-        layout_issues: layoutData.issues,
-        ad_networks_detected: adNetworks.networks,
-        ad_networks_count: safeInt(adNetworks.count),
-        has_google_ads: safeBool(adNetworks.hasGoogleAds),
-        has_multiple_ad_networks: safeBool(adNetworks.hasMultipleNetworks),
-        policy_compliance_score: safeInt(policyCompliance.overallScore),
-        policy_compliance_level: policyCompliance.complianceLevel,
-        policy_critical_issues: policyCompliance.criticalIssues,
-        policy_user_consent_score: safeInt(policyCompliance.checks.userConsent.score),
-        policy_cookie_compliance_score: safeInt(policyCompliance.checks.cookieCompliance.score),
-        policy_content_violations: policyCompliance.checks.contentPolicy.issues,
-        policy_ad_placement_score: safeInt(policyCompliance.checks.adPlacement.score),
-        policy_technical_compliance_score: safeInt(policyCompliance.checks.technicalCompliance.score),
-        policy_invalid_traffic_risk_score: safeInt(policyCompliance.checks.invalidTraffic.score),
-        policy_transparency_score: safeInt(policyCompliance.checks.transparency.score),
-        policy_data_handling_score: safeInt(policyCompliance.checks.dataHandling.score),
-        policy_recommendations: policyCompliance.recommendations,
-        has_consent_mechanism: safeBool(policyCompliance.checks.userConsent.hasConsentMechanism),
-        has_opt_out_option: safeBool(policyCompliance.checks.userConsent.hasOptOut),
-        mentions_third_party_ads: safeBool(policyCompliance.checks.userConsent.mentionsThirdParties),
-        has_cookie_policy: safeBool(policyCompliance.checks.cookieCompliance.cookiePolicyExists),
-        has_pii_protection: safeBool(policyCompliance.checks.cookieCompliance.hasPIIProtection),
-        coppa_compliant: safeBool(policyCompliance.checks.contentPolicy.isCoppaCompliant),
-        content_value_score: safeInt(policyCompliance.checks.contentPolicy.contentValueScore),
-        encourages_ad_clicks: safeBool(policyCompliance.checks.invalidTraffic.encouragesClicks),
-        has_hidden_iframes: safeBool(policyCompliance.checks.technicalCompliance.hiddenIframes > 0),
-        has_about_page: safeBool(policyCompliance.checks.transparency.hasAboutPage),
-        has_sponsored_content_disclosure: safeBool(policyCompliance.checks.transparency.hasDisclaimer),
-        raw_html_snapshot: htmlSnapshot,
-        scan_status: 'completed'
-      })
-      .eq('id', auditId);
-
-    if (updateError) {
-      console.error(`[DB] ERROR updating audit record:`, updateError);
-      throw new Error(`Failed to update audit record: ${updateError.message}`);
-    }
-
-    console.log(`[DB] Database updated successfully`);
-
-    console.log(`[MFA-SCORE] Triggering composite MFA score calculation...`);
-    try {
-      const scoreResponse = await fetch(
-        `${SUPABASE_URL}/functions/v1/calculate-composite-mfa-score`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            publisherIds: [publisherId],
-            forceRecalculate: true
-          }),
-        }
+    if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
+      this.supabase = createClient(
+        process.env.SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_KEY
       );
-
-      if (scoreResponse.ok) {
-        const scoreResult = await scoreResponse.json();
-        console.log(`[MFA-SCORE] Composite score calculated successfully`);
-        if (scoreResult.scores && scoreResult.scores[0]) {
-          const score = scoreResult.scores[0];
-          console.log(`[MFA-SCORE] Overall MFA Score: ${score.overallScore.toFixed(2)}/100`);
-          console.log(`[MFA-SCORE] Risk Level: ${score.riskLevel}`);
-          console.log(`[MFA-SCORE] Risk Flags: ${score.riskFlags.join(', ') || 'None'}`);
-          console.log(`[MFA-SCORE] Recommendations: ${score.recommendations.length} items`);
-        }
-      } else {
-        const errorText = await scoreResponse.text();
-        console.error(`[MFA-SCORE] Failed to calculate composite score:`, errorText);
-      }
-    } catch (scoreError) {
-      console.error(`[MFA-SCORE] Error calculating composite score:`, scoreError.message);
+      console.log('[CRAWLER-INIT] ✓ Supabase client initialized');
+    } else {
+      console.warn('[CRAWLER-INIT] ⚠ Supabase credentials not found');
     }
+  }
 
-    console.log(`========================================`);
-    console.log(`[AUDIT COMPLETE] Domain: ${domain}`);
-    console.log(`[AUDIT COMPLETE] Website Quality Score: ${scoreResult.websiteQualityScore}/${scoreResult.maxScore}`);
-    console.log(`[AUDIT COMPLETE] Policy Compliance: ${policyCompliance.overallScore}/100 (${policyCompliance.complianceLevel})`);
-    console.log(`[AUDIT COMPLETE] SEO Score: ${seoData.score.toFixed(2)}`);
-    console.log(`[AUDIT COMPLETE] Engagement Score: ${engagementData.score.toFixed(2)}`);
-    console.log(`[AUDIT COMPLETE] Layout Score: ${layoutData.score.toFixed(2)}`);
-    console.log(`========================================`);
+  getRandomUserAgent() {
+    return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+  }
+
+  getCacheKey(domain, type = 'default') {
+    return crypto.createHash('md5').update(`${domain}-${type}`).digest('hex');
+  }
+
+  getCache(key) {
+    const cached = this.cache.get(key);
+    if (cached && Date.now() - cached.timestamp < this.cacheTimeout) {
+      console.log('[CACHE-HIT] Returning cached data for key:', key.substring(0, 8));
+      return cached.data;
+    }
+    if (cached) {
+      console.log('[CACHE-MISS] Cache expired for key:', key.substring(0, 8));
+    }
+    this.cache.delete(key);
+    return null;
+  }
+
+  setCache(key, data) {
+    this.cache.set(key, { data, timestamp: Date.now() });
+    console.log('[CACHE-SET] Cached data for key:', key.substring(0, 8));
+  }
+
+  async initBrowser() {
+    if (!this.browser) {
+      console.log('[BROWSER-INIT] Launching Chromium browser...');
+      const launchOptions = {
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--disable-gpu',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-web-security',
+          '--disable-features=IsolateOrigins,site-per-process',
+          '--window-size=1920,1080'
+        ]
+      };
+
+      if (process.env.PLAYWRIGHT_EXECUTABLE_PATH) {
+        launchOptions.executablePath = process.env.PLAYWRIGHT_EXECUTABLE_PATH;
+      }
+
+      this.browser = await chromium.launch(launchOptions);
+      console.log('[BROWSER-INIT] ✓ Browser launched successfully');
+    } else {
+      console.log('[BROWSER-INIT] Browser already running');
+    }
+  }
+
+  async retryOperation(operation, maxRetries = this.maxRetries) {
+    let lastError;
+    console.log(`[RETRY] Starting operation with ${maxRetries} max retries`);
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const result = await operation();
+        if (attempt > 1) {
+          console.log(`[RETRY] ✓ Operation succeeded on attempt ${attempt}`);
+        }
+        return result;
+      } catch (error) {
+        lastError = error;
+        console.log(`[RETRY] ✗ Attempt ${attempt}/${maxRetries} failed: ${error.message}`);
+        if (attempt < maxRetries) {
+          const waitTime = 1000 * attempt;
+          console.log(`[RETRY] Waiting ${waitTime}ms before retry...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+      }
+    }
+    console.error(`[RETRY] ✗ All ${maxRetries} attempts failed`);
+    throw lastError;
+  }
+
+  async analyzeSEO(page, htmlContent, domain) {
+    console.log(`[SEO-ANALYZER] Starting SEO analysis for ${domain}`);
+    try {
+      const seoData = await page.evaluate(() => {
+        const getMetaContent = (name) => {
+          const meta = document.querySelector(`meta[name="${name}"], meta[property="${name}"]`);
+          return meta ? meta.content : null;
+        };
+
+        const title = document.title || '';
+        const description = getMetaContent('description') || '';
+        const keywords = getMetaContent('keywords') || '';
+        const ogTitle = getMetaContent('og:title') || '';
+        const ogDescription = getMetaContent('og:description') || '';
+        const ogImage = getMetaContent('og:image') || '';
+        const canonical = document.querySelector('link[rel="canonical"]')?.href || '';
+        
+        const h1Tags = Array.from(document.querySelectorAll('h1')).map(h => h.textContent.trim());
+        const h2Tags = Array.from(document.querySelectorAll('h2')).map(h => h.textContent.trim());
+        
+        const images = document.querySelectorAll('img');
+        const imagesWithoutAlt = Array.from(images).filter(img => !img.alt).length;
+        
+        const structuredData = [];
+        document.querySelectorAll('script[type="application/ld+json"]').forEach(script => {
+          try {
+            structuredData.push(JSON.parse(script.textContent));
+          } catch (e) {}
+        });
+
+        const wordCount = document.body.textContent.split(/\s+/).filter(w => w.length > 0).length;
+        
+        return {
+          title,
+          titleLength: title.length,
+          description,
+          descriptionLength: description.length,
+          keywords,
+          ogTitle,
+          ogDescription,
+          ogImage,
+          canonical,
+          h1Tags,
+          h1Count: h1Tags.length,
+          h2Count: h2Tags.length,
+          imagesTotal: images.length,
+          imagesWithoutAlt,
+          structuredData,
+          wordCount,
+          hasRobotsMeta: getMetaContent('robots') !== null,
+          robotsContent: getMetaContent('robots'),
+          hasViewport: document.querySelector('meta[name="viewport"]') !== null,
+          lang: document.documentElement.lang || null
+        };
+      });
+
+      // Fetch robots.txt and sitemap
+      const baseUrl = domain.startsWith('http') ? domain : `https://${domain}`;
+      const robotsTxt = await this.fetchRobotsTxt(baseUrl);
+      const sitemap = await this.fetchSitemap(baseUrl);
+
+      // Calculate SEO score
+      let score = 100;
+      const issues = [];
+      const recommendations = [];
+
+      if (!seoData.title || seoData.titleLength === 0) {
+        score -= 15;
+        issues.push('Missing title tag');
+        recommendations.push('Add a descriptive title tag (50-60 characters)');
+      } else if (seoData.titleLength < 30 || seoData.titleLength > 60) {
+        score -= 5;
+        issues.push('Title length not optimal');
+        recommendations.push('Title should be between 30-60 characters');
+      }
+
+      if (!seoData.description || seoData.descriptionLength === 0) {
+        score -= 15;
+        issues.push('Missing meta description');
+        recommendations.push('Add a meta description (150-160 characters)');
+      } else if (seoData.descriptionLength < 120 || seoData.descriptionLength > 160) {
+        score -= 5;
+        issues.push('Meta description length not optimal');
+      }
+
+      if (seoData.h1Count === 0) {
+        score -= 10;
+        issues.push('Missing H1 tag');
+        recommendations.push('Add exactly one H1 tag per page');
+      } else if (seoData.h1Count > 1) {
+        score -= 5;
+        issues.push('Multiple H1 tags found');
+        recommendations.push('Use only one H1 tag per page');
+      }
+
+      if (seoData.imagesWithoutAlt > 0) {
+        score -= Math.min(10, seoData.imagesWithoutAlt * 2);
+        issues.push(`${seoData.imagesWithoutAlt} images missing alt text`);
+        recommendations.push('Add descriptive alt text to all images');
+      }
+
+      if (!seoData.canonical) {
+        score -= 5;
+        issues.push('Missing canonical URL');
+        recommendations.push('Add canonical link tag to prevent duplicate content');
+      }
+
+      if (!seoData.ogTitle || !seoData.ogDescription) {
+        score -= 8;
+        issues.push('Incomplete Open Graph tags');
+        recommendations.push('Add Open Graph tags for better social media sharing');
+      }
+
+      if (seoData.structuredData.length === 0) {
+        score -= 7;
+        issues.push('No structured data found');
+        recommendations.push('Add Schema.org structured data for rich snippets');
+      }
+
+      if (!seoData.hasViewport) {
+        score -= 5;
+        issues.push('Missing viewport meta tag');
+      }
+
+      if (seoData.wordCount < 300) {
+        score -= 5;
+        issues.push('Low content word count');
+        recommendations.push('Aim for at least 300 words of quality content');
+      }
+
+      const result = {
+        ...seoData,
+        robotsTxt,
+        sitemap,
+        score: Math.max(0, score),
+        issues,
+        recommendations
+      };
+      console.log(`[SEO-ANALYZER] ✓ Analysis complete - Score: ${result.score}/100, Issues: ${issues.length}`);
+      return result;
+    } catch (error) {
+      console.error('[SEO-ANALYZER] ✗ Analysis error:', error.message);
+      return null;
+    }
+  }
+
+  async fetchRobotsTxt(baseUrl) {
+    try {
+      const url = new URL('/robots.txt', baseUrl).href;
+      const response = await fetch(url, { timeout: 5000 });
+      if (response.ok) {
+        return await response.text();
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  async fetchSitemap(baseUrl) {
+    try {
+      const url = new URL('/sitemap.xml', baseUrl).href;
+      const response = await fetch(url, { timeout: 5000 });
+      if (response.ok) {
+        const text = await response.text();
+        const urlMatches = text.match(/<loc>(.*?)<\/loc>/g);
+        if (urlMatches) {
+          return urlMatches.map(match => match.replace(/<\/?loc>/g, ''));
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  async analyzeSecurityHeaders(page, domain) {
+    console.log(`[SECURITY-ANALYZER] Starting security header analysis for ${domain}`);
+    try{
+      const securityData = await page.evaluate(() => {
+        return {
+          headers: {},
+          forms: document.querySelectorAll('form').length,
+          httpsLinks: Array.from(document.querySelectorAll('a[href^="https://"]')).length,
+          httpLinks: Array.from(document.querySelectorAll('a[href^="http://"]')).length,
+          mixedContent: false
+        };
+      });
+
+      // Capture response headers
+      let headers = {};
+      const response = await page.goto(
+        domain.startsWith('http') ? domain : `https://${domain}`,
+        { waitUntil: 'domcontentloaded', timeout: 10000 }
+      ).catch(() => null);
+
+      if (response) {
+        headers = response.headers();
+      }
+
+      let score = 100;
+      const issues = [];
+      const recommendations = [];
+
+      const securityHeaders = {
+        'strict-transport-security': headers['strict-transport-security'] || null,
+        'content-security-policy': headers['content-security-policy'] || null,
+        'x-content-type-options': headers['x-content-type-options'] || null,
+        'x-frame-options': headers['x-frame-options'] || null,
+        'x-xss-protection': headers['x-xss-protection'] || null,
+        'referrer-policy': headers['referrer-policy'] || null,
+        'permissions-policy': headers['permissions-policy'] || null
+      };
+
+      if (!securityHeaders['strict-transport-security']) {
+        score -= 15;
+        issues.push('Missing HSTS header');
+        recommendations.push('Add Strict-Transport-Security header');
+      }
+
+      if (!securityHeaders['content-security-policy']) {
+        score -= 15;
+        issues.push('Missing CSP header');
+        recommendations.push('Implement Content-Security-Policy');
+      }
+
+      if (!securityHeaders['x-content-type-options']) {
+        score -= 10;
+        issues.push('Missing X-Content-Type-Options header');
+        recommendations.push('Add X-Content-Type-Options: nosniff');
+      }
+
+      if (!securityHeaders['x-frame-options']) {
+        score -= 10;
+        issues.push('Missing X-Frame-Options header');
+        recommendations.push('Add X-Frame-Options to prevent clickjacking');
+      }
+
+      if (securityData.httpLinks > 0) {
+        score -= 10;
+        issues.push(`Found ${securityData.httpLinks} insecure HTTP links`);
+        recommendations.push('Update all links to use HTTPS');
+      }
+
+      const result = {
+        headers: securityHeaders,
+        score: Math.max(0, score),
+        issues,
+        recommendations,
+        ...securityData
+      };
+      console.log(`[SECURITY-ANALYZER] ✓ Analysis complete - Score: ${result.score}/100, Issues: ${issues.length}`);
+      return result;
+    } catch (error) {
+      console.error('[SECURITY-ANALYZER] ✗ Analysis error:', error.message);
+      return null;
+    }
+  }
+
+  async detectTechnologies(page, htmlContent) {
+    console.log('[TECH-DETECTOR] Detecting technologies...');
+    try {
+      const technologies = await page.evaluate(() => {
+        const detected = {
+          cms: [],
+          frameworks: [],
+          analytics: [],
+          libraries: [],
+          server: [],
+          cdn: []
+        };
+
+        // CMS Detection
+        if (document.querySelector('meta[name="generator"]')) {
+          const generator = document.querySelector('meta[name="generator"]').content;
+          if (generator.includes('WordPress')) detected.cms.push('WordPress');
+          if (generator.includes('Drupal')) detected.cms.push('Drupal');
+          if (generator.includes('Joomla')) detected.cms.push('Joomla');
+        }
+
+        // Framework Detection
+        if (window.React || document.querySelector('[data-reactroot]')) detected.frameworks.push('React');
+        if (window.Vue) detected.frameworks.push('Vue.js');
+        if (window.angular) detected.frameworks.push('Angular');
+        if (document.querySelector('[ng-app]')) detected.frameworks.push('AngularJS');
+        if (window.next) detected.frameworks.push('Next.js');
+        if (window.Shopify) detected.cms.push('Shopify');
+
+        // Analytics Detection
+        if (window.ga || window.gtag) detected.analytics.push('Google Analytics');
+        if (window.fbq) detected.analytics.push('Facebook Pixel');
+        if (window._hsq) detected.analytics.push('HubSpot');
+        if (window.mixpanel) detected.analytics.push('Mixpanel');
+
+        // Libraries
+        if (window.jQuery) detected.libraries.push(`jQuery ${window.jQuery.fn.jquery}`);
+        if (window.bootstrap) detected.libraries.push('Bootstrap');
+        if (window.Modernizr) detected.libraries.push('Modernizr');
+
+        // CDN Detection
+        const scripts = Array.from(document.querySelectorAll('script[src]'));
+        scripts.forEach(script => {
+          const src = script.src;
+          if (src.includes('cloudflare')) detected.cdn.push('Cloudflare');
+          if (src.includes('amazonaws')) detected.cdn.push('AWS CloudFront');
+          if (src.includes('fastly')) detected.cdn.push('Fastly');
+          if (src.includes('akamai')) detected.cdn.push('Akamai');
+        });
+
+        // Remove duplicates
+        Object.keys(detected).forEach(key => {
+          detected[key] = [...new Set(detected[key])];
+        });
+
+        return detected;
+      });
+
+      // Additional detection from HTML
+      if (htmlContent.includes('wp-content') || htmlContent.includes('wp-includes')) {
+        technologies.cms.push('WordPress');
+      }
+
+      const totalDetected = Object.values(technologies).reduce((sum, arr) => sum + arr.length, 0);
+      console.log(`[TECH-DETECTOR] ✓ Detected ${totalDetected} technologies`);
+      return technologies;
+    } catch (error) {
+      console.error('[TECH-DETECTOR] ✗ Detection error:', error.message);
+      return null;
+    }
+  }
+
+  async analyzePerformance(page, domain) {
+    console.log(`[PERFORMANCE-ANALYZER] Starting performance analysis for ${domain}`);
+    try {
+      const performanceData = await page.evaluate(() => {
+        const nav = performance.getEntriesByType('navigation')[0];
+        const paint = performance.getEntriesByType('paint');
+        const resources = performance.getEntriesByType('resource');
+
+        const fcp = paint.find(e => e.name === 'first-contentful-paint')?.startTime || 0;
+        const lcp = paint.find(e => e.name === 'largest-contentful-paint')?.startTime || 0;
+
+        const layoutShifts = performance.getEntriesByType('layout-shift');
+        let cls = 0;
+        layoutShifts.forEach(entry => {
+          if (!entry.hadRecentInput) cls += entry.value;
+        });
+
+        // Calculate Total Blocking Time (TBT)
+        const longTasks = performance.getEntriesByType('longtask') || [];
+        let tbt = 0;
+        longTasks.forEach(task => {
+          if (task.duration > 50) {
+            tbt += task.duration - 50;
+          }
+        });
+
+        // Resource breakdown
+        const resourceBreakdown = {
+          scripts: 0,
+          stylesheets: 0,
+          images: 0,
+          fonts: 0,
+          total: 0
+        };
+
+        resources.forEach(resource => {
+          const size = resource.transferSize || 0;
+          resourceBreakdown.total += size;
+          
+          if (resource.initiatorType === 'script') resourceBreakdown.scripts += size;
+          if (resource.initiatorType === 'css') resourceBreakdown.stylesheets += size;
+          if (resource.initiatorType === 'img') resourceBreakdown.images += size;
+          if (resource.initiatorType === 'font') resourceBreakdown.fonts += size;
+        });
+
+        return {
+          fcp,
+          lcp,
+          cls,
+          tbt,
+          ttfb: nav?.responseStart || 0,
+          domInteractive: nav?.domInteractive || 0,
+          domComplete: nav?.domComplete || 0,
+          loadTime: nav?.loadEventEnd || 0,
+          resourceBreakdown,
+          resourceCount: resources.length
+        };
+      });
+
+      // Calculate performance score (similar to Lighthouse)
+      let score = 100;
+      const issues = [];
+
+      if (performanceData.fcp > 1800) {
+        score -= 20;
+        issues.push('Slow First Contentful Paint');
+      } else if (performanceData.fcp > 1000) {
+        score -= 10;
+      }
+
+      if (performanceData.lcp > 2500) {
+        score -= 20;
+        issues.push('Slow Largest Contentful Paint');
+      } else if (performanceData.lcp > 1200) {
+        score -= 10;
+      }
+
+      if (performanceData.cls > 0.25) {
+        score -= 15;
+        issues.push('High Cumulative Layout Shift');
+      } else if (performanceData.cls > 0.1) {
+        score -= 8;
+      }
+
+      if (performanceData.tbt > 600) {
+        score -= 15;
+        issues.push('High Total Blocking Time');
+      } else if (performanceData.tbt > 300) {
+        score -= 8;
+      }
+
+      const result = {
+        ...performanceData,
+        score: Math.max(0, score),
+        issues
+      };
+      console.log(`[PERFORMANCE-ANALYZER] ✓ Analysis complete - Score: ${result.score}/100, FCP: ${result.fcp.toFixed(0)}ms, LCP: ${result.lcp.toFixed(0)}ms`);
+      return result;
+    } catch (error) {
+      console.error('[PERFORMANCE-ANALYZER] ✗ Analysis error:', error.message);
+      return null;
+    }
+  }
+
+  async analyzeLinkQuality(page, domain) {
+    console.log(`[LINK-ANALYZER] Analyzing link quality for ${domain}`);
+    try {
+      const linkData = await page.evaluate(() => {
+        const links = Array.from(document.querySelectorAll('a[href]'));
+        
+        const internal = [];
+        const external = [];
+        const broken = [];
+        
+        const currentHost = window.location.hostname;
+        
+        links.forEach(link => {
+          const href = link.href;
+          if (!href || href.startsWith('javascript:') || href.startsWith('#')) return;
+          
+          try {
+            const url = new URL(href);
+            if (url.hostname === currentHost) {
+              internal.push(href);
+            } else {
+              external.push(href);
+            }
+          } catch (e) {}
+        });
+
+        return {
+          internal: [...new Set(internal)],
+          external: [...new Set(external)],
+          totalLinks: links.length
+        };
+      });
+
+      console.log(`[LINK-ANALYZER] ✓ Found ${linkData.totalLinks} links (${linkData.internal.length} internal, ${linkData.external.length} external)`);
+      return linkData;
+    } catch (error) {
+      console.error('[LINK-ANALYZER] ✗ Analysis error:', error.message);
+      return null;
+    }
+  }
+
+  async generateLighthouseScore(seoScore, securityScore, performanceScore, accessibilityScore) {
+    const overallScore = Math.round(
+      (seoScore * 0.25 + securityScore * 0.25 + performanceScore * 0.3 + accessibilityScore * 0.2)
+    );
 
     return {
-      success: true,
-      auditId,
-      websiteQualityScore: scoreResult.websiteQualityScore,
-      maxScore: scoreResult.maxScore,
-      componentScores: scoreResult.componentScores,
-      breakdown: scoreResult.breakdown,
-      recommendations: mfaScorer.generateRecommendations(auditData, scoreResult.breakdown, seoData, engagementData, layoutData),
-      seoScore: seoData.score,
-      engagementScore: engagementData.score,
-      layoutScore: layoutData.score,
-      adNetworks: adNetworks.networks,
-      policyCompliance: {
-        score: policyCompliance.overallScore,
-        level: policyCompliance.complianceLevel,
-        criticalIssues: policyCompliance.criticalIssues,
-        recommendations: policyCompliance.recommendations
-      }
+      overall: overallScore,
+      seo: seoScore,
+      security: securityScore,
+      performance: performanceScore,
+      accessibility: accessibilityScore,
+      rating: overallScore >= 90 ? 'Excellent' :
+              overallScore >= 75 ? 'Good' :
+              overallScore >= 50 ? 'Fair' : 'Poor'
     };
+  }
 
-  } catch (error) {
-    console.error(`========================================`);
-    console.error(`[AUDIT ERROR] Domain: ${domain}`);
-    console.error(`[AUDIT ERROR] Error Type: ${error.name}`);
-    console.error(`[AUDIT ERROR] Error Message: ${error.message}`);
-    console.error(`[AUDIT ERROR] Stack Trace:`, error.stack);
-    console.error(`========================================`);
-    return { success: false, error: error.message };
+  async crawlSite(domain) {
+    console.log(`\n[CRAWL-START] ====== Starting crawl for ${domain} ======`);
+    const cacheKey = this.getCacheKey(domain);
+    const cached = this.getCache(cacheKey);
+    if (cached) {
+      console.log('[CRAWL-END] ====== Returning cached results ======\n');
+      return cached;
+    }
+
+    return await this.retryOperation(async () => {
+      let context = null;
+      let page = null;
+
+      try {
+        await this.initBrowser();
+
+        console.log(`[CONTEXT-CREATE] Creating browser context for ${domain}`);
+        context = await this.browser.newContext({
+          userAgent: this.getRandomUserAgent(),
+          viewport: { width: 1920, height: 1080 },
+          bypassCSP: true,
+          javaScriptEnabled: true,
+          ignoreHTTPSErrors: true,
+          extraHTTPHeaders: {
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+          }
+        });
+
+        await context.addInitScript(() => {
+          Object.defineProperty(navigator, 'webdriver', { get: () => false });
+          Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+          Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+          window.chrome = { runtime: {} };
+        });
+
+        const harData = [];
+        const requestStats = {
+          total: 0,
+          scripts: 0,
+          stylesheets: 0,
+          images: 0,
+          xhr: 0,
+          fetch: 0,
+          thirdParty: 0,
+          totalSize: 0,
+          blocked: 0
+        };
+
+        await context.route('**/*', (route) => {
+          const request = route.request();
+          const resourceType = request.resourceType();
+          requestStats.total++;
+
+          if (['image', 'font', 'media'].includes(resourceType)) {
+            requestStats.blocked++;
+            if (resourceType === 'image') requestStats.images++;
+            route.abort();
+          } else {
+            if (resourceType === 'script') requestStats.scripts++;
+            if (resourceType === 'stylesheet') requestStats.stylesheets++;
+            if (resourceType === 'xhr') requestStats.xhr++;
+            if (resourceType === 'fetch') requestStats.fetch++;
+            route.continue();
+          }
+        });
+
+        page = await context.newPage();
+
+        page.on('response', async (response) => {
+          try {
+            const request = response.request();
+            const url = request.url();
+            const headers = response.headers();
+            const contentLength = parseInt(headers['content-length'] || '0');
+            requestStats.totalSize += contentLength;
+
+            const domainUrl = new URL(domain.startsWith('http') ? domain : `https://${domain}`);
+            const requestUrl = new URL(url);
+            if (requestUrl.hostname !== domainUrl.hostname) {
+              requestStats.thirdParty++;
+            }
+
+            harData.push({
+              url,
+              method: request.method(),
+              status: response.status(),
+              size: contentLength,
+              timing: response.timing(),
+              resourceType: request.resourceType()
+            });
+          } catch (e) {}
+        });
+
+        const url = domain.startsWith('http') ? domain : `https://${domain}`;
+        let sslError = false;
+
+        console.log(`[PAGE-NAVIGATE] Navigating to ${url}`);
+        const startTime = Date.now();
+
+        try {
+          await page.goto(url, {
+            waitUntil: 'domcontentloaded',
+            timeout: 45000
+          });
+          await page.waitForTimeout(3000);
+        } catch (error) {
+          if (error.message.includes('SSL') || error.message.includes('ERR_CERT')) {
+            sslError = true;
+          }
+          throw error;
+        }
+
+        const loadTime = Date.now() - startTime;
+        console.log(`[PAGE-LOADED] ✓ Page loaded in ${loadTime}ms`);
+
+        console.log('[DATA-EXTRACT] Extracting page data...');
+        const [htmlContent, screenshot, pageData] = await Promise.all([
+          page.content(),
+          page.screenshot({ fullPage: false, type: 'jpeg', quality: 75 }).catch(() => null),
+          page.evaluate(() => {
+            const links = Array.from(document.querySelectorAll('a')).map(a => a.href);
+            const popupSelectors = ['.popup', '.modal', '[id*="popup"]', '[class*="popup"]', '[role="dialog"]'];
+            const popupCount = popupSelectors.reduce((count, selector) => {
+              return count + document.querySelectorAll(selector).length;
+            }, 0);
+
+            return { links, popupCount };
+          })
+        ]);
+
+        console.log('[ANALYSIS-START] Running comprehensive analysis suite...');
+        const [seoAnalysis, securityAnalysis, technologies, performanceAnalysis, linkAnalysis, accessibilityData] =
+          await Promise.all([
+            this.analyzeSEO(page, htmlContent, domain),
+            this.analyzeSecurityHeaders(page, domain),
+            this.detectTechnologies(page, htmlContent),
+            this.analyzePerformance(page, domain),
+            this.analyzeLinkQuality(page, domain),
+            this.checkAccessibility(domain)
+          ]);
+
+        console.log('[ANALYSIS-COMPLETE] All analyses finished');
+
+        const lighthouseScore = await this.generateLighthouseScore(
+          seoAnalysis?.score || 0,
+          securityAnalysis?.score || 0,
+          performanceAnalysis?.score || 0,
+          accessibilityData?.score || 0
+        );
+
+        console.log(`[LIGHTHOUSE-SCORE] Overall: ${lighthouseScore.overall}/100 (${lighthouseScore.rating})`);
+
+        console.log('[CLEANUP] Closing page and context');
+        await page.close();
+        await context.close();
+
+        const result = {
+          success: true,
+          timestamp: new Date().toISOString(),
+          domain,
+          htmlContent,
+          links: pageData.links,
+          loadTime,
+          popupCount: pageData.popupCount,
+          requestStats,
+          harData: harData.slice(0, 50),
+          screenshot: screenshot ? screenshot.toString('base64') : null,
+          sslError,
+          seoAnalysis,
+          securityAnalysis,
+          technologies,
+          performanceAnalysis,
+          linkAnalysis,
+          accessibilityData,
+          lighthouseScore
+        };
+
+        this.setCache(cacheKey, result);
+        console.log(`[CRAWL-END] ====== Successfully crawled ${domain} ======\n`);
+        return result;
+
+      } catch (error) {
+        console.error('[CRAWL-ERROR] ✗ Crawl failed:', error.message);
+
+        if (page) await page.close().catch(() => {});
+        if (context) await context.close().catch(() => {});
+
+        let errorMessage = error.message;
+        if (error.message.includes('Timeout')) {
+          errorMessage = 'Website timed out (45s limit exceeded)';
+        } else if (error.message.includes('net::ERR_NAME_NOT_RESOLVED')) {
+          errorMessage = 'Domain name could not be resolved (DNS failure)';
+        } else if (error.message.includes('net::ERR_CONNECTION_REFUSED')) {
+          errorMessage = 'Connection refused by server';
+        } else if (error.message.includes('SSL') || error.message.includes('ERR_CERT')) {
+          errorMessage = 'SSL certificate issues detected';
+        }
+
+        const errorResult = {
+          success: false,
+          error: errorMessage,
+          isOffline: true,
+          timestamp: new Date().toISOString()
+        };
+        console.log(`[CRAWL-END] ====== Failed to crawl ${domain}: ${errorMessage} ======\n`);
+        return errorResult;
+      }
+    });
+  }
+
+  async checkAccessibility(domain) {
+    console.log(`[ACCESSIBILITY] Starting accessibility check for ${domain}`);
+    let context = null;
+    let page = null;
+
+    try {
+      await this.initBrowser();
+      context = await this.browser.newContext({
+        userAgent: this.getRandomUserAgent(),
+        ignoreHTTPSErrors: true
+      });
+
+      await context.route('**/*', (route) => {
+        const resourceType = route.request().resourceType();
+        if (['image', 'font', 'media'].includes(resourceType)) {
+          route.abort();
+        } else {
+          route.continue();
+        }
+      });
+
+      page = await context.newPage();
+      const url = domain.startsWith('http') ? domain : `https://${domain}`;
+      
+      await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: 45000
+      });
+      await page.waitForTimeout(2000);
+
+      const issues = await page.evaluate(() => {
+        const problems = [];
+
+        // Image alt text
+        const images = document.querySelectorAll('img');
+        images.forEach(img => {
+          if (!img.alt) problems.push({ type: 'missing-alt', element: 'img', severity: 'high' });
+        });
+
+        // Form labels
+        const inputs = document.querySelectorAll('input:not([type="hidden"])');
+        inputs.forEach(input => {
+          if (!input.labels || input.labels.length === 0) {
+            problems.push({ type: 'missing-label', element: 'input', severity: 'high' });
+          }
+        });
+
+        // Button text
+        const buttons = document.querySelectorAll('button');
+        buttons.forEach(btn => {
+          if (!btn.textContent.trim() && !btn.ariaLabel) {
+            problems.push({ type: 'missing-button-text', element: 'button', severity: 'medium' });
+          }
+        });
+
+        // Heading hierarchy
+        const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
+        let previousLevel = 0;
+        headings.forEach(heading => {
+          const level = parseInt(heading.tagName.substring(1));
+          if (level - previousLevel > 1) {
+            problems.push({ type: 'heading-skip', element: heading.tagName, severity: 'medium' });
+          }
+          previousLevel = level;
+        });
+
+        // Color contrast (basic check)
+        const elements = document.querySelectorAll('p, span, div, a, button');
+        let contrastIssues = 0;
+        for (let i = 0; i < Math.min(elements.length, 100); i++) {
+          const el = elements[i];
+          const style = window.getComputedStyle(el);
+          const bgColor = style.backgroundColor;
+          const color = style.color;
+          
+          if (bgColor && color && bgColor !== 'rgba(0, 0, 0, 0)') {
+            // Simple check - would need full contrast calculation
+            contrastIssues++;
+          }
+        }
+
+        // ARIA labels
+        const interactiveElements = document.querySelectorAll('button, a, input, select, textarea');
+        interactiveElements.forEach(el => {
+          if (!el.textContent.trim() && !el.getAttribute('aria-label') && !el.getAttribute('aria-labelledby')) {
+            problems.push({ type: 'missing-aria-label', element: el.tagName.toLowerCase(), severity: 'medium' });
+          }
+        });
+
+        return problems;
+      });
+
+      await page.close();
+      await context.close();
+
+      // Calculate accessibility score
+      let score = 100;
+      const highSeverity = issues.filter(i => i.severity === 'high').length;
+      const mediumSeverity = issues.filter(i => i.severity === 'medium').length;
+      
+      score -= highSeverity * 5;
+      score -= mediumSeverity * 2;
+
+      const result = {
+        score: Math.max(0, score),
+        issues,
+        issueCount: issues.length,
+        highSeverityCount: highSeverity,
+        mediumSeverityCount: mediumSeverity
+      };
+      console.log(`[ACCESSIBILITY] ✓ Check complete - Score: ${result.score}/100, Issues: ${issues.length}`);
+      return result;
+    } catch (error) {
+      console.error('[ACCESSIBILITY] ✗ Check error:', error.message);
+      if (page) await page.close().catch(() => {});
+      if (context) await context.close().catch(() => {});
+      return { score: 0, issues: [], issueCount: 0 };
+    }
+  }
+
+  async checkMobileFriendly(domain) {
+    console.log(`[MOBILE-CHECK] Starting mobile-friendly check for ${domain}`);
+    let context = null;
+    let page = null;
+
+    try {
+      await this.initBrowser();
+      context = await this.browser.newContext({
+        viewport: { width: 375, height: 667 },
+        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
+        hasTouch: true,
+        isMobile: true,
+        ignoreHTTPSErrors: true
+      });
+
+      await context.route('**/*', (route) => {
+        const resourceType = route.request().resourceType();
+        if (['image', 'font', 'media'].includes(resourceType)) {
+          route.abort();
+        } else {
+          route.continue();
+        }
+      });
+
+      page = await context.newPage();
+      const url = domain.startsWith('http') ? domain : `https://${domain}`;
+
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      await page.waitForTimeout(2000);
+
+      const screenshot = await page.screenshot({
+        fullPage: false,
+        type: 'jpeg',
+        quality: 60
+      }).catch(() => null);
+
+      const mobileData = await page.evaluate(() => {
+        const viewport = document.querySelector('meta[name="viewport"]');
+        const tapTargets = document.querySelectorAll('button, a, input');
+        
+        let smallTapTargets = 0;
+        tapTargets.forEach(el => {
+          const rect = el.getBoundingClientRect();
+          if (rect.width < 44 || rect.height < 44) {
+            smallTapTargets++;
+          }
+        });
+
+        return {
+          hasViewport: viewport !== null,
+          viewportContent: viewport?.content || null,
+          smallTapTargets,
+          totalTapTargets: tapTargets.length
+        };
+      });
+
+      await page.close();
+      await context.close();
+
+      let score = 100;
+      const issues = [];
+
+      if (!mobileData.hasViewport) {
+        score -= 40;
+        issues.push('Missing viewport meta tag');
+      }
+
+      if (mobileData.smallTapTargets > 0) {
+        score -= Math.min(30, mobileData.smallTapTargets * 5);
+        issues.push(`${mobileData.smallTapTargets} tap targets too small (< 44x44px)`);
+      }
+
+      const result = {
+        isMobileFriendly: score >= 70,
+        score: Math.max(0, score),
+        screenshot: screenshot ? screenshot.toString('base64') : null,
+        issues,
+        ...mobileData
+      };
+      console.log(`[MOBILE-CHECK] ✓ Check complete - Score: ${result.score}/100, Mobile Friendly: ${result.isMobileFriendly}`);
+      return result;
+    } catch (error) {
+      console.error('[MOBILE-CHECK] ✗ Check error:', error.message);
+      if (page) await page.close().catch(() => {});
+      if (context) await context.close().catch(() => {});
+      return { isMobileFriendly: false, score: 0, screenshot: null, issues: [] };
+    }
+  }
+
+  async crawlMultipleSites(domains) {
+    console.log(`\n[MULTI-CRAWL] Starting crawl for ${domains.length} domains with concurrency ${this.concurrency}`);
+    const results = [];
+    const chunks = [];
+    
+    for (let i = 0; i < domains.length; i += this.concurrency) {
+      chunks.push(domains.slice(i, i + this.concurrency));
+    }
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      console.log(`[MULTI-CRAWL] Processing chunk ${i + 1}/${chunks.length} (${chunk.length} domains)`);
+      const chunkResults = await Promise.allSettled(
+        chunk.map(domain => this.crawlSite(domain))
+      );
+      
+      chunkResults.forEach((result, index) => {
+        results.push({
+          domain: chunk[index],
+          result: result.status === 'fulfilled' ? result.value : { success: false, error: result.reason.message }
+        });
+      });
+      console.log(`[MULTI-CRAWL] Chunk ${i + 1}/${chunks.length} complete`);
+    }
+
+    console.log(`[MULTI-CRAWL] ✓ All ${domains.length} domains processed\n`);
+    return results;
+  }
+
+  clearCache() {
+    this.cache.clear();
+    console.log('[CACHE] Cleared all cached results');
+  }
+
+  async close() {
+    console.log('[CRAWLER-CLOSE] Shutting down crawler...');
+    if (this.browser) {
+      await this.browser.close();
+      this.browser = null;
+      console.log('[CRAWLER-CLOSE] ✓ Browser closed');
+    }
+    this.clearCache();
+    console.log('[CRAWLER-CLOSE] ✓ Crawler shutdown complete');
   }
 }
 
-app.post('/audit', async (req, res) => {
-  try {
-    const { secret, publisherId, domain } = req.body;
-
-    if (secret !== WORKER_SECRET) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    if (!publisherId || !domain) {
-      return res.status(400).json({ error: 'Missing publisherId or domain' });
-    }
-
-    // Respond immediately and process in background
-    res.json({
-      success: true,
-      message: `Audit started for ${domain}`,
-      publisherId,
-      domain
-    });
-
-    // Process audit asynchronously in background
-    auditWebsite(publisherId, domain).catch(error => {
-      console.error(`Background audit error for ${domain}:`, error);
-    });
-
-  } catch (error) {
-    console.error('Audit endpoint error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/audit-batch', async (req, res) => {
-  try {
-    const { secret, publishers } = req.body;
-
-    if (secret !== WORKER_SECRET) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    if (!publishers || !Array.isArray(publishers)) {
-      return res.status(400).json({ error: 'Invalid publishers array' });
-    }
-
-    res.json({ message: 'Batch audit started', count: publishers.length });
-
-    for (const publisher of publishers) {
-      try {
-        await auditWebsite(publisher.id, publisher.domain);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      } catch (error) {
-        console.error(`Error auditing ${publisher.domain}:`, error);
-      }
-    }
-
-  } catch (error) {
-    console.error('Batch audit error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/audit-all', async (req, res) => {
-  try {
-    const { secret } = req.query;
-
-    if (secret !== WORKER_SECRET) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    const { data: publishers, error } = await supabase
-      .from('publishers')
-      .select('id, domain')
-      .not('domain', 'is', null);
-
-    if (error) throw error;
-
-    res.json({ message: 'Audit all started', count: publishers.length });
-
-    for (const publisher of publishers) {
-      try {
-        await auditWebsite(publisher.id, publisher.domain);
-        await new Promise(resolve => setTimeout(resolve, 3000));
-      } catch (error) {
-        console.error(`Error auditing ${publisher.domain}:`, error);
-      }
-    }
-
-  } catch (error) {
-    console.error('Audit all error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', service: 'site-monitoring-worker' });
-});
-
-process.on('SIGTERM', async () => {
-  console.log('Received SIGTERM, cleaning up...');
-  await crawler.close();
-  process.exit(0);
-});
-
-process.on('SIGINT', async () => {
-  console.log('Received SIGINT, cleaning up...');
-  await crawler.close();
-  process.exit(0);
-});
-
-app.listen(PORT, () => {
-  console.log(`Site Monitoring Worker running on port ${PORT}`);
-  console.log(`Endpoints:`);
-  console.log(`  POST /audit - Audit a single site`);
-  console.log(`  POST /audit-batch - Audit multiple sites`);
-  console.log(`  GET /audit-all - Audit all publishers`);
-  console.log(`  GET /health - Health check`);
-});
+export default AdvancedWebsiteCrawler;
