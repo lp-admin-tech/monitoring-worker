@@ -61,9 +61,22 @@ async function auditWebsite(publisherId, domain) {
     const auditId = auditRecord?.id;
     console.log(`[DB] Audit record created with ID: ${auditId}`);
 
-    console.log(`[MODULE: CRAWLER] Starting website crawl...`);
-    const crawlResult = await crawler.crawlSite(domain);
+    console.log(`[MODULE: CRAWLER] Starting comprehensive website crawl...`);
+    const [crawlResult, requestStats, networkTimings, accessibilityData] = await Promise.all([
+      crawler.crawlSite(domain),
+      crawler.interceptAndAnalyzeRequests(domain).catch(() => null),
+      crawler.captureNetworkTimings(domain).catch(() => []),
+      crawler.checkAccessibility(domain).catch(() => null)
+    ]);
     console.log(`[MODULE: CRAWLER] Crawl completed - Success: ${crawlResult.success}`);
+
+    if (requestStats) {
+      console.log(`[MODULE: CRAWLER] Request Stats - Total: ${requestStats.total}, Scripts: ${requestStats.scripts}, Third-party: ${requestStats.thirdParty}`);
+    }
+
+    if (accessibilityData) {
+      console.log(`[MODULE: CRAWLER] Accessibility - Issues found: ${accessibilityData.issues.length}`);
+    }
 
     if (!crawlResult.success) {
       console.error(`[MODULE: CRAWLER] FAILED - Error: ${crawlResult.error}`);
@@ -184,7 +197,13 @@ async function auditWebsite(publisherId, domain) {
       domainCreatedDate: domainData.domainCreatedDate,
       sslValid: domainData.sslValid,
       domainAuthorityScore: domainData.domainAuthorityScore,
-      safeBrowsing: safeBrowsingResult
+      safeBrowsing: safeBrowsingResult,
+      performanceTotalRequests: performanceInsights.totalRequests,
+      performanceThirdPartyRequests: performanceInsights.thirdPartyRequests,
+      performanceTransferSize: performanceInsights.totalTransferSize,
+      performanceScriptRequests: performanceInsights.scriptRequests,
+      accessibilityIssuesCount: performanceInsights.accessibilityIssues,
+      accessibilityMissingAltTags: performanceInsights.missingAltTags
     };
 
     console.log(`[MODULE: MFA-SCORER] Calculating website quality score...`);
@@ -201,6 +220,22 @@ async function auditWebsite(publisherId, domain) {
     console.log(`[MODULE: POLICY-COMPLIANCE-CHECKER] Compliance Score: ${policyCompliance.overallScore}/100 (${policyCompliance.complianceLevel})`);
 
     const htmlSnapshot = crawlResult.htmlContent.substring(0, 5000);
+
+    const performanceInsights = {
+      totalRequests: requestStats?.total || 0,
+      thirdPartyRequests: requestStats?.thirdParty || 0,
+      totalTransferSize: requestStats?.totalSize || 0,
+      scriptRequests: requestStats?.scripts || 0,
+      stylesheetRequests: requestStats?.stylesheets || 0,
+      accessibilityIssues: accessibilityData?.issues.length || 0,
+      missingAltTags: accessibilityData?.issues.filter(i => i.type === 'missing-alt').length || 0,
+      missingLabels: accessibilityData?.issues.filter(i => i.type === 'missing-label').length || 0,
+      networkLatency: networkTimings.length > 0 ? networkTimings[0].wait : 0
+    };
+
+    console.log(`[PERFORMANCE-INSIGHTS] Total requests: ${performanceInsights.totalRequests}, Third-party: ${performanceInsights.thirdPartyRequests}`);
+    console.log(`[PERFORMANCE-INSIGHTS] Transfer size: ${Math.round(performanceInsights.totalTransferSize / 1024)}KB`);
+    console.log(`[PERFORMANCE-INSIGHTS] Accessibility issues: ${performanceInsights.accessibilityIssues}`);
 
     const safeInt = (value) => {
       if (typeof value === 'number' && !isNaN(value)) return Math.round(value);
@@ -272,6 +307,12 @@ async function auditWebsite(publisherId, domain) {
         ssl_valid: safeBool(domainData.sslValid),
         domain_authority_score: safeFloat(domainData.domainAuthorityScore),
         mfa_score: safeFloat(scoreResult.websiteQualityScore),
+        performance_total_requests: safeInt(performanceInsights.totalRequests),
+        performance_third_party_requests: safeInt(performanceInsights.thirdPartyRequests),
+        performance_transfer_size: safeInt(performanceInsights.totalTransferSize),
+        performance_script_requests: safeInt(performanceInsights.scriptRequests),
+        accessibility_issues_count: safeInt(performanceInsights.accessibilityIssues),
+        accessibility_missing_alt_tags: safeInt(performanceInsights.missingAltTags),
         safe_browsing_status: safeBrowsingResult.isSafe ? 'safe' : 'unsafe',
         safe_browsing_threats: safeBrowsingResult.threats || [],
         seo_score: safeFloat(seoData.score),

@@ -109,17 +109,32 @@ export class MFAScorer {
     breakdown.sslValid = auditData.sslValid ? 5 : 0;
     technicalQualityScore += breakdown.sslValid;
 
-    // Page speed score >= 70: 4 points
+    // Page speed score >= 70: 4 points (adjusted for performance metrics)
+    let pageSpeedBase = 0;
     if (auditData.pageSpeedScore >= 70) {
-      breakdown.pageSpeed = 4;
-      technicalQualityScore += 4;
+      pageSpeedBase = 4;
     } else if (auditData.pageSpeedScore >= 50) {
-      breakdown.pageSpeed = 2;
-      technicalQualityScore += 2;
+      pageSpeedBase = 2;
     } else {
-      breakdown.pageSpeed = Math.floor((auditData.pageSpeedScore / 70) * 4);
-      technicalQualityScore += breakdown.pageSpeed;
+      pageSpeedBase = Math.floor((auditData.pageSpeedScore / 70) * 4);
     }
+
+    // Bonus/penalty based on actual performance metrics
+    if (auditData.performanceTotalRequests !== undefined && auditData.performanceTotalRequests !== null) {
+      if (auditData.performanceTotalRequests < 50) {
+        pageSpeedBase = Math.min(4, pageSpeedBase + 0.5);
+      } else if (auditData.performanceTotalRequests > 150) {
+        pageSpeedBase = Math.max(0, pageSpeedBase - 1);
+      }
+
+      const thirdPartyRatio = auditData.performanceThirdPartyRequests / Math.max(1, auditData.performanceTotalRequests);
+      if (thirdPartyRatio > 0.5) {
+        pageSpeedBase = Math.max(0, pageSpeedBase - 0.5);
+      }
+    }
+
+    breakdown.pageSpeed = Math.floor(pageSpeedBase);
+    technicalQualityScore += breakdown.pageSpeed;
 
     // Mobile friendly: 3 points
     breakdown.mobileFriendly = auditData.mobileFriendly ? 3 : 0;
@@ -141,6 +156,19 @@ export class MFAScorer {
       }
     } else {
       breakdown.domainAge = 0;
+    }
+
+    // Accessibility bonus (up to 1 point)
+    if (auditData.accessibilityIssuesCount !== undefined && auditData.accessibilityIssuesCount !== null) {
+      if (auditData.accessibilityIssuesCount === 0) {
+        breakdown.accessibilityBonus = 1;
+        technicalQualityScore += 1;
+      } else if (auditData.accessibilityIssuesCount < 5) {
+        breakdown.accessibilityBonus = 0.5;
+        technicalQualityScore += 0.5;
+      } else {
+        breakdown.accessibilityBonus = 0;
+      }
     }
 
     breakdown.technicalQuality = technicalQualityScore;
@@ -233,6 +261,30 @@ export class MFAScorer {
 
   generateRecommendations(auditData, breakdown, seoData = null, engagementData = null, layoutData = null) {
     const recommendations = [];
+
+    // Performance-based recommendations
+    if (auditData.performanceTotalRequests > 150) {
+      recommendations.push(`Reduce total HTTP requests (current: ${auditData.performanceTotalRequests}) - combine resources and optimize assets`);
+    }
+
+    if (auditData.performanceThirdPartyRequests > 50) {
+      const thirdPartyRatio = ((auditData.performanceThirdPartyRequests / auditData.performanceTotalRequests) * 100).toFixed(0);
+      recommendations.push(`Minimize third-party requests (${thirdPartyRatio}% of total) - review tracking scripts and external dependencies`);
+    }
+
+    if (auditData.performanceTransferSize > 3000000) {
+      const sizeMB = (auditData.performanceTransferSize / 1024 / 1024).toFixed(2);
+      recommendations.push(`Reduce page weight (${sizeMB}MB transferred) - optimize images, minify scripts, enable compression`);
+    }
+
+    // Accessibility recommendations
+    if (auditData.accessibilityIssuesCount > 10) {
+      recommendations.push(`Fix ${auditData.accessibilityIssuesCount} accessibility issues - improves compliance and user experience`);
+    }
+
+    if (auditData.accessibilityMissingAltTags > 5) {
+      recommendations.push(`Add alt text to ${auditData.accessibilityMissingAltTags} images - critical for WCAG compliance and SEO`);
+    }
 
     if (breakdown.contentLength < 15) {
       recommendations.push('Increase content length to at least 300 characters');
