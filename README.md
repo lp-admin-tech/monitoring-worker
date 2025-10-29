@@ -76,6 +76,16 @@ npm run dev
 
 ## API Endpoints
 
+All endpoints require the `Authorization: Bearer <WORKER_SECRET>` header.
+
+### GET /
+
+Service information and available endpoints.
+
+### GET /health
+
+Health check endpoint with system stats.
+
 ### POST /audit
 
 Audit a single website:
@@ -104,11 +114,32 @@ Audit multiple websites:
 
 ### GET /audit-all?secret=your-secret-key
 
-Audit all publishers in the database.
+Audit all active publishers in the database.
 
-### GET /health
+### POST /crawl
 
-Health check endpoint.
+Crawl a single site without saving to database:
+
+```json
+{
+  "domain": "example.com",
+  "publisherId": "uuid"
+}
+```
+
+### POST /crawl-multiple
+
+Crawl multiple sites:
+
+```json
+{
+  "domains": ["example1.com", "example2.com"]
+}
+```
+
+### POST /clear-cache
+
+Clear the crawler cache.
 
 ## Modules
 
