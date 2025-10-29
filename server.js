@@ -188,11 +188,7 @@ app.post('/crawl-multiple', validateWorkerSecret, async (req, res) => {
 });
 
 app.post('/audit', validateWorkerSecret, async (req, res) => {
-  const { publisherId, domain, secret } = req.body;
-
-  if (secret && secret !== process.env.WORKER_SECRET) {
-    return res.status(401).json({ error: 'Invalid secret' });
-  }
+  const { publisherId, domain } = req.body;
 
   if (!domain) {
     return res.status(400).json({ error: 'Domain is required' });
@@ -261,11 +257,7 @@ app.post('/audit', validateWorkerSecret, async (req, res) => {
 });
 
 app.post('/audit-batch', validateWorkerSecret, async (req, res) => {
-  const { publishers, secret } = req.body;
-
-  if (secret && secret !== process.env.WORKER_SECRET) {
-    return res.status(401).json({ error: 'Invalid secret' });
-  }
+  const { publishers } = req.body;
 
   if (!Array.isArray(publishers) || publishers.length === 0) {
     return res.status(400).json({ error: 'Publishers array is required' });
@@ -344,12 +336,6 @@ app.post('/audit-batch', validateWorkerSecret, async (req, res) => {
 });
 
 app.get('/audit-all', validateWorkerSecret, async (req, res) => {
-  const { secret } = req.query;
-
-  if (secret && secret !== process.env.WORKER_SECRET) {
-    return res.status(401).json({ error: 'Invalid secret' });
-  }
-
   console.log(`[AUDIT-ALL] Audit all publishers request received`);
 
   res.setTimeout(REQUEST_TIMEOUT);
