@@ -350,7 +350,7 @@ app.get('/audit-all', validateWorkerSecret, async (req, res) => {
     const { data: publishers, error } = await supabaseClient
       .from('publishers')
       .select('id, domain')
-      .eq('gam_status', 'active');
+      .in('gam_status', ['accepted', 'approved']);
 
     if (error) throw error;
 
