@@ -291,9 +291,24 @@ export class WebsiteCrawler {
         }
       }
 
+      let errorMessage = error.message;
+
+      if (error.message.includes('Timeout')) {
+        errorMessage = `Website is down or not responding. The page failed to load within 60 seconds.`;
+      } else if (error.message.includes('net::ERR_NAME_NOT_RESOLVED')) {
+        errorMessage = `Website is offline. Domain name could not be resolved (DNS failure).`;
+      } else if (error.message.includes('net::ERR_CONNECTION_REFUSED')) {
+        errorMessage = `Website is offline. Connection was refused by the server.`;
+      } else if (error.message.includes('net::ERR_CONNECTION_TIMED_OUT')) {
+        errorMessage = `Website is down. Connection timed out.`;
+      } else if (error.message.includes('SSL') || error.message.includes('ERR_CERT')) {
+        errorMessage = `Website has SSL certificate issues and cannot be accessed securely.`;
+      }
+
       return {
         success: false,
-        error: error.message
+        error: errorMessage,
+        isOffline: true
       };
     }
   }
