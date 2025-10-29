@@ -163,6 +163,22 @@ async function auditWebsite(publisherId, domain) {
     const requestStats = crawlResult.requestStats || {};
     const mobileFriendly = mobileFriendlyResult.isMobileFriendly;
 
+    const performanceInsights = {
+      totalRequests: requestStats?.total || 0,
+      thirdPartyRequests: requestStats?.thirdParty || 0,
+      totalTransferSize: requestStats?.totalSize || 0,
+      scriptRequests: requestStats?.scripts || 0,
+      stylesheetRequests: requestStats?.stylesheets || 0,
+      accessibilityIssues: accessibilityData?.issues.length || 0,
+      missingAltTags: accessibilityData?.issues.filter(i => i.type === 'missing-alt').length || 0,
+      missingLabels: accessibilityData?.issues.filter(i => i.type === 'missing-label').length || 0,
+      networkLatency: 0
+    };
+
+    console.log(`[PERFORMANCE-INSIGHTS] Total requests: ${performanceInsights.totalRequests}, Third-party: ${performanceInsights.thirdPartyRequests}`);
+    console.log(`[PERFORMANCE-INSIGHTS] Transfer size: ${Math.round(performanceInsights.totalTransferSize / 1024)}KB`);
+    console.log(`[PERFORMANCE-INSIGHTS] Accessibility issues: ${performanceInsights.accessibilityIssues}`);
+
     console.log(`[MODULE: MFA-SCORER] Preparing audit data...`);
     const auditData = {
       contentLength: contentData.contentLength,
@@ -222,22 +238,6 @@ async function auditWebsite(publisherId, domain) {
     console.log(`[MODULE: POLICY-COMPLIANCE-CHECKER] Compliance Score: ${policyCompliance.overallScore}/100 (${policyCompliance.complianceLevel})`);
 
     const htmlSnapshot = crawlResult.htmlContent.substring(0, 5000);
-
-    const performanceInsights = {
-      totalRequests: requestStats?.total || 0,
-      thirdPartyRequests: requestStats?.thirdParty || 0,
-      totalTransferSize: requestStats?.totalSize || 0,
-      scriptRequests: requestStats?.scripts || 0,
-      stylesheetRequests: requestStats?.stylesheets || 0,
-      accessibilityIssues: accessibilityData?.issues.length || 0,
-      missingAltTags: accessibilityData?.issues.filter(i => i.type === 'missing-alt').length || 0,
-      missingLabels: accessibilityData?.issues.filter(i => i.type === 'missing-label').length || 0,
-      networkLatency: networkTimings.length > 0 ? networkTimings[0].wait : 0
-    };
-
-    console.log(`[PERFORMANCE-INSIGHTS] Total requests: ${performanceInsights.totalRequests}, Third-party: ${performanceInsights.thirdPartyRequests}`);
-    console.log(`[PERFORMANCE-INSIGHTS] Transfer size: ${Math.round(performanceInsights.totalTransferSize / 1024)}KB`);
-    console.log(`[PERFORMANCE-INSIGHTS] Accessibility issues: ${performanceInsights.accessibilityIssues}`);
 
     const safeInt = (value) => {
       if (typeof value === 'number' && !isNaN(value)) return Math.round(value);
