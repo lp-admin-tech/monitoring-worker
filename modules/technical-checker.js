@@ -203,25 +203,27 @@ export class TechnicalChecker {
 
       page = await context.newPage();
 
-      const url = domain.startsWith('http') ? domain : `https://${domain}`;
+      const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      const httpsUrl = `https://${cleanDomain}`;
 
       let sslValid = false;
       let certInfo = null;
+      let pageLoadedSuccessfully = false;
 
       page.on('response', (response) => {
-        if (response.url() === url) {
-          const securityDetails = response.securityDetails();
-          if (securityDetails) {
-            certInfo = securityDetails;
-          }
+        const securityDetails = response.securityDetails();
+        if (securityDetails && !certInfo) {
+          certInfo = securityDetails;
         }
       });
 
       try {
-        await page.goto(url, {
-          waitUntil: 'commit',
-          timeout: 10000
+        const response = await page.goto(httpsUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000
         });
+
+        pageLoadedSuccessfully = response && response.ok();
 
         if (certInfo) {
           const now = Date.now();
@@ -231,6 +233,9 @@ export class TechnicalChecker {
           sslValid = now >= validFrom && now <= validTo;
 
           console.log(`[SSL-CHECK] Domain: ${domain}, Protocol: ${certInfo.protocol()}, Issuer: ${certInfo.issuer()}, Valid: ${sslValid}`);
+        } else if (pageLoadedSuccessfully && page.url().startsWith('https://')) {
+          console.log(`[SSL-CHECK] Page loaded via HTTPS for ${domain}, assuming valid SSL`);
+          sslValid = true;
         } else {
           console.log(`[SSL-CHECK] No SSL certificate info found for domain: ${domain} (might be HTTP)`);
           sslValid = false;
