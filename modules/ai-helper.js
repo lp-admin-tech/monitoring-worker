@@ -1,15 +1,16 @@
 import crypto from 'crypto';
 
-// --- FIX [1]: Made API version configurable and defaulted to 'v1beta' ---
-// This is the primary fix. Newer models like 'gemini-1.5-flash' and 'gemini-1.5-pro'
-// are available on the 'v1beta' endpoint. Using 'v1' was causing the 404 errors.
-// You can override this by setting the GEMINI_API_VERSION environment variable.
 const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION || 'v1beta';
 const GEMINI_API_BASE = `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}`;
 
+// --- FIX: Corrected model names and added a stable fallback ---
+// The '-latest' suffix was incorrect. These are the valid identifiers.
+// 'gemini-pro' is added as a widely available model to ensure the system
+// has a final option if the 1.5 models are unavailable for any reason.
 const GEMINI_MODELS = [
-  'gemini-1.5-flash-latest', // Updated to use the 'latest' tag for stability
-  'gemini-1.5-pro-latest'
+  'gemini-1.5-flash',
+  'gemini-1.5-pro',
+  'gemini-pro'
 ];
 
 const CACHE_TTL_HOURS = 24;
@@ -112,7 +113,12 @@ Return ONLY valid JSON:
   async callGeminiAPI(prompt, retryCount = 0, modelIndex = 0) {
     if (!this.apiKey) throw new Error('GEMINI_API_KEY not configured');
 
-    const model = GEMINI_MODELS[modelIndex] || GEMINI_MODELS[0];
+    const model = GEMINI_MODELS[modelIndex];
+    // If we've run out of models to try, throw the final error.
+    if (!model) {
+        throw new Error('All configured Gemini models are unavailable.');
+    }
+
     const url = `${GEMINI_API_BASE}/models/${model}:generateContent?key=${this.apiKey}`;
 
     const body = {
@@ -132,8 +138,9 @@ Return ONLY valid JSON:
         body: JSON.stringify(body)
       });
 
-      if (res.status === 404 && modelIndex < GEMINI_MODELS.length - 1) {
-        console.warn(`[AI-HELPER] ⚠ Model ${model} not found, retrying with ${GEMINI_MODELS[modelIndex + 1]}`);
+      // If a model is not found, immediately try the next one in the list.
+      if (res.status === 404) {
+        console.warn(`[AI-HELPER] ⚠ Model ${model} not found, retrying with next available model.`);
         return this.callGeminiAPI(prompt, retryCount, modelIndex + 1);
       }
 
@@ -145,9 +152,6 @@ Return ONLY valid JSON:
       }
 
       if (!res.ok) {
-        // --- FIX [2]: Enhanced Error Parsing & Logging ---
-        // Instead of throwing raw text, we try to parse the JSON error from the API
-        // for cleaner, more informative error messages.
         let errorBody;
         try {
           errorBody = await res.json();
@@ -165,14 +169,10 @@ Return ONLY valid JSON:
     } catch (err) {
       if (retryCount < MAX_RETRIES) {
         const delay = RETRY_DELAYS[retryCount];
-        // --- FIX [3]: Quieter Retry Logging ---
-        // Reduced the verbosity of retry logs to make the console output cleaner.
         console.warn(`[AI-HELPER] ⚠ API call failed, retry ${retryCount + 1}/${MAX_RETRIES} in ${delay}ms. Reason: ${err.message}`);
         await new Promise(r => setTimeout(r, delay));
         return this.callGeminiAPI(prompt, retryCount + 1, modelIndex);
       }
-      // --- FIX [4]: Final Error Logging ---
-      // Log a definitive error message after all retries have failed.
       console.error(`[AI-HELPER] ✗ AI analysis failed for model ${model} after ${MAX_RETRIES} retries.`);
       throw err;
     }
