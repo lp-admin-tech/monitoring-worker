@@ -44,12 +44,20 @@ function initializeCrawler() {
 }
 
 function initializeSupabase() {
-  if (!supabase && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
+  if (!supabase) {
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
+      console.error('[SERVER] ❌ ERROR: Missing required environment variables for Supabase!');
+      console.error('[SERVER] Required: SUPABASE_URL and SUPABASE_SERVICE_KEY');
+      console.error('[SERVER] Current config: URL=' + (process.env.SUPABASE_URL ? '✓' : '✗') + ', SERVICE_KEY=' + (process.env.SUPABASE_SERVICE_KEY ? '✓' : '✗'));
+      console.error('[SERVER] Database persistence DISABLED - audit results will NOT be saved!');
+      return null;
+    }
     console.log('[SERVER] Initializing Supabase client...');
     supabase = createClient(
       process.env.SUPABASE_URL,
       process.env.SUPABASE_SERVICE_KEY
     );
+    console.log('[SERVER] ✓ Supabase client initialized successfully');
   }
   return supabase;
 }
@@ -104,73 +112,89 @@ app.post('/crawl', validateWorkerSecret, async (req, res) => {
     const crawlerInstance = initializeCrawler();
     const result = await crawlerInstance.crawlSite(domain);
 
-    if (result.success && publisherId && supabase) {
-      console.log(`[CRAWL-REQUEST] Saving results to database for publisher ${publisherId}`);
+    let dbSaveSuccess = false;
+    let dbSaveError = null;
 
-      const { error: dbError } = await supabase
-        .from('site_audits')
-        .upsert({
-          publisher_id: publisherId,
-          domain: domain,
-          last_crawled: new Date().toISOString(),
-          is_online: true,
-          seo_score: result.seoAnalysis?.score || 0,
-          security_score: result.securityAnalysis?.score || 0,
-          performance_score: result.performanceAnalysis?.score || 0,
-          accessibility_score: result.accessibilityData?.score || 0,
-          mobile_score: 0,
-          overall_score: result.lighthouseScore?.overall || 0,
-          lighthouse_data: result.lighthouseScore || {},
-          seo_data: result.seoAnalysis || {},
-          security_data: result.securityAnalysis || {},
-          performance_data: result.performanceAnalysis || {},
-          accessibility_data: result.accessibilityData || {},
-          mobile_data: {},
-          technologies: result.technologies || {},
-          screenshot: result.screenshot,
-          performance_total_requests: result.requestStats?.total || 0,
-          performance_third_party_requests: result.requestStats?.thirdParty || 0,
-          performance_transfer_size: result.requestStats?.totalSize || 0,
-          performance_script_requests: result.requestStats?.scripts || 0,
-          accessibility_issues_count: result.accessibilityData?.issueCount || 0,
-          accessibility_missing_alt_tags: result.accessibilityData?.issues?.filter(i => i.type === 'missing-alt').length || 0,
-          content_length: result.contentAnalysis?.contentLength || 0,
-          content_uniqueness: result.contentAnalysis?.contentUniqueness || 0,
-          has_privacy_policy: result.contentAnalysis?.hasPrivacyPolicy || false,
-          has_contact_page: result.contentAnalysis?.hasContactPage || false,
-          total_images: result.imageAnalysis?.totalImages || 0,
-          has_featured_images: result.imageAnalysis?.hasFeaturedImages || false,
-          total_ads: result.adDensityAnalysis?.totalAds || 0,
-          ads_above_fold: result.adDensityAnalysis?.adsAboveFold || 0,
-          ads_in_content: result.adDensityAnalysis?.adsInContent || 0,
-          ads_sidebar: result.adDensityAnalysis?.adsSidebar || 0,
-          sticky_ads_count: result.adDensityAnalysis?.stickyAds || 0,
-          auto_refresh_ads: result.adDensityAnalysis?.autoRefreshAds > 0 || false,
-          ad_density: result.adDensityAnalysis?.adDensity || 0,
-          ad_to_content_ratio: result.adDensityAnalysis?.adToContentRatio || 0,
-          ad_networks_detected: result.adNetworksAnalysis?.networks || [],
-          ad_networks_count: result.adNetworksAnalysis?.count || 0,
-          has_google_ads: result.adNetworksAnalysis?.hasGoogleAds || false,
-          has_multiple_ad_networks: result.adNetworksAnalysis?.hasMultipleNetworks || false,
-          layout_score: result.layoutAnalysis?.score || 0,
-          layout_menu_position: result.layoutAnalysis?.menuPosition || null,
-          layout_content_above_fold: result.layoutAnalysis?.contentAboveFold || false,
-          layout_content_before_ads: result.layoutAnalysis?.contentBeforeAds || false,
-          layout_menu_accessible: result.layoutAnalysis?.menuAccessible || false,
-          layout_overlapping_ads: result.layoutAnalysis?.overlappingAds || false,
-          layout_issues: result.layoutAnalysis?.issues || [],
-          safe_browsing_status: result.safeBrowsingCheck?.isSafe === true ? 'safe' :
-                               result.safeBrowsingCheck?.isSafe === false ? 'unsafe' : 'not_checked',
-          safe_browsing_threats: result.safeBrowsingCheck?.threats || []
-        }, {
-          onConflict: 'publisher_id'
-        });
+    if (result.success && publisherId) {
+      const supabaseClient = initializeSupabase();
 
-      if (dbError) {
-        console.error('[CRAWL-REQUEST] Database error:', dbError);
+      if (!supabaseClient) {
+        console.warn(`[CRAWL-REQUEST] ⚠ Supabase not configured - skipping database save for publisher ${publisherId}`);
+        dbSaveError = 'Supabase client not available. Check SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables.';
       } else {
-        console.log(`[CRAWL-REQUEST] Successfully saved results for publisher ${publisherId}`);
+        console.log(`[CRAWL-REQUEST] Saving results to database for publisher ${publisherId}`);
+
+        const { error: dbError } = await supabaseClient
+          .from('site_audits')
+          .upsert({
+            publisher_id: publisherId,
+            domain: domain,
+            last_crawled: new Date().toISOString(),
+            is_online: true,
+            seo_score: result.seoAnalysis?.score || 0,
+            security_score: result.securityAnalysis?.score || 0,
+            performance_score: result.performanceAnalysis?.score || 0,
+            accessibility_score: result.accessibilityData?.score || 0,
+            mobile_score: 0,
+            overall_score: result.lighthouseScore?.overall || 0,
+            lighthouse_data: result.lighthouseScore || {},
+            seo_data: result.seoAnalysis || {},
+            security_data: result.securityAnalysis || {},
+            performance_data: result.performanceAnalysis || {},
+            accessibility_data: result.accessibilityData || {},
+            mobile_data: {},
+            technologies: result.technologies || {},
+            screenshot: result.screenshot,
+            performance_total_requests: result.requestStats?.total || 0,
+            performance_third_party_requests: result.requestStats?.thirdParty || 0,
+            performance_transfer_size: result.requestStats?.totalSize || 0,
+            performance_script_requests: result.requestStats?.scripts || 0,
+            accessibility_issues_count: result.accessibilityData?.issueCount || 0,
+            accessibility_missing_alt_tags: result.accessibilityData?.issues?.filter(i => i.type === 'missing-alt').length || 0,
+            content_length: result.contentAnalysis?.contentLength || 0,
+            content_uniqueness: result.contentAnalysis?.contentUniqueness || 0,
+            has_privacy_policy: result.contentAnalysis?.hasPrivacyPolicy || false,
+            has_contact_page: result.contentAnalysis?.hasContactPage || false,
+            total_images: result.imageAnalysis?.totalImages || 0,
+            has_featured_images: result.imageAnalysis?.hasFeaturedImages || false,
+            total_ads: result.adDensityAnalysis?.totalAds || 0,
+            ads_above_fold: result.adDensityAnalysis?.adsAboveFold || 0,
+            ads_in_content: result.adDensityAnalysis?.adsInContent || 0,
+            ads_sidebar: result.adDensityAnalysis?.adsSidebar || 0,
+            sticky_ads_count: result.adDensityAnalysis?.stickyAds || 0,
+            auto_refresh_ads: result.adDensityAnalysis?.autoRefreshAds > 0 || false,
+            ad_density: result.adDensityAnalysis?.adDensity || 0,
+            ad_to_content_ratio: result.adDensityAnalysis?.adToContentRatio || 0,
+            ad_networks_detected: result.adNetworksAnalysis?.networks || [],
+            ad_networks_count: result.adNetworksAnalysis?.count || 0,
+            has_google_ads: result.adNetworksAnalysis?.hasGoogleAds || false,
+            has_multiple_ad_networks: result.adNetworksAnalysis?.hasMultipleNetworks || false,
+            layout_score: result.layoutAnalysis?.score || 0,
+            layout_menu_position: result.layoutAnalysis?.menuPosition || null,
+            layout_content_above_fold: result.layoutAnalysis?.contentAboveFold || false,
+            layout_content_before_ads: result.layoutAnalysis?.contentBeforeAds || false,
+            layout_menu_accessible: result.layoutAnalysis?.menuAccessible || false,
+            layout_overlapping_ads: result.layoutAnalysis?.overlappingAds || false,
+            layout_issues: result.layoutAnalysis?.issues || [],
+            safe_browsing_status: result.safeBrowsingCheck?.isSafe === true ? 'safe' :
+                                 result.safeBrowsingCheck?.isSafe === false ? 'unsafe' : 'not_checked',
+            safe_browsing_threats: result.safeBrowsingCheck?.threats || []
+          }, {
+            onConflict: 'publisher_id'
+          });
+
+        if (dbError) {
+          console.error('[CRAWL-REQUEST] ❌ Database error:', dbError.message);
+          dbSaveError = dbError.message;
+        } else {
+          console.log(`[CRAWL-REQUEST] ✓ Successfully saved results for publisher ${publisherId}`);
+          dbSaveSuccess = true;
+        }
       }
+    } else if (result.success && !publisherId) {
+      console.log(`[CRAWL-REQUEST] No publisherId provided - skipping database save`);
+    } else {
+      console.warn(`[CRAWL-REQUEST] Crawl failed - no database save attempted`);
     }
 
     console.log(`[CRAWL-REQUEST] Successfully crawled ${domain}`);
@@ -178,7 +202,11 @@ app.post('/crawl', validateWorkerSecret, async (req, res) => {
       success: true,
       domain,
       publisherId,
-      result
+      result,
+      database: {
+        saved: dbSaveSuccess,
+        error: dbSaveError
+      }
     });
   } catch (error) {
     console.error(`[CRAWL-REQUEST] Error crawling ${domain}:`, error.message);
@@ -237,44 +265,54 @@ app.post('/audit', validateWorkerSecret, async (req, res) => {
     const supabaseClient = initializeSupabase();
     const result = await crawlerInstance.crawlSite(domain);
 
-    if (result.success && publisherId && supabaseClient) {
-      console.log(`[AUDIT] Saving results to database for publisher ${publisherId}`);
+    let dbSaveSuccess = false;
+    let dbSaveError = null;
 
-      const { error: dbError } = await supabaseClient
-        .from('site_audits')
-        .upsert({
-          publisher_id: publisherId,
-          domain: domain,
-          last_crawled: new Date().toISOString(),
-          is_online: true,
-          seo_score: result.seoAnalysis?.score || 0,
-          security_score: result.securityAnalysis?.score || 0,
-          performance_score: result.performanceAnalysis?.score || 0,
-          accessibility_score: result.accessibilityData?.score || 0,
-          mobile_score: 0,
-          overall_score: result.lighthouseScore?.overall || 0,
-          lighthouse_data: result.lighthouseScore || {},
-          seo_data: result.seoAnalysis || {},
-          security_data: result.securityAnalysis || {},
-          performance_data: result.performanceAnalysis || {},
-          accessibility_data: result.accessibilityData || {},
-          mobile_data: {},
-          technologies: result.technologies || {},
-          screenshot: result.screenshot,
-          performance_total_requests: result.requestStats?.total || 0,
-          performance_third_party_requests: result.requestStats?.thirdParty || 0,
-          performance_transfer_size: result.requestStats?.totalSize || 0,
-          performance_script_requests: result.requestStats?.scripts || 0,
-          accessibility_issues_count: result.accessibilityData?.issueCount || 0,
-          accessibility_missing_alt_tags: result.accessibilityData?.issues?.filter(i => i.type === 'missing-alt').length || 0
-        }, {
-          onConflict: 'publisher_id'
-        });
-
-      if (dbError) {
-        console.error('[AUDIT] Database error:', dbError);
+    if (result.success && publisherId) {
+      if (!supabaseClient) {
+        console.warn(`[AUDIT] ⚠ Supabase not configured - skipping database save for publisher ${publisherId}`);
+        dbSaveError = 'Supabase client not available. Check SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables.';
       } else {
-        console.log(`[AUDIT] Successfully saved results for publisher ${publisherId}`);
+        console.log(`[AUDIT] Saving results to database for publisher ${publisherId}`);
+
+        const { error: dbError } = await supabaseClient
+          .from('site_audits')
+          .upsert({
+            publisher_id: publisherId,
+            domain: domain,
+            last_crawled: new Date().toISOString(),
+            is_online: true,
+            seo_score: result.seoAnalysis?.score || 0,
+            security_score: result.securityAnalysis?.score || 0,
+            performance_score: result.performanceAnalysis?.score || 0,
+            accessibility_score: result.accessibilityData?.score || 0,
+            mobile_score: 0,
+            overall_score: result.lighthouseScore?.overall || 0,
+            lighthouse_data: result.lighthouseScore || {},
+            seo_data: result.seoAnalysis || {},
+            security_data: result.securityAnalysis || {},
+            performance_data: result.performanceAnalysis || {},
+            accessibility_data: result.accessibilityData || {},
+            mobile_data: {},
+            technologies: result.technologies || {},
+            screenshot: result.screenshot,
+            performance_total_requests: result.requestStats?.total || 0,
+            performance_third_party_requests: result.requestStats?.thirdParty || 0,
+            performance_transfer_size: result.requestStats?.totalSize || 0,
+            performance_script_requests: result.requestStats?.scripts || 0,
+            accessibility_issues_count: result.accessibilityData?.issueCount || 0,
+            accessibility_missing_alt_tags: result.accessibilityData?.issues?.filter(i => i.type === 'missing-alt').length || 0
+          }, {
+            onConflict: 'publisher_id'
+          });
+
+        if (dbError) {
+          console.error('[AUDIT] ❌ Database error:', dbError.message);
+          dbSaveError = dbError.message;
+        } else {
+          console.log(`[AUDIT] ✓ Successfully saved results for publisher ${publisherId}`);
+          dbSaveSuccess = true;
+        }
       }
     }
 
@@ -283,7 +321,11 @@ app.post('/audit', validateWorkerSecret, async (req, res) => {
       success: true,
       domain,
       publisherId,
-      result
+      result,
+      database: {
+        saved: dbSaveSuccess,
+        error: dbSaveError
+      }
     });
   } catch (error) {
     console.error(`[AUDIT] Error:`, error.message);
@@ -503,12 +545,13 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-initializeSupabase();
+const supabaseClient = initializeSupabase();
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`[SERVER] ✓ Monitoring worker running on http://0.0.0.0:${PORT}`);
   console.log(`[SERVER] Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`[SERVER] Request timeout: ${REQUEST_TIMEOUT}ms`);
+  console.log(`[SERVER] Database persistence: ${supabaseClient ? '✓ ENABLED' : '❌ DISABLED (missing credentials)'}`);
 
   console.log('[SERVER] Pre-warming browser instance...');
   try {
