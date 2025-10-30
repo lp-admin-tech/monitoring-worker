@@ -34,7 +34,7 @@ export class AIHelper {
         .maybeSingle();
 
       if (error) {
-        console.error('Cache lookup error:', error);
+        console.error('[AI-HELPER] ✗ Cache lookup error:', error);
         return null;
       }
 
@@ -44,13 +44,14 @@ export class AIHelper {
           .update({ hit_count: data.hit_count + 1 })
           .eq('cache_key', cacheKey);
 
-        console.log(`✓ Cache hit for key: ${cacheKey.substring(0, 12)}...`);
+        console.log(`[AI-HELPER] ✓ Cache hit for key: ${cacheKey.substring(0, 12)}... (Hits: ${data.hit_count + 1})`);
         return data.ai_response;
       }
 
+      console.log(`[AI-HELPER] Cache miss for key: ${cacheKey.substring(0, 12)}...`);
       return null;
     } catch (err) {
-      console.error('Cache retrieval error:', err);
+      console.error('[AI-HELPER] ✗ Cache retrieval error:', err);
       return null;
     }
   }
@@ -60,6 +61,7 @@ export class AIHelper {
       const expiresAt = new Date();
       expiresAt.setHours(expiresAt.getHours() + CACHE_TTL_HOURS);
 
+      console.log(`[AI-HELPER] Storing cache for type: ${type} (expires in ${CACHE_TTL_HOURS}h)`);
       const { error } = await this.supabase
         .from('ai_analysis_cache')
         .upsert({
@@ -78,12 +80,12 @@ export class AIHelper {
         });
 
       if (error) {
-        console.error('Cache storage error:', error);
+        console.error(`[AI-HELPER] ✗ Cache storage error: ${error}`);
       } else {
-        console.log(`✓ Cached response for key: ${cacheKey.substring(0, 12)}...`);
+        console.log(`[AI-HELPER] ✓ Cached response for key: ${cacheKey.substring(0, 12)}...`);
       }
     } catch (err) {
-      console.error('Cache storage exception:', err);
+      console.error(`[AI-HELPER] ✗ Cache storage exception: ${err}`);
     }
   }
 
@@ -144,7 +146,7 @@ If no problem is found, say "cause": "Healthy and compliant setup" and "suggesti
       if (response.status === 429) {
         if (retryCount < MAX_RETRIES) {
           const delay = RETRY_DELAYS[retryCount];
-          console.warn(`⚠ Rate limited, retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+          console.warn(`[AI-HELPER] ⚠ Rate limited, retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
           await new Promise(resolve => setTimeout(resolve, delay));
           return this.callGeminiAPI(prompt, retryCount + 1);
         }
@@ -163,12 +165,13 @@ If no problem is found, say "cause": "Healthy and compliant setup" and "suggesti
       }
 
       const textContent = data.candidates[0].content.parts[0].text;
+      console.log(`[AI-HELPER] ✓ Gemini API response parsed successfully`);
       return this.parseAIResponse(textContent);
 
     } catch (error) {
       if (retryCount < MAX_RETRIES && error.message.includes('fetch')) {
         const delay = RETRY_DELAYS[retryCount];
-        console.warn(`⚠ Network error, retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+        console.warn(`[AI-HELPER] ⚠ Network error, retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
         await new Promise(resolve => setTimeout(resolve, delay));
         return this.callGeminiAPI(prompt, retryCount + 1);
       }
@@ -208,6 +211,7 @@ If no problem is found, say "cause": "Healthy and compliant setup" and "suggesti
       throw new Error('type and context are required parameters');
     }
 
+    console.log(`[AI-HELPER] Starting analysis for type: ${type}`);
     const htmlHash = this.generateHtmlHash(html);
     const cacheKey = this.generateCacheKey(type, context, metrics, htmlHash);
 
@@ -216,18 +220,21 @@ If no problem is found, say "cause": "Healthy and compliant setup" and "suggesti
       return cached;
     }
 
+    console.log(`[AI-HELPER] Cache miss - calling Gemini API for ${type}`);
     await this.waitForRateLimit();
 
     try {
       const prompt = this.buildPrompt(type, context, metrics, html);
+      console.log(`[AI-HELPER] Calling Gemini API (${prompt.length} chars prompt)`);
       const aiResponse = await this.callGeminiAPI(prompt);
 
+      console.log(`[AI-HELPER] ✓ API response received - Score: ${aiResponse.score}, Cause: ${aiResponse.cause}`);
       await this.setCachedResponse(cacheKey, type, context, metrics, htmlHash, aiResponse);
 
       return aiResponse;
 
     } catch (error) {
-      console.error(`AI analysis error for type "${type}":`, error.message);
+      console.error(`[AI-HELPER] ✗ AI analysis error for type "${type}": ${error.message}`);
 
       return {
         score: 50,

@@ -7,11 +7,16 @@ export class LayoutAnalyzer {
   }
 
   async analyzeLayout(htmlContent) {
+    console.log('[LAYOUT-ANALYZER] Starting layout structure analysis');
     const $ = load(htmlContent);
 
+    console.log('[LAYOUT-ANALYZER] Analyzing ad placement...');
     const adPlacement = this.analyzeAdPlacement($);
+    console.log('[LAYOUT-ANALYZER] Analyzing content visibility...');
     const contentVisibility = this.analyzeContentVisibility($);
+    console.log('[LAYOUT-ANALYZER] Analyzing navigation placement...');
     const navigationPlacement = this.analyzeNavigationPlacement($);
+    console.log('[LAYOUT-ANALYZER] Analyzing mobile friendliness...');
     const mobileFriendliness = this.analyzeMobileFriendliness($);
 
     const score = this.calculateLayoutScore({
@@ -20,6 +25,9 @@ export class LayoutAnalyzer {
       navigationPlacement,
       mobileFriendliness
     });
+
+    console.log(`[LAYOUT-ANALYZER] Ads above fold: ${adPlacement.adsAboveFold}, Overlapping: ${adPlacement.overlapping ? 'yes' : 'no'}`);
+    console.log(`[LAYOUT-ANALYZER] Menu position: ${navigationPlacement.position}, Mobile-friendly: ${mobileFriendliness.isFriendly ? 'yes' : 'no'}`);
 
     const metrics = {
       adsAboveFold: adPlacement.adsAboveFold,
@@ -38,20 +46,25 @@ export class LayoutAnalyzer {
       })
     };
 
+    console.log(`[LAYOUT-ANALYZER] Layout score: ${score}/100, Issues found: ${metrics.issues.length}`);
+
     let aiAnalysis = null;
     if (this.aiHelper) {
       try {
+        console.log('[LAYOUT-ANALYZER] Requesting AI analysis for layout structure');
         aiAnalysis = await this.aiHelper.analyze({
           type: 'layout_structure',
           context: 'Evaluating page layout, ad placement impact on UX, navigation accessibility, and mobile responsiveness',
           metrics,
           html: htmlContent
         });
+        console.log(`[LAYOUT-ANALYZER] ✓ Layout analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
       } catch (error) {
-        console.error('[LAYOUT-ANALYZER] AI analysis error:', error.message);
+        console.error('[LAYOUT-ANALYZER] ✗ AI analysis error:', error.message);
       }
     }
 
+    console.log('[LAYOUT-ANALYZER] ✓ Layout analysis complete');
     return {
       ...metrics,
       aiAnalysis

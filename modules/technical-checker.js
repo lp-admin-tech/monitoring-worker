@@ -7,6 +7,7 @@ export class TechnicalChecker {
     this.aiHelper = supabaseClient && geminiApiKey ? createAIHelper(supabaseClient, geminiApiKey) : null;
   }
   async checkAdsTxt(domain) {
+    console.log(`[TECHNICAL-CHECKER] Checking ads.txt for ${domain}`);
     try {
       const url = domain.startsWith('http')
         ? `${domain}/ads.txt`
@@ -19,20 +20,28 @@ export class TechnicalChecker {
         }
       });
 
-      if (!response.ok) return false;
+      if (!response.ok) {
+        console.log(`[TECHNICAL-CHECKER] ✗ ads.txt not found (${response.status})`);
+        return false;
+      }
 
       const data = await response.text();
-      return data.includes('google.com');
+      const hasGoogle = data.includes('google.com');
+      console.log(`[TECHNICAL-CHECKER] ✓ ads.txt found - Google entry: ${hasGoogle ? 'yes' : 'no'}`);
+      return hasGoogle;
     } catch (error) {
+      console.error(`[TECHNICAL-CHECKER] ✗ ads.txt check error: ${error.message}`);
       return false;
     }
   }
 
   async checkBrokenLinks(domain, links) {
+    console.log(`[TECHNICAL-CHECKER] Checking broken links for ${domain}`);
     const internalLinks = links.filter(link =>
       link.includes(domain) || link.startsWith('/')
     ).slice(0, 20);
 
+    console.log(`[TECHNICAL-CHECKER] Testing ${internalLinks.length} internal links`);
     let brokenCount = 0;
 
     for (const link of internalLinks) {
@@ -51,16 +60,20 @@ export class TechnicalChecker {
 
         if (!response.ok) {
           brokenCount++;
+          console.log(`[TECHNICAL-CHECKER] Link returned ${response.status}: ${url}`);
         }
       } catch (error) {
         brokenCount++;
+        console.log(`[TECHNICAL-CHECKER] Link error: ${url}`);
       }
     }
 
+    console.log(`[TECHNICAL-CHECKER] ✓ Broken links check complete - ${brokenCount} broken`);
     return brokenCount;
   }
 
   async calculatePageSpeedScore(loadTime, metrics) {
+    console.log('[TECHNICAL-CHECKER] Calculating page speed score');
     let score = 100;
 
     if (loadTime > 3000) score -= 20;
@@ -79,20 +92,28 @@ export class TechnicalChecker {
       layoutDuration: metrics?.LayoutDuration || 0
     };
 
+    console.log(`[TECHNICAL-CHECKER] Load time: ${loadTime}ms, Score: ${speedMetrics.score}/100`);
+    if (metrics) {
+      console.log(`[TECHNICAL-CHECKER] Script duration: ${metrics.ScriptDuration}ms, Layout duration: ${metrics.LayoutDuration}ms`);
+    }
+
     let aiAnalysis = null;
     if (this.aiHelper) {
       try {
+        console.log('[TECHNICAL-CHECKER] Requesting AI analysis for page speed');
         aiAnalysis = await this.aiHelper.analyze({
           type: 'page_speed',
           context: 'Analyzing page load performance, script execution time, and layout rendering speed',
           metrics: speedMetrics,
           html: null
         });
+        console.log(`[TECHNICAL-CHECKER] ✓ Page speed analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
       } catch (error) {
-        console.error('[TECHNICAL-CHECKER] AI analysis error:', error.message);
+        console.error('[TECHNICAL-CHECKER] ✗ AI analysis error:', error.message);
       }
     }
 
+    console.log('[TECHNICAL-CHECKER] ✓ Page speed calculation complete');
     return {
       ...speedMetrics,
       aiAnalysis
@@ -100,9 +121,11 @@ export class TechnicalChecker {
   }
 
   async checkDomainAge(domain, browser = null) {
+    console.log(`[TECHNICAL-CHECKER] Checking domain age for ${domain}`);
     try {
       const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
 
+      console.log('[TECHNICAL-CHECKER] Fetching WHOIS data...');
       const whoisData = await this.getWhoisData(cleanDomain);
 
       let domainCreatedDate = null;
@@ -112,9 +135,12 @@ export class TechnicalChecker {
         domainCreatedDate = whoisData.createdDate;
         const ageMs = Date.now() - domainCreatedDate.getTime();
         domainAgeDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+        console.log(`[TECHNICAL-CHECKER] Domain created: ${domainCreatedDate.toISOString().split('T')[0]}, Age: ${domainAgeDays} days`);
       }
 
+      console.log('[TECHNICAL-CHECKER] Checking SSL certificate...');
       const sslValid = await this.checkSSL(cleanDomain, browser);
+      console.log(`[TECHNICAL-CHECKER] SSL valid: ${sslValid ? 'yes' : 'no'}`);
 
       const domainAuthorityScore = this.calculateDomainAuthority(domainAgeDays, sslValid);
 
@@ -125,26 +151,31 @@ export class TechnicalChecker {
         domainAuthorityScore
       };
 
+      console.log(`[TECHNICAL-CHECKER] Domain authority score: ${domainAuthorityScore}/100`);
+
       let aiAnalysis = null;
       if (this.aiHelper) {
         try {
+          console.log('[TECHNICAL-CHECKER] Requesting AI analysis for domain authority');
           aiAnalysis = await this.aiHelper.analyze({
             type: 'domain_authority',
             context: 'Evaluating domain age, SSL certificate validity, and overall domain authority score',
             metrics,
             html: null
           });
+          console.log(`[TECHNICAL-CHECKER] ✓ Domain authority analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
         } catch (error) {
-          console.error('[TECHNICAL-CHECKER] AI analysis error:', error.message);
+          console.error('[TECHNICAL-CHECKER] ✗ AI analysis error:', error.message);
         }
       }
 
+      console.log('[TECHNICAL-CHECKER] ✓ Domain age check complete');
       return {
         ...metrics,
         aiAnalysis
       };
     } catch (error) {
-      console.error('Domain age check error:', error.message);
+      console.error(`[TECHNICAL-CHECKER] ✗ Domain age check error: ${error.message}`);
       return {
         domainCreatedDate: null,
         domainAgeDays: null,

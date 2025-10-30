@@ -13,20 +13,25 @@ export class ContentAnalyzer {
   }
 
   async analyzeContent(htmlContent, links) {
+    console.log('[CONTENT-ANALYZER] Starting content analysis');
     const $ = load(htmlContent);
 
     const textContent = $('body').text().trim();
     const contentLength = textContent.length;
+    console.log(`[CONTENT-ANALYZER] Extracted text content: ${contentLength} characters`);
 
     const contentUniqueness = this.calculateUniqueness(textContent);
+    console.log(`[CONTENT-ANALYZER] Content uniqueness: ${contentUniqueness.toFixed(2)}%`);
 
     const hasPrivacyPolicy = links.some(link =>
       /privacy|policy/i.test(link)
     ) || $('a:contains("Privacy"), a:contains("privacy")').length > 0;
+    console.log(`[CONTENT-ANALYZER] Privacy policy: ${hasPrivacyPolicy ? 'found' : 'not found'}`);
 
     const hasContactPage = links.some(link =>
       /contact/i.test(link)
     ) || $('a:contains("Contact"), a:contains("contact")').length > 0;
+    console.log(`[CONTENT-ANALYZER] Contact page: ${hasContactPage ? 'found' : 'not found'}`);
 
     const metrics = {
       contentLength,
@@ -38,17 +43,20 @@ export class ContentAnalyzer {
     let aiAnalysis = null;
     if (this.aiHelper) {
       try {
+        console.log('[CONTENT-ANALYZER] Requesting AI analysis for content quality');
         aiAnalysis = await this.aiHelper.analyze({
           type: 'content_quality',
           context: 'Assessing overall content quality, uniqueness, and required page presence',
           metrics,
           html: htmlContent
         });
+        console.log(`[CONTENT-ANALYZER] ✓ AI analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
       } catch (error) {
-        console.error('[CONTENT-ANALYZER] AI analysis error:', error.message);
+        console.error('[CONTENT-ANALYZER] ✗ AI analysis error:', error.message);
       }
     }
 
+    console.log('[CONTENT-ANALYZER] ✓ Content analysis complete');
     return {
       ...metrics,
       aiAnalysis
@@ -65,10 +73,12 @@ export class ContentAnalyzer {
   }
 
   async analyzeImages(htmlContent) {
+    console.log('[CONTENT-ANALYZER] Starting image analysis');
     const $ = load(htmlContent);
 
     const allImages = $('img');
     const totalImages = allImages.length;
+    console.log(`[CONTENT-ANALYZER] Found ${totalImages} images on page`);
 
     let imagesWithAlt = 0;
     let hasFeaturedImages = false;
@@ -98,8 +108,13 @@ export class ContentAnalyzer {
       }
     });
 
+    console.log(`[CONTENT-ANALYZER] Images with alt text: ${imagesWithAlt}/${totalImages}`);
+    console.log(`[CONTENT-ANALYZER] Featured images: ${hasFeaturedImages ? 'yes' : 'no'}`);
+    console.log(`[CONTENT-ANALYZER] Optimized images: ${optimizedImages ? 'yes' : 'no'}`);
+
     const videos = $('video, iframe[src*="youtube"], iframe[src*="vimeo"], iframe[src*="dailymotion"]');
     const videosCount = videos.length;
+    console.log(`[CONTENT-ANALYZER] Video embeds found: ${videosCount}`);
 
     const metrics = {
       totalImages,
@@ -112,17 +127,20 @@ export class ContentAnalyzer {
     let aiAnalysis = null;
     if (this.aiHelper) {
       try {
+        console.log('[CONTENT-ANALYZER] Requesting AI analysis for images/media');
         aiAnalysis = await this.aiHelper.analyze({
           type: 'images_media',
           context: 'Evaluating image optimization, accessibility (alt tags), and media usage',
           metrics,
           html: htmlContent
         });
+        console.log(`[CONTENT-ANALYZER] ✓ Image analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
       } catch (error) {
-        console.error('[CONTENT-ANALYZER] AI analysis error:', error.message);
+        console.error('[CONTENT-ANALYZER] ✗ Image AI analysis error:', error.message);
       }
     }
 
+    console.log('[CONTENT-ANALYZER] ✓ Image analysis complete');
     return {
       ...metrics,
       aiAnalysis
@@ -130,6 +148,7 @@ export class ContentAnalyzer {
   }
 
   async analyzePublishingMetadata(htmlContent, links) {
+    console.log('[CONTENT-ANALYZER] Starting publishing metadata analysis');
     const $ = load(htmlContent);
 
     let hasPublishDates = false;
@@ -228,6 +247,15 @@ export class ContentAnalyzer {
       }
     }
 
+    console.log(`[CONTENT-ANALYZER] Publishing dates found: ${hasPublishDates ? 'yes' : 'no'}`);
+    console.log(`[CONTENT-ANALYZER] Author info found: ${hasAuthorInfo ? 'yes' : 'no'}`);
+    console.log(`[CONTENT-ANALYZER] Total posts found: ${totalPostsFound}`);
+    if (latestPostDate) {
+      const daysOld = Math.floor((Date.now() - latestPostDate.getTime()) / (1000 * 60 * 60 * 24));
+      console.log(`[CONTENT-ANALYZER] Latest post: ${daysOld} days old`);
+    }
+    console.log(`[CONTENT-ANALYZER] Content freshness score: ${contentFreshnessScore}/100`);
+
     const metrics = {
       hasPublishDates,
       hasAuthorInfo,
@@ -240,17 +268,20 @@ export class ContentAnalyzer {
     let aiAnalysis = null;
     if (this.aiHelper) {
       try {
+        console.log('[CONTENT-ANALYZER] Requesting AI analysis for publishing metadata');
         aiAnalysis = await this.aiHelper.analyze({
           type: 'publishing_metadata',
           context: 'Analyzing content freshness, publishing frequency, and author attribution',
           metrics,
           html: htmlContent
         });
+        console.log(`[CONTENT-ANALYZER] ✓ Publishing analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
       } catch (error) {
-        console.error('[CONTENT-ANALYZER] AI analysis error:', error.message);
+        console.error('[CONTENT-ANALYZER] ✗ Publishing AI analysis error:', error.message);
       }
     }
 
+    console.log('[CONTENT-ANALYZER] ✓ Publishing metadata analysis complete');
     return {
       ...metrics,
       aiAnalysis
@@ -288,8 +319,9 @@ export class ContentAnalyzer {
   }
 
   async checkSafeBrowsing(url) {
+    console.log(`[CONTENT-ANALYZER] Starting Safe Browsing check for ${url}`);
     if (!this.safeBrowsingApiKey) {
-      console.warn('Google Safe Browsing API key not configured, skipping check');
+      console.warn('[CONTENT-ANALYZER] ⚠ Google Safe Browsing API key not configured, skipping check');
       return {
         isSafe: true,
         threats: [],
@@ -299,6 +331,7 @@ export class ContentAnalyzer {
 
     try {
       const normalizedUrl = url.startsWith('http') ? url : `https://${url}`;
+      console.log('[CONTENT-ANALYZER] Querying Google Safe Browsing API...');
 
       const requestBody = {
         client: {
@@ -330,7 +363,7 @@ export class ContentAnalyzer {
       });
 
       if (!response.ok) {
-        console.error('Safe Browsing API error:', response.status, response.statusText);
+        console.error(`[CONTENT-ANALYZER] ✗ Safe Browsing API error: ${response.status} ${response.statusText}`);
         return {
           isSafe: true,
           threats: [],
@@ -341,6 +374,7 @@ export class ContentAnalyzer {
       const data = await response.json();
 
       if (data.matches && data.matches.length > 0) {
+        console.log(`[CONTENT-ANALYZER] ✗ Threats detected: ${data.matches.length} match(es)`);
         const threats = data.matches.map(match => ({
           threatType: match.threatType,
           platformType: match.platformType,
@@ -348,20 +382,23 @@ export class ContentAnalyzer {
           description: this.getThreatDescription(match.threatType)
         }));
 
+        const riskLevel = this.calculateRiskLevel(threats);
+        console.log(`[CONTENT-ANALYZER] Risk level: ${riskLevel}`);
         return {
           isSafe: false,
           threats,
-          riskLevel: this.calculateRiskLevel(threats)
+          riskLevel
         };
       }
 
+      console.log('[CONTENT-ANALYZER] ✓ Site is safe - no threats detected');
       return {
         isSafe: true,
         threats: []
       };
 
     } catch (error) {
-      console.error('Safe Browsing check error:', error.message);
+      console.error(`[CONTENT-ANALYZER] ✗ Safe Browsing check error: ${error.message}`);
       return {
         isSafe: true,
         threats: [],

@@ -9,6 +9,7 @@ export class AdAnalyzer {
   }
 
   async analyzeAdDensity(htmlContent) {
+    console.log('[AD-ANALYZER] Starting ad density analysis');
     const $ = load(htmlContent);
 
     const adSelectors = [
@@ -38,6 +39,7 @@ export class AdAnalyzer {
       '[data-google-query-id]',
       'ins.adsbygoogle'
     ];
+    console.log(`[AD-ANALYZER] Checking ${adSelectors.length} ad selector patterns`);
 
     const sidebarSelectors = [
       'aside', '.sidebar', '[class*="sidebar"]',
@@ -119,6 +121,11 @@ export class AdAnalyzer {
     const contentPixels = estimatedBodyHeight * viewportWidth;
     const adToContentRatio = contentPixels > 0 ? totalAdPixels / contentPixels : 0;
 
+    console.log(`[AD-ANALYZER] Found ${totalAds} ad placements`);
+    console.log(`[AD-ANALYZER] Ads above fold: ${adsAboveFold}, In content: ${adsInContent}, Sidebar: ${adsSidebar}`);
+    console.log(`[AD-ANALYZER] Sticky ads: ${stickyAds}, Auto-refresh ads: ${autoRefreshAds}`);
+    console.log(`[AD-ANALYZER] Ad density: ${adDensity.toFixed(4)}, Ad-to-content ratio: ${(adToContentRatio * 100).toFixed(2)}%`);
+
     const metrics = {
       adDensity,
       totalAds,
@@ -133,17 +140,20 @@ export class AdAnalyzer {
     let aiAnalysis = null;
     if (this.aiHelper) {
       try {
+        console.log('[AD-ANALYZER] Requesting AI analysis for ad density');
         aiAnalysis = await this.aiHelper.analyze({
           type: 'ad_density',
           context: 'Analyzing ad placement, density, and user experience impact on the webpage',
           metrics,
           html: htmlContent
         });
+        console.log(`[AD-ANALYZER] ✓ Ad density analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
       } catch (error) {
-        console.error('[AD-ANALYZER] AI analysis error:', error.message);
+        console.error('[AD-ANALYZER] ✗ AI analysis error:', error.message);
       }
     }
 
+    console.log('[AD-ANALYZER] ✓ Ad density analysis complete');
     return {
       ...metrics,
       aiAnalysis
@@ -302,6 +312,7 @@ export class AdAnalyzer {
   }
 
   async detectAdNetworks(htmlContent) {
+    console.log('[AD-ANALYZER] Starting ad network detection');
     const $ = load(htmlContent);
     const detectedNetworks = [];
 
@@ -379,6 +390,9 @@ export class AdAnalyzer {
       }
     });
 
+    console.log(`[AD-ANALYZER] Detected ad networks: ${detectedNetworks.join(', ') || 'none'}`);
+    console.log(`[AD-ANALYZER] Total networks detected: ${detectedNetworks.length}`);
+
     const metrics = {
       networks: detectedNetworks,
       count: detectedNetworks.length,
@@ -387,20 +401,26 @@ export class AdAnalyzer {
       hasMultipleNetworks: detectedNetworks.length > 1
     };
 
+    console.log(`[AD-ANALYZER] Google Ads detected: ${metrics.hasGoogleAds ? 'yes' : 'no'}`);
+    console.log(`[AD-ANALYZER] Multiple networks: ${metrics.hasMultipleNetworks ? 'yes' : 'no'}`);
+
     let aiAnalysis = null;
     if (this.aiHelper) {
       try {
+        console.log('[AD-ANALYZER] Requesting AI analysis for ad networks');
         aiAnalysis = await this.aiHelper.analyze({
           type: 'ad_networks',
           context: 'Evaluating the ad network setup, diversification, and potential conflicts',
           metrics,
           html: htmlContent
         });
+        console.log(`[AD-ANALYZER] ✓ Ad network analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
       } catch (error) {
-        console.error('[AD-ANALYZER] AI analysis error:', error.message);
+        console.error('[AD-ANALYZER] ✗ AI analysis error:', error.message);
       }
     }
 
+    console.log('[AD-ANALYZER] ✓ Ad network detection complete');
     return {
       ...metrics,
       aiAnalysis

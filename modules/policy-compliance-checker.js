@@ -12,23 +12,47 @@ export class PolicyComplianceChecker {
   }
 
   async checkFullCompliance(domain, htmlContent, links, auditData) {
+    console.log(`[POLICY-CHECKER] Starting full compliance check for ${domain}`);
     const $ = load(htmlContent);
 
+    console.log('[POLICY-CHECKER] 1/9 Checking user consent requirements...');
+    const userConsent = this.checkUserConsent($, htmlContent);
+    console.log('[POLICY-CHECKER] 2/9 Checking cookie compliance...');
+    const cookieCompliance = this.checkCookieCompliance($, htmlContent);
+    console.log('[POLICY-CHECKER] 3/9 Checking ads.txt compliance...');
+    const adsTxt = this.checkAdsTxtCompliance(auditData.adsTxtValid, domain);
+    console.log('[POLICY-CHECKER] 4/9 Checking content policy...');
+    const contentPolicy = await this.checkContentPolicy($, htmlContent, domain);
+    console.log('[POLICY-CHECKER] 5/9 Checking ad placement policies...');
+    const adPlacement = this.checkAdPlacementPolicies($, auditData);
+    console.log('[POLICY-CHECKER] 6/9 Checking technical compliance...');
+    const technicalCompliance = this.checkTechnicalCompliance($, auditData);
+    console.log('[POLICY-CHECKER] 7/9 Checking invalid traffic risks...');
+    const invalidTraffic = this.checkInvalidTrafficRisks($, auditData);
+    console.log('[POLICY-CHECKER] 8/9 Checking transparency requirements...');
+    const transparency = this.checkTransparencyRequirements($, links);
+    console.log('[POLICY-CHECKER] 9/9 Checking data handling...');
+    const dataHandling = this.checkDataHandling($, htmlContent);
+
     const checks = {
-      userConsent: this.checkUserConsent($, htmlContent),
-      cookieCompliance: this.checkCookieCompliance($, htmlContent),
-      adsTxt: this.checkAdsTxtCompliance(auditData.adsTxtValid, domain),
-      contentPolicy: await this.checkContentPolicy($, htmlContent, domain),
-      adPlacement: this.checkAdPlacementPolicies($, auditData),
-      technicalCompliance: this.checkTechnicalCompliance($, auditData),
-      invalidTraffic: this.checkInvalidTrafficRisks($, auditData),
-      transparency: this.checkTransparencyRequirements($, links),
-      dataHandling: this.checkDataHandling($, htmlContent)
+      userConsent,
+      cookieCompliance,
+      adsTxt,
+      contentPolicy,
+      adPlacement,
+      technicalCompliance,
+      invalidTraffic,
+      transparency,
+      dataHandling
     };
 
     const overallScore = this.calculateComplianceScore(checks);
     const criticalIssues = this.identifyCriticalIssues(checks);
     const recommendations = this.generateComplianceRecommendations(checks);
+
+    console.log(`[POLICY-CHECKER] Compliance score: ${overallScore}/100`);
+    console.log(`[POLICY-CHECKER] Critical issues found: ${criticalIssues.length}`);
+    console.log(`[POLICY-CHECKER] Recommendations: ${recommendations.length}`);
 
     const metrics = {
       overallScore,
@@ -38,20 +62,25 @@ export class PolicyComplianceChecker {
       complianceLevel: this.getComplianceLevel(overallScore, criticalIssues)
     };
 
+    console.log(`[POLICY-CHECKER] Compliance level: ${metrics.complianceLevel}`);
+
     let aiAnalysis = null;
     if (this.aiHelper) {
       try {
+        console.log('[POLICY-CHECKER] Requesting AI analysis for policy compliance');
         aiAnalysis = await this.aiHelper.analyze({
           type: 'policy_compliance',
           context: 'Comprehensive compliance audit covering GDPR, CCPA, ad policies, content guidelines, and technical requirements',
           metrics,
           html: htmlContent
         });
+        console.log(`[POLICY-CHECKER] ✓ Compliance analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
       } catch (error) {
-        console.error('[POLICY-CHECKER] AI analysis error:', error.message);
+        console.error('[POLICY-CHECKER] ✗ AI analysis error:', error.message);
       }
     }
 
+    console.log('[POLICY-CHECKER] ✓ Full compliance check complete');
     return {
       ...metrics,
       aiAnalysis

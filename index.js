@@ -781,7 +781,13 @@ export class AdvancedWebsiteCrawler {
           })
         ]);
 
-        console.log('[ANALYSIS-START] Running comprehensive analysis suite...');
+        console.log('[ANALYSIS-START] Running comprehensive analysis suite with 13 modules...');
+        console.log('[ANALYSIS-START] Invoking modules (parallel execution):');
+        console.log('[ANALYSIS-START]   - Core modules: SEO, Security, Tech Stack, Performance, Links, Accessibility');
+        console.log('[ANALYSIS-START]   - Content modules: Content Quality, Images, Publishing Metadata, Safe Browsing');
+        console.log('[ANALYSIS-START]   - Ad modules: Ad Density, Ad Networks');
+        console.log('[ANALYSIS-START]   - Layout module: Layout Structure');
+
         const [seoAnalysis, securityAnalysis, technologies, performanceAnalysis, linkAnalysis, accessibilityData, contentAnalysis, imageAnalysis, publishingMetadata, adDensityAnalysis, adNetworksAnalysis, layoutAnalysis, safeBrowsingCheck] =
           await Promise.all([
             this.analyzeSEO(page, htmlContent, domain),
@@ -799,7 +805,7 @@ export class AdvancedWebsiteCrawler {
             this.contentAnalyzer.checkSafeBrowsing(domain)
           ]);
 
-        console.log('[ANALYSIS-COMPLETE] All analyses finished');
+        console.log('[ANALYSIS-COMPLETE] ✓ All 13 modules analysis finished successfully');
 
         const lighthouseScore = await this.generateLighthouseScore(
           seoAnalysis?.score || 0,

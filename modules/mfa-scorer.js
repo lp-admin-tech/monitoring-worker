@@ -14,6 +14,7 @@ export class MFAScorer {
    * - SEO & Engagement: 10 points
    */
   async calculateWebsiteQualityScore(auditData, seoData = null, engagementData = null, layoutData = null) {
+    console.log('[MFA-SCORER] Starting website quality score calculation');
     let score = 0;
     const breakdown = {
       contentQuality: 0,
@@ -250,6 +251,12 @@ export class MFAScorer {
     breakdown.pageSpeed = Math.floor((auditData.pageSpeedScore / 100) * 5);
     // Cap score at 60 (max for website quality component)
     score = Math.max(0, Math.min(60, score));
+
+    console.log(`[MFA-SCORER] Content quality: ${breakdown.contentQuality}/20`);
+    console.log(`[MFA-SCORER] Ad compliance: ${breakdown.adCompliance}/15`);
+    console.log(`[MFA-SCORER] Technical quality: ${breakdown.technicalQuality}/15`);
+    console.log(`[MFA-SCORER] SEO & engagement: ${breakdown.seoEngagement}/10`);
+    console.log(`[MFA-SCORER] Final website quality score: ${score}/60`);
 
     const metrics = {
       websiteQualityScore: score,
