@@ -133,7 +133,35 @@ app.post('/crawl', validateWorkerSecret, async (req, res) => {
           performance_transfer_size: result.requestStats?.totalSize || 0,
           performance_script_requests: result.requestStats?.scripts || 0,
           accessibility_issues_count: result.accessibilityData?.issueCount || 0,
-          accessibility_missing_alt_tags: result.accessibilityData?.issues?.filter(i => i.type === 'missing-alt').length || 0
+          accessibility_missing_alt_tags: result.accessibilityData?.issues?.filter(i => i.type === 'missing-alt').length || 0,
+          content_length: result.contentAnalysis?.contentLength || 0,
+          content_uniqueness: result.contentAnalysis?.contentUniqueness || 0,
+          has_privacy_policy: result.contentAnalysis?.hasPrivacyPolicy || false,
+          has_contact_page: result.contentAnalysis?.hasContactPage || false,
+          total_images: result.imageAnalysis?.totalImages || 0,
+          has_featured_images: result.imageAnalysis?.hasFeaturedImages || false,
+          total_ads: result.adDensityAnalysis?.totalAds || 0,
+          ads_above_fold: result.adDensityAnalysis?.adsAboveFold || 0,
+          ads_in_content: result.adDensityAnalysis?.adsInContent || 0,
+          ads_sidebar: result.adDensityAnalysis?.adsSidebar || 0,
+          sticky_ads_count: result.adDensityAnalysis?.stickyAds || 0,
+          auto_refresh_ads: result.adDensityAnalysis?.autoRefreshAds > 0 || false,
+          ad_density: result.adDensityAnalysis?.adDensity || 0,
+          ad_to_content_ratio: result.adDensityAnalysis?.adToContentRatio || 0,
+          ad_networks_detected: result.adNetworksAnalysis?.networks || [],
+          ad_networks_count: result.adNetworksAnalysis?.count || 0,
+          has_google_ads: result.adNetworksAnalysis?.hasGoogleAds || false,
+          has_multiple_ad_networks: result.adNetworksAnalysis?.hasMultipleNetworks || false,
+          layout_score: result.layoutAnalysis?.score || 0,
+          layout_menu_position: result.layoutAnalysis?.menuPosition || null,
+          layout_content_above_fold: result.layoutAnalysis?.contentAboveFold || false,
+          layout_content_before_ads: result.layoutAnalysis?.contentBeforeAds || false,
+          layout_menu_accessible: result.layoutAnalysis?.menuAccessible || false,
+          layout_overlapping_ads: result.layoutAnalysis?.overlappingAds || false,
+          layout_issues: result.layoutAnalysis?.issues || [],
+          safe_browsing_status: result.safeBrowsingCheck?.isSafe === true ? 'safe' :
+                               result.safeBrowsingCheck?.isSafe === false ? 'unsafe' : 'not_checked',
+          safe_browsing_threats: result.safeBrowsingCheck?.threats || []
         }, {
           onConflict: 'publisher_id'
         });

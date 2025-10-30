@@ -782,14 +782,21 @@ export class AdvancedWebsiteCrawler {
         ]);
 
         console.log('[ANALYSIS-START] Running comprehensive analysis suite...');
-        const [seoAnalysis, securityAnalysis, technologies, performanceAnalysis, linkAnalysis, accessibilityData] =
+        const [seoAnalysis, securityAnalysis, technologies, performanceAnalysis, linkAnalysis, accessibilityData, contentAnalysis, imageAnalysis, publishingMetadata, adDensityAnalysis, adNetworksAnalysis, layoutAnalysis, safeBrowsingCheck] =
           await Promise.all([
             this.analyzeSEO(page, htmlContent, domain),
             this.analyzeSecurityHeaders(page, domain),
             this.detectTechnologies(page, htmlContent),
             this.analyzePerformance(page, domain),
             this.analyzeLinkQuality(page, domain),
-            this.checkAccessibilityInline(page)
+            this.checkAccessibilityInline(page),
+            this.contentAnalyzer.analyzeContent(htmlContent, pageData.links),
+            this.contentAnalyzer.analyzeImages(htmlContent),
+            this.contentAnalyzer.analyzePublishingMetadata(htmlContent, pageData.links),
+            this.adAnalyzer.analyzeAdDensity(htmlContent),
+            this.adAnalyzer.detectAdNetworks(htmlContent),
+            this.layoutAnalyzer.analyzeLayout(htmlContent),
+            this.contentAnalyzer.checkSafeBrowsing(domain)
           ]);
 
         console.log('[ANALYSIS-COMPLETE] All analyses finished');
@@ -825,6 +832,13 @@ export class AdvancedWebsiteCrawler {
           performanceAnalysis,
           linkAnalysis,
           accessibilityData,
+          contentAnalysis,
+          imageAnalysis,
+          publishingMetadata,
+          adDensityAnalysis,
+          adNetworksAnalysis,
+          layoutAnalysis,
+          safeBrowsingCheck,
           lighthouseScore
         };
 
