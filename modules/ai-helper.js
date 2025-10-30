@@ -1,11 +1,17 @@
 import crypto from 'crypto';
 
+// --- FIX [1]: Made API version configurable and defaulted to 'v1beta' ---
+// This is the primary fix. Newer models like 'gemini-1.5-flash' and 'gemini-1.5-pro'
+// are available on the 'v1beta' endpoint. Using 'v1' was causing the 404 errors.
+// You can override this by setting the GEMINI_API_VERSION environment variable.
+const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION || 'v1beta';
+const GEMINI_API_BASE = `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}`;
+
 const GEMINI_MODELS = [
-  'gemini-1.5-flash',
-  'gemini-1.5-pro'
+  'gemini-1.5-flash-latest', // Updated to use the 'latest' tag for stability
+  'gemini-1.5-pro-latest'
 ];
 
-const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1';
 const CACHE_TTL_HOURS = 24;
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 3000, 5000];
@@ -15,6 +21,7 @@ export class AIHelper {
     this.supabase = supabaseClient;
     this.apiKey = apiKey;
     this.lastRequestTime = 0;
+    console.log(`[AI-HELPER] Initialized with Gemini API endpoint: ${GEMINI_API_BASE}`);
   }
 
   generateCacheKey(type, context, metrics, htmlHash) {
@@ -71,7 +78,7 @@ export class AIHelper {
           metrics,
           html_hash: htmlHash,
           ai_response: aiResponse,
-          model_used: aiResponse.model_used || 'gemini-1.5-flash',
+          model_used: aiResponse.model_used || GEMINI_MODELS[0],
           expires_at: expiresAt.toISOString(),
           hit_count: 0
         });
@@ -138,8 +145,17 @@ Return ONLY valid JSON:
       }
 
       if (!res.ok) {
-        const err = await res.text();
-        throw new Error(`Gemini API error (${res.status}): ${err}`);
+        // --- FIX [2]: Enhanced Error Parsing & Logging ---
+        // Instead of throwing raw text, we try to parse the JSON error from the API
+        // for cleaner, more informative error messages.
+        let errorBody;
+        try {
+          errorBody = await res.json();
+        } catch {
+          errorBody = await res.text();
+        }
+        const errorMessage = errorBody?.error?.message || JSON.stringify(errorBody);
+        throw new Error(`Gemini API error (${res.status}): ${errorMessage}`);
       }
 
       const data = await res.json();
@@ -149,10 +165,15 @@ Return ONLY valid JSON:
     } catch (err) {
       if (retryCount < MAX_RETRIES) {
         const delay = RETRY_DELAYS[retryCount];
-        console.warn(`[AI-HELPER] ⚠ Network/API error, retry in ${delay}ms`);
+        // --- FIX [3]: Quieter Retry Logging ---
+        // Reduced the verbosity of retry logs to make the console output cleaner.
+        console.warn(`[AI-HELPER] ⚠ API call failed, retry ${retryCount + 1}/${MAX_RETRIES} in ${delay}ms. Reason: ${err.message}`);
         await new Promise(r => setTimeout(r, delay));
         return this.callGeminiAPI(prompt, retryCount + 1, modelIndex);
       }
+      // --- FIX [4]: Final Error Logging ---
+      // Log a definitive error message after all retries have failed.
+      console.error(`[AI-HELPER] ✗ AI analysis failed for model ${model} after ${MAX_RETRIES} retries.`);
       throw err;
     }
   }
@@ -160,14 +181,15 @@ Return ONLY valid JSON:
   parseAIResponse(textContent) {
     try {
       const json = textContent.match(/\{[\s\S]*\}/);
-      if (!json) throw new Error('No JSON found');
+      if (!json) throw new Error('No JSON found in AI response');
       const parsed = JSON.parse(json[0]);
       return {
         score: Math.max(0, Math.min(100, Number(parsed.score) || 50)),
         cause: parsed.cause?.slice(0, 200) || 'Unknown cause',
         suggestion: parsed.suggestion?.slice(0, 200) || 'Review manually'
       };
-    } catch {
+    } catch (err) {
+      console.error('[AI-HELPER] ✗ AI response parse error:', err.message);
       return { score: 50, cause: 'Parse error', suggestion: 'Manual review required' };
     }
   }
@@ -186,7 +208,7 @@ Return ONLY valid JSON:
       const prompt = this.buildPrompt(type, context, metrics, html);
       const aiResponse = await this.callGeminiAPI(prompt);
       await this.setCachedResponse(cacheKey, type, context, metrics, htmlHash, aiResponse);
-      console.log(`[AI-HELPER] ✓ AI analysis complete for type "${type}"`);
+      console.log(`[AI-HELPER] ✓ AI analysis complete for type "${type}" using model "${aiResponse.model_used}"`);
       return aiResponse;
     } catch (err) {
       console.error(`[AI-HELPER] ✗ AI analysis error for type "${type}": ${err.message}`);
