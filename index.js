@@ -1,6 +1,13 @@
 import { chromium } from 'playwright';
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
+import { ContentAnalyzer } from './modules/content-analyzer.js';
+import { AdAnalyzer } from './modules/ad-analyzer.js';
+import { SEOAnalyzer } from './modules/seo-analyzer.js';
+import { TechnicalChecker } from './modules/technical-checker.js';
+import { LayoutAnalyzer } from './modules/layout-analyzer.js';
+import { PolicyComplianceChecker } from './modules/policy-compliance-checker.js';
+import { MFAScorer } from './modules/mfa-scorer.js';
 
 const USER_AGENTS = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
@@ -39,6 +46,27 @@ export class AdvancedWebsiteCrawler {
     } else {
       console.warn('[CRAWLER-INIT] ⚠ Supabase credentials not found');
     }
+
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    if (geminiApiKey && geminiApiKey !== 'your-gemini-api-key-here') {
+      console.log('[CRAWLER-INIT] ✓ Gemini API key found - AI analysis enabled');
+      this.contentAnalyzer = new ContentAnalyzer(this.supabase, geminiApiKey);
+      this.adAnalyzer = new AdAnalyzer(this.supabase, geminiApiKey);
+      this.seoAnalyzer = new SEOAnalyzer(this.supabase, geminiApiKey);
+      this.technicalChecker = new TechnicalChecker(this.supabase, geminiApiKey);
+      this.layoutAnalyzer = new LayoutAnalyzer(this.supabase, geminiApiKey);
+      this.policyChecker = new PolicyComplianceChecker(this.supabase, geminiApiKey);
+      this.mfaScorer = new MFAScorer(this.supabase, geminiApiKey);
+    } else {
+      console.warn('[CRAWLER-INIT] ⚠ Gemini API key not configured - AI analysis disabled');
+      this.contentAnalyzer = new ContentAnalyzer(null, null);
+      this.adAnalyzer = new AdAnalyzer(null, null);
+      this.seoAnalyzer = new SEOAnalyzer(null, null);
+      this.technicalChecker = new TechnicalChecker(null, null);
+      this.layoutAnalyzer = new LayoutAnalyzer(null, null);
+      this.policyChecker = new PolicyComplianceChecker(null, null);
+      this.mfaScorer = new MFAScorer(null, null);
+    }
   }
 
   getRandomUserAgent() {
@@ -68,8 +96,16 @@ export class AdvancedWebsiteCrawler {
   }
 
   async initBrowser() {
-    if (!this.browser) {
-      console.log('[BROWSER-INIT] Launching Chromium browser...');
+    if (!this.browser || !this.browser.isConnected()) {
+      if (this.browser) {
+        console.log('[BROWSER-INIT] Browser disconnected, relaunching...');
+        try {
+          await this.browser.close().catch(() => {});
+        } catch (e) {}
+        this.browser = null;
+      }
+
+      console.log('[BROWSER-INIT] Launching Chromium browser in persistent mode...');
       const launchOptions = {
         headless: true,
         args: [
@@ -81,7 +117,9 @@ export class AdvancedWebsiteCrawler {
           '--disable-blink-features=AutomationControlled',
           '--disable-web-security',
           '--disable-features=IsolateOrigins,site-per-process',
-          '--window-size=1920,1080'
+          '--window-size=1920,1080',
+          '--single-process',
+          '--no-zygote'
         ]
       };
 
@@ -90,9 +128,14 @@ export class AdvancedWebsiteCrawler {
       }
 
       this.browser = await chromium.launch(launchOptions);
-      console.log('[BROWSER-INIT] ✓ Browser launched successfully');
+      console.log('[BROWSER-INIT] ✓ Browser launched successfully in persistent mode');
+
+      this.browser.on('disconnected', () => {
+        console.log('[BROWSER-EVENT] Browser disconnected, will relaunch on next request');
+        this.browser = null;
+      });
     } else {
-      console.log('[BROWSER-INIT] Browser already running');
+      console.log('[BROWSER-INIT] Reusing existing browser instance (persistent mode)');
     }
   }
 
