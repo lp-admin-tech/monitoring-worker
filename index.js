@@ -117,9 +117,7 @@ export class AdvancedWebsiteCrawler {
           '--disable-blink-features=AutomationControlled',
           '--disable-web-security',
           '--disable-features=IsolateOrigins,site-per-process',
-          '--window-size=1920,1080',
-          '--single-process',
-          '--no-zygote'
+          '--window-size=1920,1080'
         ]
       };
 
@@ -791,7 +789,7 @@ export class AdvancedWebsiteCrawler {
             this.detectTechnologies(page, htmlContent),
             this.analyzePerformance(page, domain),
             this.analyzeLinkQuality(page, domain),
-            this.checkAccessibility(domain)
+            this.checkAccessibilityInline(page)
           ]);
 
         console.log('[ANALYSIS-COMPLETE] All analyses finished');
@@ -863,36 +861,9 @@ export class AdvancedWebsiteCrawler {
     });
   }
 
-  async checkAccessibility(domain) {
-    console.log(`[ACCESSIBILITY] Starting accessibility check for ${domain}`);
-    let context = null;
-    let page = null;
-
+  async checkAccessibilityInline(page) {
+    console.log('[ACCESSIBILITY] Starting accessibility check');
     try {
-      await this.initBrowser();
-      context = await this.browser.newContext({
-        userAgent: this.getRandomUserAgent(),
-        ignoreHTTPSErrors: true
-      });
-
-      await context.route('**/*', (route) => {
-        const resourceType = route.request().resourceType();
-        if (['image', 'font', 'media'].includes(resourceType)) {
-          route.abort();
-        } else {
-          route.continue();
-        }
-      });
-
-      page = await context.newPage();
-      const url = domain.startsWith('http') ? domain : `https://${domain}`;
-      
-      await page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout: 45000
-      });
-      await page.waitForTimeout(2000);
-
       const issues = await page.evaluate(() => {
         const problems = [];
 
@@ -955,14 +926,11 @@ export class AdvancedWebsiteCrawler {
         return problems;
       });
 
-      await page.close();
-      await context.close();
-
       // Calculate accessibility score
       let score = 100;
       const highSeverity = issues.filter(i => i.severity === 'high').length;
       const mediumSeverity = issues.filter(i => i.severity === 'medium').length;
-      
+
       score -= highSeverity * 5;
       score -= mediumSeverity * 2;
 
@@ -977,9 +945,7 @@ export class AdvancedWebsiteCrawler {
       return result;
     } catch (error) {
       console.error('[ACCESSIBILITY] ✗ Check error:', error.message);
-      if (page) await page.close().catch(() => {});
-      if (context) await context.close().catch(() => {});
-      return { score: 0, issues: [], issueCount: 0 };
+      return { score: 0, issues: [], issueCount: 0, highSeverityCount: 0, mediumSeverityCount: 0 };
     }
   }
 

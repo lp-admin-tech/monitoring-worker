@@ -26,7 +26,16 @@ export class WebsiteCrawler {
   }
 
   async initBrowser() {
-    if (!this.browser) {
+    if (!this.browser || !this.browser.isConnected()) {
+      if (this.browser) {
+        console.log('[CRAWLER] Browser disconnected, relaunching...');
+        try {
+          await this.browser.close().catch(() => {});
+        } catch (e) {}
+        this.browser = null;
+      }
+
+      console.log('[CRAWLER] Launching Chromium in persistent mode...');
       const launchOptions = {
         headless: true,
         args: [
@@ -46,6 +55,14 @@ export class WebsiteCrawler {
       }
 
       this.browser = await chromium.launch(launchOptions);
+      console.log('[CRAWLER] Browser launched in persistent mode');
+
+      this.browser.on('disconnected', () => {
+        console.log('[CRAWLER] Browser disconnected, will relaunch on next request');
+        this.browser = null;
+      });
+    } else {
+      console.log('[CRAWLER] Reusing existing browser instance');
     }
   }
 

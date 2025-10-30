@@ -3,7 +3,7 @@ services:
     name: site-monitoring-worker
     env: node
     rootDir: monitoring-worker
-    buildCommand: npm install && npx playwright install chromium
+    buildCommand: npm install
     startCommand: node server.js
     autoDeploy: true
     scaling:

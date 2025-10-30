@@ -127,7 +127,13 @@ app.post('/crawl', validateWorkerSecret, async (req, res) => {
           accessibility_data: result.accessibilityData || {},
           mobile_data: {},
           technologies: result.technologies || {},
-          screenshot: result.screenshot
+          screenshot: result.screenshot,
+          performance_total_requests: result.requestStats?.total || 0,
+          performance_third_party_requests: result.requestStats?.thirdParty || 0,
+          performance_transfer_size: result.requestStats?.totalSize || 0,
+          performance_script_requests: result.requestStats?.scripts || 0,
+          accessibility_issues_count: result.accessibilityData?.issueCount || 0,
+          accessibility_missing_alt_tags: result.accessibilityData?.issues?.filter(i => i.type === 'missing-alt').length || 0
         }, {
           onConflict: 'publisher_id'
         });
@@ -226,7 +232,13 @@ app.post('/audit', validateWorkerSecret, async (req, res) => {
           accessibility_data: result.accessibilityData || {},
           mobile_data: {},
           technologies: result.technologies || {},
-          screenshot: result.screenshot
+          screenshot: result.screenshot,
+          performance_total_requests: result.requestStats?.total || 0,
+          performance_third_party_requests: result.requestStats?.thirdParty || 0,
+          performance_transfer_size: result.requestStats?.totalSize || 0,
+          performance_script_requests: result.requestStats?.scripts || 0,
+          accessibility_issues_count: result.accessibilityData?.issueCount || 0,
+          accessibility_missing_alt_tags: result.accessibilityData?.issues?.filter(i => i.type === 'missing-alt').length || 0
         }, {
           onConflict: 'publisher_id'
         });
@@ -298,7 +310,13 @@ app.post('/audit-batch', validateWorkerSecret, async (req, res) => {
               accessibility_data: result.accessibilityData || {},
               mobile_data: {},
               technologies: result.technologies || {},
-              screenshot: result.screenshot
+              screenshot: result.screenshot,
+              performance_total_requests: result.requestStats?.total || 0,
+              performance_third_party_requests: result.requestStats?.thirdParty || 0,
+              performance_transfer_size: result.requestStats?.totalSize || 0,
+              performance_script_requests: result.requestStats?.scripts || 0,
+              accessibility_issues_count: result.accessibilityData?.issueCount || 0,
+              accessibility_missing_alt_tags: result.accessibilityData?.issues?.filter(i => i.type === 'missing-alt').length || 0
             }, {
               onConflict: 'publisher_id'
             });
@@ -385,7 +403,13 @@ app.get('/audit-all', validateWorkerSecret, async (req, res) => {
               accessibility_data: result.accessibilityData || {},
               mobile_data: {},
               technologies: result.technologies || {},
-              screenshot: result.screenshot
+              screenshot: result.screenshot,
+              performance_total_requests: result.requestStats?.total || 0,
+              performance_third_party_requests: result.requestStats?.thirdParty || 0,
+              performance_transfer_size: result.requestStats?.totalSize || 0,
+              performance_script_requests: result.requestStats?.scripts || 0,
+              accessibility_issues_count: result.accessibilityData?.issueCount || 0,
+              accessibility_missing_alt_tags: result.accessibilityData?.issues?.filter(i => i.type === 'missing-alt').length || 0
             }, {
               onConflict: 'publisher_id'
             });
@@ -453,8 +477,18 @@ process.on('SIGINT', async () => {
 
 initializeSupabase();
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`[SERVER] ✓ Monitoring worker running on http://0.0.0.0:${PORT}`);
   console.log(`[SERVER] Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`[SERVER] Request timeout: ${REQUEST_TIMEOUT}ms`);
+
+  console.log('[SERVER] Pre-warming browser instance...');
+  try {
+    const crawlerInstance = initializeCrawler();
+    await crawlerInstance.initBrowser();
+    console.log('[SERVER] ✓ Browser pre-warmed and ready for requests');
+  } catch (error) {
+    console.error('[SERVER] ⚠ Failed to pre-warm browser:', error.message);
+    console.log('[SERVER] Browser will be initialized on first request');
+  }
 });
