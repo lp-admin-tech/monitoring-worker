@@ -296,6 +296,29 @@ app.post('/audit', validateWorkerSecret, async (req, res) => {
   try {
     const crawlerInstance = initializeCrawler();
     const supabaseClient = initializeSupabase();
+
+    let cleanupSuccess = false;
+    let cleanupMessage = '';
+
+    if (supabaseClient && publisherId) {
+      try {
+        console.log(`[AUDIT] Triggering cleanup of old audit data for publisher ${publisherId}`);
+        const { data: cleanupResult, error: cleanupError } = await supabaseClient.rpc('trigger_audit_cleanup', {
+          p_publisher_id: publisherId,
+          p_all_publishers: false
+        });
+        if (cleanupError) {
+          console.warn(`[AUDIT] Cleanup warning:`, cleanupError.message);
+        } else if (cleanupResult && cleanupResult.length > 0) {
+          cleanupSuccess = true;
+          cleanupMessage = cleanupResult[0].message;
+          console.log(`[AUDIT] Cleanup completed:`, cleanupMessage);
+        }
+      } catch (cleanupErr) {
+        console.warn(`[AUDIT] Cleanup exception:`, cleanupErr.message);
+      }
+    }
+
     const result = await crawlerInstance.crawlSite(domain);
 
     let dbSaveSuccess = false;
@@ -355,6 +378,10 @@ app.post('/audit', validateWorkerSecret, async (req, res) => {
       domain,
       publisherId,
       result,
+      cleanup: {
+        executed: cleanupSuccess,
+        message: cleanupMessage
+      },
       database: {
         saved: dbSaveSuccess,
         error: dbSaveError
@@ -388,9 +415,27 @@ app.post('/audit-batch', validateWorkerSecret, async (req, res) => {
     const results = [];
     let dbSuccessCount = 0;
     let dbFailureCount = 0;
+    let cleanupCount = 0;
 
     if (!supabaseClient) {
       console.warn('[AUDIT-BATCH] Supabase not configured - database saves will be skipped');
+    } else {
+      console.log(`[AUDIT-BATCH] Triggering cleanup of old audit data for batch publishers`);
+      for (const publisher of publishers) {
+        try {
+          const { data: cleanupResult, error: cleanupError } = await supabaseClient.rpc('trigger_audit_cleanup', {
+            p_publisher_id: publisher.id,
+            p_all_publishers: false
+          });
+          if (!cleanupError && cleanupResult && cleanupResult.length > 0) {
+            cleanupCount++;
+            console.log(`[AUDIT-BATCH] Cleanup for ${publisher.id}:`, cleanupResult[0].message);
+          }
+        } catch (cleanupErr) {
+          console.warn(`[AUDIT-BATCH] Cleanup exception for ${publisher.id}:`, cleanupErr.message);
+        }
+      }
+      console.log(`[AUDIT-BATCH] Cleanup completed for ${cleanupCount}/${publishers.length} publishers`);
     }
 
     for (const publisher of publishers) {
@@ -474,10 +519,14 @@ app.post('/audit-batch', validateWorkerSecret, async (req, res) => {
       }
     }
 
-    console.log(`[AUDIT-BATCH] Completed batch audit: ${publishers.length} total, ${dbSuccessCount} db saves successful, ${dbFailureCount} db saves failed`);
+    console.log(`[AUDIT-BATCH] Completed batch audit: ${publishers.length} total, ${dbSuccessCount} db saves successful, ${dbFailureCount} db saves failed, ${cleanupCount} cleanups executed`);
     res.json({
       success: true,
       count: publishers.length,
+      cleanup: {
+        executed: cleanupCount,
+        total: publishers.length
+      },
       database: {
         successCount: dbSuccessCount,
         failureCount: dbFailureCount
@@ -513,6 +562,17 @@ app.get('/audit-all', validateWorkerSecret, async (req, res) => {
     if (error) throw error;
 
     console.log(`[AUDIT-ALL] Found ${publishers.length} active publishers to audit`);
+
+    console.log(`[AUDIT-ALL] Triggering cleanup of old audit data for all publishers`);
+    const { data: cleanupResult, error: cleanupError } = await supabaseClient.rpc('trigger_audit_cleanup', {
+      p_publisher_id: null,
+      p_all_publishers: true
+    });
+    if (cleanupError) {
+      console.warn(`[AUDIT-ALL] Cleanup warning:`, cleanupError.message);
+    } else if (cleanupResult && cleanupResult.length > 0) {
+      console.log(`[AUDIT-ALL] Cleanup completed:`, cleanupResult[0].message);
+    }
 
     const crawlerInstance = initializeCrawler();
     const results = [];
@@ -600,6 +660,10 @@ app.get('/audit-all', validateWorkerSecret, async (req, res) => {
     res.json({
       success: true,
       count: publishers.length,
+      cleanup: {
+        executed: true,
+        message: cleanupResult && cleanupResult.length > 0 ? cleanupResult[0].message : 'Cleanup executed'
+      },
       database: {
         successCount: dbSuccessCount,
         failureCount: dbFailureCount
