@@ -162,6 +162,7 @@ app.post('/crawl', validateWorkerSecret, async (req, res) => {
           .upsert({
             publisher_id: publisherId,
             domain: domain,
+            site_url: domain,
             last_crawled: new Date().toISOString(),
             is_online: true,
             seo_score: result.seoAnalysis?.score || 0,
@@ -336,6 +337,7 @@ app.post('/audit', validateWorkerSecret, async (req, res) => {
           .upsert({
             publisher_id: publisherId,
             domain: domain,
+            site_url: domain,
             last_crawled: new Date().toISOString(),
             is_online: true,
             seo_score: result.seoAnalysis?.score || 0,
@@ -453,6 +455,7 @@ app.post('/audit-batch', validateWorkerSecret, async (req, res) => {
             .upsert({
               publisher_id: publisher.id,
               domain: publisher.domain,
+              site_url: publisher.domain,
               last_crawled: new Date().toISOString(),
               is_online: true,
               seo_score: result.seoAnalysis?.score || 0,
@@ -594,6 +597,7 @@ app.get('/audit-all', validateWorkerSecret, async (req, res) => {
             .upsert({
               publisher_id: publisher.id,
               domain: publisher.domain,
+              site_url: publisher.domain,
               last_crawled: new Date().toISOString(),
               is_online: true,
               seo_score: result.seoAnalysis?.score || 0,
