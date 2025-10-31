@@ -80,21 +80,54 @@ app.get('/', (req, res) => {
   });
 });
 
-app.get('/health', (req, res) => {
-  const health = {
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    environment: {
-      nodeVersion: process.version,
-      platform: process.platform,
-      supabaseConfigured: !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY),
-      workerSecretConfigured: !!process.env.WORKER_SECRET
-    }
-  };
+app.get('/health', async (req, res) => {
+  try {
+    const supabaseClient = initializeSupabase();
+    let databaseConnected = false;
+    let databaseError = null;
 
-  res.json(health);
+    if (supabaseClient) {
+      try {
+        const { error: testError } = await supabaseClient
+          .from('site_audits')
+          .select('count', { count: 'exact', head: true });
+
+        if (testError) {
+          databaseError = testError.message;
+        } else {
+          databaseConnected = true;
+        }
+      } catch (error) {
+        databaseError = error instanceof Error ? error.message : 'Unknown error';
+      }
+    }
+
+    const health = {
+      status: databaseConnected ? 'healthy' : (supabaseClient ? 'degraded' : 'unhealthy'),
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      environment: {
+        nodeVersion: process.version,
+        platform: process.platform,
+        supabaseConfigured: !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY),
+        workerSecretConfigured: !!process.env.WORKER_SECRET
+      },
+      database: {
+        connected: databaseConnected,
+        configured: !!supabaseClient,
+        error: databaseError
+      }
+    };
+
+    res.json(health);
+  } catch (error) {
+    res.status(500).json({
+      status: 'unhealthy',
+      error: error instanceof Error ? error.message : 'Unknown error',
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 app.post('/crawl', validateWorkerSecret, async (req, res) => {
@@ -353,14 +386,24 @@ app.post('/audit-batch', validateWorkerSecret, async (req, res) => {
     const crawlerInstance = initializeCrawler();
     const supabaseClient = initializeSupabase();
     const results = [];
+    let dbSuccessCount = 0;
+    let dbFailureCount = 0;
+
+    if (!supabaseClient) {
+      console.warn('[AUDIT-BATCH] Supabase not configured - database saves will be skipped');
+    }
 
     for (const publisher of publishers) {
       try {
         console.log(`[AUDIT-BATCH] Auditing ${publisher.domain} (${publisher.id})`);
         const result = await crawlerInstance.crawlSite(publisher.domain);
 
+        let dbSaveSuccess = false;
+        let dbSaveError = null;
+
         if (result.success && supabaseClient) {
-          await supabaseClient
+          console.log(`[AUDIT-BATCH] Saving results to database for publisher ${publisher.id}`);
+          const { error: dbError } = await supabaseClient
             .from('site_audits')
             .upsert({
               publisher_id: publisher.id,
@@ -390,12 +433,30 @@ app.post('/audit-batch', validateWorkerSecret, async (req, res) => {
             }, {
               onConflict: 'publisher_id'
             });
+
+          if (dbError) {
+            console.error(`[AUDIT-BATCH] ❌ Database error for publisher ${publisher.id}:`, dbError.message);
+            dbSaveError = dbError.message;
+            dbFailureCount++;
+          } else {
+            console.log(`[AUDIT-BATCH] ✓ Successfully saved results for publisher ${publisher.id}`);
+            dbSaveSuccess = true;
+            dbSuccessCount++;
+          }
+        } else if (result.success && !supabaseClient) {
+          console.warn(`[AUDIT-BATCH] ⚠ Supabase not configured - skipping database save for publisher ${publisher.id}`);
+          dbSaveError = 'Supabase client not available';
+          dbFailureCount++;
         }
 
         results.push({
           publisherId: publisher.id,
           domain: publisher.domain,
-          success: result.success
+          success: result.success,
+          database: {
+            saved: dbSaveSuccess,
+            error: dbSaveError
+          }
         });
       } catch (error) {
         console.error(`[AUDIT-BATCH] Error auditing ${publisher.domain}:`, error.message);
@@ -403,15 +464,24 @@ app.post('/audit-batch', validateWorkerSecret, async (req, res) => {
           publisherId: publisher.id,
           domain: publisher.domain,
           success: false,
-          error: error.message
+          error: error.message,
+          database: {
+            saved: false,
+            error: error.message
+          }
         });
+        dbFailureCount++;
       }
     }
 
-    console.log(`[AUDIT-BATCH] Completed batch audit for ${publishers.length} publishers`);
+    console.log(`[AUDIT-BATCH] Completed batch audit: ${publishers.length} total, ${dbSuccessCount} db saves successful, ${dbFailureCount} db saves failed`);
     res.json({
       success: true,
       count: publishers.length,
+      database: {
+        successCount: dbSuccessCount,
+        failureCount: dbFailureCount
+      },
       results
     });
   } catch (error) {
@@ -446,14 +516,20 @@ app.get('/audit-all', validateWorkerSecret, async (req, res) => {
 
     const crawlerInstance = initializeCrawler();
     const results = [];
+    let dbSuccessCount = 0;
+    let dbFailureCount = 0;
 
     for (const publisher of publishers) {
       try {
         console.log(`[AUDIT-ALL] Auditing ${publisher.domain} (${publisher.id})`);
         const result = await crawlerInstance.crawlSite(publisher.domain);
 
+        let dbSaveSuccess = false;
+        let dbSaveError = null;
+
         if (result.success) {
-          await supabaseClient
+          console.log(`[AUDIT-ALL] Saving results to database for publisher ${publisher.id}`);
+          const { error: dbError } = await supabaseClient
             .from('site_audits')
             .upsert({
               publisher_id: publisher.id,
@@ -483,12 +559,26 @@ app.get('/audit-all', validateWorkerSecret, async (req, res) => {
             }, {
               onConflict: 'publisher_id'
             });
+
+          if (dbError) {
+            console.error(`[AUDIT-ALL] ❌ Database error for publisher ${publisher.id}:`, dbError.message);
+            dbSaveError = dbError.message;
+            dbFailureCount++;
+          } else {
+            console.log(`[AUDIT-ALL] ✓ Successfully saved results for publisher ${publisher.id}`);
+            dbSaveSuccess = true;
+            dbSuccessCount++;
+          }
         }
 
         results.push({
           publisherId: publisher.id,
           domain: publisher.domain,
-          success: result.success
+          success: result.success,
+          database: {
+            saved: dbSaveSuccess,
+            error: dbSaveError
+          }
         });
       } catch (error) {
         console.error(`[AUDIT-ALL] Error auditing ${publisher.domain}:`, error.message);
@@ -496,15 +586,24 @@ app.get('/audit-all', validateWorkerSecret, async (req, res) => {
           publisherId: publisher.id,
           domain: publisher.domain,
           success: false,
-          error: error.message
+          error: error.message,
+          database: {
+            saved: false,
+            error: error.message
+          }
         });
+        dbFailureCount++;
       }
     }
 
-    console.log(`[AUDIT-ALL] Completed audit for ${publishers.length} publishers`);
+    console.log(`[AUDIT-ALL] Completed audit: ${publishers.length} total, ${dbSuccessCount} db saves successful, ${dbFailureCount} db saves failed`);
     res.json({
       success: true,
       count: publishers.length,
+      database: {
+        successCount: dbSuccessCount,
+        failureCount: dbFailureCount
+      },
       results
     });
   } catch (error) {
