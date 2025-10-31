@@ -14,12 +14,13 @@ app.use(express.json());
 let crawler = null;
 let supabase = null;
 
+// === AUTH MIDDLEWARE ===
 function validateWorkerSecret(req, res, next) {
   const authHeader = req.headers['authorization'];
   const workerSecret = process.env.WORKER_SECRET;
 
   if (!workerSecret) {
-    console.warn('[AUTH] WORKER_SECRET not set - allowing all requests');
+    console.warn('[AUTH] WORKER_SECRET not set — allowing all requests');
     return next();
   }
 
@@ -31,11 +32,12 @@ function validateWorkerSecret(req, res, next) {
   next();
 }
 
+// === INITIALIZATION HELPERS ===
 function initializeCrawler() {
   if (!crawler) {
     console.log('[SERVER] Initializing crawler instance...');
     crawler = new AdvancedWebsiteCrawler({
-      cacheTimeout: 3600000,
+      cacheTimeout: 3600000, // 1 hour
       maxRetries: 3,
       concurrency: 2
     });
@@ -46,10 +48,7 @@ function initializeCrawler() {
 function initializeSupabase() {
   if (!supabase) {
     if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
-      console.error('[SERVER] ❌ ERROR: Missing required environment variables for Supabase!');
-      console.error('[SERVER] Required: SUPABASE_URL and SUPABASE_SERVICE_KEY');
-      console.error('[SERVER] Current config: URL=' + (process.env.SUPABASE_URL ? '✓' : '✗') + ', SERVICE_KEY=' + (process.env.SUPABASE_SERVICE_KEY ? '✓' : '✗'));
-      console.error('[SERVER] Database persistence DISABLED - audit results will NOT be saved!');
+      console.error('[SERVER] ❌ Missing Supabase configuration');
       return null;
     }
     console.log('[SERVER] Initializing Supabase client...');
@@ -57,4 +56,54 @@ function initializeSupabase() {
       process.env.SUPABASE_URL,
       process.env.SUPABASE_SERVICE_KEY
     );
-    console.log('[SERVER] ✓ Supabase client initialized successfully');
+    console.log('[SERVER] ✓ Supabase client ready');
+  }
+  return supabase;
+}
+
+// === MAIN API ROUTE ===
+app.post('/api/audit', validateWorkerSecret, async (req, res) => {
+  try {
+    const { publisher_id, domain } = req.body;
+    if (!publisher_id || !domain) {
+      return res.status(400).json({ error: 'publisher_id and domain are required' });
+    }
+
+    const crawler = initializeCrawler();
+    const supabase = initializeSupabase();
+
+    console.log(`[AI-HELPER] ✗ Starting audit for: ${domain}`);
+
+    const results = await crawler.auditWebsite(domain);
+
+    if (supabase) {
+      const { error } = await supabase
+        .from('site_audits')
+        .upsert([{ publisher_id, domain, audit_result: results }], {
+          onConflict: ['publisher_id', 'domain']
+        });
+
+      if (error) {
+        console.error('[DB] ❌ Failed to save results:', error.message);
+      } else {
+        console.log('[DB] ✓ Audit results saved to Supabase');
+      }
+    }
+
+    console.log(`[AI-HELPER] ✓ Completed audit for: ${domain}`);
+    res.json({ success: true, results });
+  } catch (err) {
+    console.error('[SERVER] ❌ Error during audit:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// === HEALTH CHECK ===
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', message: 'Audit worker running' });
+});
+
+// === START SERVER ===
+app.listen(PORT, () => {
+  console.log(`[SERVER] Listening on port ${PORT}`);
+});
