@@ -1,9 +1,7 @@
 import { load } from 'cheerio';
-import { createAIHelper } from './ai-helper.js';
 
 export class SEOAnalyzer {
-  constructor(supabaseClient = null, geminiApiKey = null) {
-    this.aiHelper = supabaseClient && geminiApiKey ? createAIHelper(supabaseClient, geminiApiKey) : null;
+  constructor(supabaseClient = null) {
   }
 
   async analyzeSEOAndEngagement(htmlContent, links, loadTime = 0, metrics = {}) {
@@ -72,24 +70,7 @@ export class SEOAnalyzer {
       })
     };
 
-    let aiAnalysis = null;
-    if (this.aiHelper) {
-      try {
-        aiAnalysis = await this.aiHelper.analyze({
-          type: 'user_engagement',
-          context: 'Analyzing user engagement signals including scroll depth, session time, bounce rate, CTR optimization, and social signals',
-          metrics: engagementMetrics,
-          html: htmlContent
-        });
-      } catch (error) {
-        console.error('[SEO-ANALYZER] Engagement AI analysis error:', error.message);
-      }
-    }
-
-    return {
-      ...engagementMetrics,
-      aiAnalysis
-    };
+    return engagementMetrics;
   }
 
   analyzeScrollDepth($) {
@@ -486,24 +467,7 @@ export class SEOAnalyzer {
       })
     };
 
-    let aiAnalysis = null;
-    if (this.aiHelper) {
-      try {
-        aiAnalysis = await this.aiHelper.analyze({
-          type: 'seo_optimization',
-          context: 'Analyzing SEO health including meta tags, navigation structure, category organization, and technical SEO factors',
-          metrics: seoMetrics,
-          html: htmlContent
-        });
-      } catch (error) {
-        console.error('[SEO-ANALYZER] SEO AI analysis error:', error.message);
-      }
-    }
-
-    return {
-      ...seoMetrics,
-      aiAnalysis
-    };
+    return seoMetrics;
   }
 
   analyzeMetaTags($) {

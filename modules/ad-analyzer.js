@@ -1,11 +1,9 @@
 import { load } from 'cheerio';
 import { chromium } from 'playwright';
-import { createAIHelper } from './ai-helper.js';
 
 export class AdAnalyzer {
-  constructor(supabaseClient = null, geminiApiKey = null) {
+  constructor(supabaseClient = null) {
     this.browser = null;
-    this.aiHelper = supabaseClient && geminiApiKey ? createAIHelper(supabaseClient, geminiApiKey) : null;
   }
 
   async analyzeAdDensity(htmlContent) {
@@ -137,27 +135,8 @@ export class AdAnalyzer {
       adToContentRatio
     };
 
-    let aiAnalysis = null;
-    if (this.aiHelper) {
-      try {
-        console.log('[AD-ANALYZER] Requesting AI analysis for ad density');
-        aiAnalysis = await this.aiHelper.analyze({
-          type: 'ad_density',
-          context: 'Analyzing ad placement, density, and user experience impact on the webpage',
-          metrics,
-          html: htmlContent
-        });
-        console.log(`[AD-ANALYZER] ✓ Ad density analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
-      } catch (error) {
-        console.error('[AD-ANALYZER] ✗ AI analysis error:', error.message);
-      }
-    }
-
     console.log('[AD-ANALYZER] ✓ Ad density analysis complete');
-    return {
-      ...metrics,
-      aiAnalysis
-    };
+    return metrics;
   }
 
   async captureAdSectionScreenshots(domain, browser = null) {
@@ -403,28 +382,8 @@ export class AdAnalyzer {
 
     console.log(`[AD-ANALYZER] Google Ads detected: ${metrics.hasGoogleAds ? 'yes' : 'no'}`);
     console.log(`[AD-ANALYZER] Multiple networks: ${metrics.hasMultipleNetworks ? 'yes' : 'no'}`);
-
-    let aiAnalysis = null;
-    if (this.aiHelper) {
-      try {
-        console.log('[AD-ANALYZER] Requesting AI analysis for ad networks');
-        aiAnalysis = await this.aiHelper.analyze({
-          type: 'ad_networks',
-          context: 'Evaluating the ad network setup, diversification, and potential conflicts',
-          metrics,
-          html: htmlContent
-        });
-        console.log(`[AD-ANALYZER] ✓ Ad network analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
-      } catch (error) {
-        console.error('[AD-ANALYZER] ✗ AI analysis error:', error.message);
-      }
-    }
-
     console.log('[AD-ANALYZER] ✓ Ad network detection complete');
-    return {
-      ...metrics,
-      aiAnalysis
-    };
+    return metrics;
   }
 
   async close() {

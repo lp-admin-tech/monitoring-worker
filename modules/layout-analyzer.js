@@ -1,9 +1,7 @@
 import { load } from 'cheerio';
-import { createAIHelper } from './ai-helper.js';
 
 export class LayoutAnalyzer {
-  constructor(supabaseClient = null, geminiApiKey = null) {
-    this.aiHelper = supabaseClient && geminiApiKey ? createAIHelper(supabaseClient, geminiApiKey) : null;
+  constructor(supabaseClient = null) {
   }
 
   async analyzeLayout(htmlContent) {
@@ -47,28 +45,8 @@ export class LayoutAnalyzer {
     };
 
     console.log(`[LAYOUT-ANALYZER] Layout score: ${score}/100, Issues found: ${metrics.issues.length}`);
-
-    let aiAnalysis = null;
-    if (this.aiHelper) {
-      try {
-        console.log('[LAYOUT-ANALYZER] Requesting AI analysis for layout structure');
-        aiAnalysis = await this.aiHelper.analyze({
-          type: 'layout_structure',
-          context: 'Evaluating page layout, ad placement impact on UX, navigation accessibility, and mobile responsiveness',
-          metrics,
-          html: htmlContent
-        });
-        console.log(`[LAYOUT-ANALYZER] ✓ Layout analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
-      } catch (error) {
-        console.error('[LAYOUT-ANALYZER] ✗ AI analysis error:', error.message);
-      }
-    }
-
     console.log('[LAYOUT-ANALYZER] ✓ Layout analysis complete');
-    return {
-      ...metrics,
-      aiAnalysis
-    };
+    return metrics;
   }
 
   analyzeAdPlacement($) {

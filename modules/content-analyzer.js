@@ -1,14 +1,12 @@
 import { load } from 'cheerio';
 import fetch from 'node-fetch';
-import { createAIHelper } from './ai-helper.js';
 import { WebsiteCrawler } from './crawler.js';
 
 export class ContentAnalyzer {
-  constructor(supabaseClient = null, geminiApiKey = null) {
+  constructor(supabaseClient = null) {
     this.supabase = supabaseClient;
     this.safeBrowsingApiKey = process.env.GOOGLE_SAFE_BROWSING_API_KEY;
     this.safeBrowsingApiUrl = 'https://safebrowsing.googleapis.com/v4/threatMatches:find';
-    this.aiHelper = supabaseClient && geminiApiKey ? createAIHelper(supabaseClient, geminiApiKey) : null;
     this.crawler = new WebsiteCrawler();
   }
 
@@ -40,27 +38,8 @@ export class ContentAnalyzer {
       hasContactPage
     };
 
-    let aiAnalysis = null;
-    if (this.aiHelper) {
-      try {
-        console.log('[CONTENT-ANALYZER] Requesting AI analysis for content quality');
-        aiAnalysis = await this.aiHelper.analyze({
-          type: 'content_quality',
-          context: 'Assessing overall content quality, uniqueness, and required page presence',
-          metrics,
-          html: htmlContent
-        });
-        console.log(`[CONTENT-ANALYZER] ✓ AI analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
-      } catch (error) {
-        console.error('[CONTENT-ANALYZER] ✗ AI analysis error:', error.message);
-      }
-    }
-
     console.log('[CONTENT-ANALYZER] ✓ Content analysis complete');
-    return {
-      ...metrics,
-      aiAnalysis
-    };
+    return metrics;
   }
 
   calculateUniqueness(text) {
@@ -124,27 +103,8 @@ export class ContentAnalyzer {
       videosCount
     };
 
-    let aiAnalysis = null;
-    if (this.aiHelper) {
-      try {
-        console.log('[CONTENT-ANALYZER] Requesting AI analysis for images/media');
-        aiAnalysis = await this.aiHelper.analyze({
-          type: 'images_media',
-          context: 'Evaluating image optimization, accessibility (alt tags), and media usage',
-          metrics,
-          html: htmlContent
-        });
-        console.log(`[CONTENT-ANALYZER] ✓ Image analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
-      } catch (error) {
-        console.error('[CONTENT-ANALYZER] ✗ Image AI analysis error:', error.message);
-      }
-    }
-
     console.log('[CONTENT-ANALYZER] ✓ Image analysis complete');
-    return {
-      ...metrics,
-      aiAnalysis
-    };
+    return metrics;
   }
 
   async analyzePublishingMetadata(htmlContent, links) {
@@ -265,27 +225,8 @@ export class ContentAnalyzer {
       contentFreshnessScore
     };
 
-    let aiAnalysis = null;
-    if (this.aiHelper) {
-      try {
-        console.log('[CONTENT-ANALYZER] Requesting AI analysis for publishing metadata');
-        aiAnalysis = await this.aiHelper.analyze({
-          type: 'publishing_metadata',
-          context: 'Analyzing content freshness, publishing frequency, and author attribution',
-          metrics,
-          html: htmlContent
-        });
-        console.log(`[CONTENT-ANALYZER] ✓ Publishing analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
-      } catch (error) {
-        console.error('[CONTENT-ANALYZER] ✗ Publishing AI analysis error:', error.message);
-      }
-    }
-
     console.log('[CONTENT-ANALYZER] ✓ Publishing metadata analysis complete');
-    return {
-      ...metrics,
-      aiAnalysis
-    };
+    return metrics;
   }
 
   parseDate(dateString) {
@@ -563,8 +504,6 @@ export class ContentAnalyzer {
         article_count: 0,
         is_404: is_404 || false,
         is_empty: false,
-        ai_suggested_topics: [],
-        ai_analysis: null,
         error_message: error || 'Failed to crawl category page'
       };
     }
@@ -578,25 +517,11 @@ export class ContentAnalyzer {
         has_published_articles: false,
         article_count: 0,
         is_404: true,
-        is_empty: false,
-        ai_suggested_topics: [],
-        ai_analysis: { reason: 'Category page not found', recommendation: 'Remove or fix broken link' }
+        is_empty: false
       };
     }
 
     const categoryAnalysis = this.analyzeCategoryPage(htmlContent, categoryUrl);
-
-    let aiAnalysis = null;
-    let aiSuggestedTopics = [];
-
-    if (categoryAnalysis.isEmpty && this.aiHelper) {
-      try {
-        aiAnalysis = await this.generateAIAnalysis(domain, categoryUrl, categoryAnalysis);
-        aiSuggestedTopics = await this.generateContentTopics(domain, categoryAnalysis.categoryName);
-      } catch (error) {
-        console.error('[CATEGORY-AUDIT] AI generation error:', error);
-      }
-    }
 
     return {
       publisher_id: publisherId,
@@ -606,106 +531,10 @@ export class ContentAnalyzer {
       has_published_articles: categoryAnalysis.hasPublishedArticles,
       article_count: categoryAnalysis.articleCount,
       is_404: false,
-      is_empty: categoryAnalysis.isEmpty,
-      ai_suggested_topics: aiSuggestedTopics,
-      ai_analysis: aiAnalysis
+      is_empty: categoryAnalysis.isEmpty
     };
   }
 
-  async generateAIAnalysis(domain, categoryUrl, categoryAnalysis) {
-    if (!this.aiHelper) {
-      return {
-        reason: 'Empty category with no published content',
-        recommendation: 'Add articles or remove category from navigation'
-      };
-    }
-
-    try {
-      const metrics = {
-        category_name: categoryAnalysis.categoryName,
-        article_count: categoryAnalysis.articleCount,
-        has_articles: categoryAnalysis.hasPublishedArticles,
-        is_empty: categoryAnalysis.isEmpty
-      };
-
-      const context = `Empty category detected on ${domain} at ${categoryUrl}`;
-
-      const analysis = await this.aiHelper.analyze({
-        type: 'category',
-        context,
-        metrics,
-        html: null
-      });
-
-      return analysis;
-    } catch (error) {
-      console.error('[CATEGORY-AUDIT] AI analysis error:', error);
-      return {
-        reason: 'Empty category with no published content',
-        recommendation: 'Add articles or remove category from navigation'
-      };
-    }
-  }
-
-  async generateContentTopics(domain, categoryName) {
-    if (!this.aiHelper) {
-      return this.generateFallbackTopics(categoryName);
-    }
-
-    try {
-      const metrics = {
-        domain,
-        category_name: categoryName
-      };
-
-      const context = `Suggest 2 content topics for empty category "${categoryName}" on ${domain}`;
-
-      const topicsAnalysis = await this.aiHelper.analyze({
-        type: 'content_suggestions',
-        context,
-        metrics,
-        html: null
-      });
-
-      const topics = this.extractTopicsFromAI(topicsAnalysis);
-      return topics.slice(0, 2);
-    } catch (error) {
-      console.error('[CATEGORY-AUDIT] Topic generation error:', error);
-      return this.generateFallbackTopics(categoryName);
-    }
-  }
-
-  extractTopicsFromAI(aiResponse) {
-    try {
-      const { recommendation } = aiResponse;
-
-      if (!recommendation) {
-        return [];
-      }
-
-      const topics = recommendation
-        .split(/[,;]/)
-        .map(topic => topic.trim())
-        .filter(topic => topic.length > 3 && topic.length < 100)
-        .slice(0, 2);
-
-      return topics;
-    } catch (error) {
-      return [];
-    }
-  }
-
-  generateFallbackTopics(categoryName) {
-    const topicTemplates = [
-      `Introduction to ${categoryName}`,
-      `Latest trends in ${categoryName}`,
-      `${categoryName} best practices`,
-      `Getting started with ${categoryName}`,
-      `${categoryName} tips and tricks`
-    ];
-
-    return topicTemplates.slice(0, 2);
-  }
 
   async saveToDatabase(auditResult) {
     if (!this.supabase) {

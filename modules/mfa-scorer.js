@@ -1,8 +1,5 @@
-import { createAIHelper } from './ai-helper.js';
-
 export class MFAScorer {
-  constructor(supabaseClient = null, geminiApiKey = null) {
-    this.aiHelper = supabaseClient && geminiApiKey ? createAIHelper(supabaseClient, geminiApiKey) : null;
+  constructor(supabaseClient = null) {
   }
   /**
    * Calculates website quality score ONLY (0-60 points)
@@ -270,24 +267,7 @@ export class MFAScorer {
       }
     };
 
-    let aiAnalysis = null;
-    if (this.aiHelper) {
-      try {
-        aiAnalysis = await this.aiHelper.analyze({
-          type: 'mfa_quality_score',
-          context: 'Overall website quality assessment based on content, ad compliance, technical setup, and SEO/engagement factors',
-          metrics,
-          html: null
-        });
-      } catch (error) {
-        console.error('[MFA-SCORER] AI analysis error:', error.message);
-      }
-    }
-
-    return {
-      ...metrics,
-      aiAnalysis
-    };
+    return metrics;
   }
 
   generateRecommendations(auditData, breakdown, seoData = null, engagementData = null, layoutData = null) {

@@ -25,7 +25,7 @@ export class AdvancedWebsiteCrawler {
     this.cacheTimeout = options.cacheTimeout || 3600000;
     this.maxRetries = options.maxRetries || 3;
     this.concurrency = options.concurrency || 3;
-    this.deepCrawl = options.deepCrawl || false;
+    this.deepCrawl = options.deepCrawl || true;
     this.maxDepth = options.maxDepth || 2;
 
     console.log('[CRAWLER-INIT] Initializing AdvancedWebsiteCrawler');
@@ -47,26 +47,13 @@ export class AdvancedWebsiteCrawler {
       console.warn('[CRAWLER-INIT] ⚠ Supabase credentials not found');
     }
 
-    const geminiApiKey = process.env.GEMINI_API_KEY;
-    if (geminiApiKey && geminiApiKey !== 'your-gemini-api-key-here') {
-      console.log('[CRAWLER-INIT] ✓ Gemini API key found - AI analysis enabled');
-      this.contentAnalyzer = new ContentAnalyzer(this.supabase, geminiApiKey);
-      this.adAnalyzer = new AdAnalyzer(this.supabase, geminiApiKey);
-      this.seoAnalyzer = new SEOAnalyzer(this.supabase, geminiApiKey);
-      this.technicalChecker = new TechnicalChecker(this.supabase, geminiApiKey);
-      this.layoutAnalyzer = new LayoutAnalyzer(this.supabase, geminiApiKey);
-      this.policyChecker = new PolicyComplianceChecker(this.supabase, geminiApiKey);
-      this.mfaScorer = new MFAScorer(this.supabase, geminiApiKey);
-    } else {
-      console.warn('[CRAWLER-INIT] ⚠ Gemini API key not configured - AI analysis disabled');
-      this.contentAnalyzer = new ContentAnalyzer(null, null);
-      this.adAnalyzer = new AdAnalyzer(null, null);
-      this.seoAnalyzer = new SEOAnalyzer(null, null);
-      this.technicalChecker = new TechnicalChecker(null, null);
-      this.layoutAnalyzer = new LayoutAnalyzer(null, null);
-      this.policyChecker = new PolicyComplianceChecker(null, null);
-      this.mfaScorer = new MFAScorer(null, null);
-    }
+    this.contentAnalyzer = new ContentAnalyzer(this.supabase);
+      this.adAnalyzer = new AdAnalyzer(this.supabase);
+      this.seoAnalyzer = new SEOAnalyzer(this.supabase);
+      this.technicalChecker = new TechnicalChecker(this.supabase);
+      this.layoutAnalyzer = new LayoutAnalyzer(this.supabase);
+      this.policyChecker = new PolicyComplianceChecker(this.supabase);
+      this.mfaScorer = new MFAScorer(this.supabase);
   }
 
   getRandomUserAgent() {

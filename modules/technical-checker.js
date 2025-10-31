@@ -1,10 +1,8 @@
 import fetch from 'node-fetch';
 import { chromium } from 'playwright';
-import { createAIHelper } from './ai-helper.js';
 
 export class TechnicalChecker {
-  constructor(supabaseClient = null, geminiApiKey = null) {
-    this.aiHelper = supabaseClient && geminiApiKey ? createAIHelper(supabaseClient, geminiApiKey) : null;
+  constructor(supabaseClient = null) {
   }
   async checkAdsTxt(domain) {
     console.log(`[TECHNICAL-CHECKER] Checking ads.txt for ${domain}`);
@@ -97,27 +95,8 @@ export class TechnicalChecker {
       console.log(`[TECHNICAL-CHECKER] Script duration: ${metrics.ScriptDuration}ms, Layout duration: ${metrics.LayoutDuration}ms`);
     }
 
-    let aiAnalysis = null;
-    if (this.aiHelper) {
-      try {
-        console.log('[TECHNICAL-CHECKER] Requesting AI analysis for page speed');
-        aiAnalysis = await this.aiHelper.analyze({
-          type: 'page_speed',
-          context: 'Analyzing page load performance, script execution time, and layout rendering speed',
-          metrics: speedMetrics,
-          html: null
-        });
-        console.log(`[TECHNICAL-CHECKER] ✓ Page speed analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
-      } catch (error) {
-        console.error('[TECHNICAL-CHECKER] ✗ AI analysis error:', error.message);
-      }
-    }
-
     console.log('[TECHNICAL-CHECKER] ✓ Page speed calculation complete');
-    return {
-      ...speedMetrics,
-      aiAnalysis
-    };
+    return speedMetrics;
   }
 
   async checkDomainAge(domain, browser = null) {
@@ -152,28 +131,8 @@ export class TechnicalChecker {
       };
 
       console.log(`[TECHNICAL-CHECKER] Domain authority score: ${domainAuthorityScore}/100`);
-
-      let aiAnalysis = null;
-      if (this.aiHelper) {
-        try {
-          console.log('[TECHNICAL-CHECKER] Requesting AI analysis for domain authority');
-          aiAnalysis = await this.aiHelper.analyze({
-            type: 'domain_authority',
-            context: 'Evaluating domain age, SSL certificate validity, and overall domain authority score',
-            metrics,
-            html: null
-          });
-          console.log(`[TECHNICAL-CHECKER] ✓ Domain authority analysis complete - Score: ${aiAnalysis?.score || 'N/A'}`);
-        } catch (error) {
-          console.error('[TECHNICAL-CHECKER] ✗ AI analysis error:', error.message);
-        }
-      }
-
       console.log('[TECHNICAL-CHECKER] ✓ Domain age check complete');
-      return {
-        ...metrics,
-        aiAnalysis
-      };
+      return metrics;
     } catch (error) {
       console.error(`[TECHNICAL-CHECKER] ✗ Domain age check error: ${error.message}`);
       return {
