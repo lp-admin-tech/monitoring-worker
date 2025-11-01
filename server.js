@@ -2,6 +2,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import { AdvancedWebsiteCrawler } from './index.js';
 import { createClient } from '@supabase/supabase-js';
+import { saveAuditRecord, checkDatabaseHealth } from './dbClient.js';
 
 dotenv.config();
 
@@ -172,15 +173,9 @@ app.get('/health', async (req, res) => {
 
     if (supabaseClient) {
       try {
-        const { error: testError } = await supabaseClient
-          .from('site_audits')
-          .select('count', { count: 'exact', head: true });
-
-        if (testError) {
-          databaseError = testError.message;
-        } else {
-          databaseConnected = true;
-        }
+        const healthResult = await checkDatabaseHealth();
+        databaseConnected = healthResult.connected;
+        databaseError = healthResult.connected ? null : healthResult.message;
       } catch (error) {
         databaseError = error instanceof Error ? error.message : 'Unknown error';
       }
@@ -305,19 +300,13 @@ app.post('/crawl', validateWorkerSecret, async (req, res) => {
           safeBrowsingCheck: result.safeBrowsingCheck
         });
 
-        const { error: dbError } = await supabaseClient
-          .from('site_audits')
-          .upsert(auditPayload, {
-            onConflict: 'publisher_id,domain'
-          });
-
-        if (dbError) {
-          console.error('[CRAWL-REQUEST] ❌ Database error:', dbError.message);
-          console.error('[CRAWL-REQUEST] Error details:', dbError);
-          dbSaveError = dbError.message;
-        } else {
+        const saveResult = await saveAuditRecord(auditPayload);
+        if (saveResult.success) {
           console.log(`[CRAWL-REQUEST] ✓ Successfully saved results for publisher ${publisherId}`);
           dbSaveSuccess = true;
+        } else {
+          console.error('[CRAWL-REQUEST] ❌ Database error:', saveResult.error);
+          dbSaveError = saveResult.error;
         }
       }
     } else if (result.success && !publisherId) {
@@ -491,19 +480,13 @@ app.post('/audit', validateWorkerSecret, async (req, res) => {
           safeBrowsingCheck: result.safeBrowsingCheck
         });
 
-        const { error: dbError } = await supabaseClient
-          .from('site_audits')
-          .upsert(auditPayload, {
-            onConflict: 'publisher_id,domain'
-          });
-
-        if (dbError) {
-          console.error('[AUDIT] ❌ Database error:', dbError.message);
-          console.error('[AUDIT] Error details:', dbError);
-          dbSaveError = dbError.message;
-        } else {
+        const saveResult = await saveAuditRecord(auditPayload);
+        if (saveResult.success) {
           console.log(`[AUDIT] ✓ Successfully saved results for publisher ${publisherId}`);
           dbSaveSuccess = true;
+        } else {
+          console.error('[AUDIT] ❌ Database error:', saveResult.error);
+          dbSaveError = saveResult.error;
         }
       }
     }
@@ -640,20 +623,15 @@ app.post('/audit-batch', validateWorkerSecret, async (req, res) => {
                                    result.safeBrowsingCheck?.isSafe === false ? 'unsafe' : 'not_checked',
             safe_browsing_threats: result.safeBrowsingCheck?.threats || []
           };
-          const { error: dbError } = await supabaseClient
-            .from('site_audits')
-            .upsert(auditPayload, {
-              onConflict: 'publisher_id,domain'
-            });
-
-          if (dbError) {
-            console.error(`[AUDIT-BATCH] ❌ Database error for publisher ${publisher.id}:`, dbError.message);
-            dbSaveError = dbError.message;
-            dbFailureCount++;
-          } else {
+          const saveResult = await saveAuditRecord(auditPayload);
+          if (saveResult.success) {
             console.log(`[AUDIT-BATCH] ✓ Successfully saved results for publisher ${publisher.id}`);
             dbSaveSuccess = true;
             dbSuccessCount++;
+          } else {
+            console.error(`[AUDIT-BATCH] ❌ Database error for publisher ${publisher.id}:`, saveResult.error);
+            dbSaveError = saveResult.error;
+            dbFailureCount++;
           }
         } else if (result.success && !supabaseClient) {
           console.warn(`[AUDIT-BATCH] ⚠ Supabase not configured - skipping database save for publisher ${publisher.id}`);
@@ -812,20 +790,15 @@ app.get('/audit-all', validateWorkerSecret, async (req, res) => {
                                    result.safeBrowsingCheck?.isSafe === false ? 'unsafe' : 'not_checked',
             safe_browsing_threats: result.safeBrowsingCheck?.threats || []
           };
-          const { error: dbError } = await supabaseClient
-            .from('site_audits')
-            .upsert(auditPayload, {
-              onConflict: 'publisher_id,domain'
-            });
-
-          if (dbError) {
-            console.error(`[AUDIT-ALL] ❌ Database error for publisher ${publisher.id}:`, dbError.message);
-            dbSaveError = dbError.message;
-            dbFailureCount++;
-          } else {
+          const saveResult = await saveAuditRecord(auditPayload);
+          if (saveResult.success) {
             console.log(`[AUDIT-ALL] ✓ Successfully saved results for publisher ${publisher.id}`);
             dbSaveSuccess = true;
             dbSuccessCount++;
+          } else {
+            console.error(`[AUDIT-ALL] ❌ Database error for publisher ${publisher.id}:`, saveResult.error);
+            dbSaveError = saveResult.error;
+            dbFailureCount++;
           }
         }
 
