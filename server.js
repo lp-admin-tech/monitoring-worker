@@ -304,19 +304,24 @@ app.post('/crawl', validateWorkerSecret, async (req, res) => {
           safeBrowsingCheck: result.safeBrowsingCheck
         });
 
-        const { error: dbError } = await supabaseClient
+        const { data: dbData, error: dbError } = await supabaseClient
           .from('site_audits')
           .upsert(auditPayload, {
-            onConflict: 'publisher_id,domain'
-          });
+            onConflict: 'publisher_id'
+          })
+          .select();
 
         if (dbError) {
           console.error('[CRAWL-REQUEST] ❌ Database error:', dbError.message);
           console.error('[CRAWL-REQUEST] Error details:', dbError);
           dbSaveError = dbError.message;
-        } else {
+        } else if (dbData && dbData.length > 0) {
           console.log(`[CRAWL-REQUEST] ✓ Successfully saved results for publisher ${publisherId}`);
+          console.log(`[CRAWL-REQUEST] Database confirmed save with ID: ${dbData[0].id}`);
           dbSaveSuccess = true;
+        } else {
+          console.warn(`[CRAWL-REQUEST] ⚠ Upsert succeeded but no data returned - potential issue`);
+          dbSaveError = 'Upsert succeeded but no data returned';
         }
       }
     } else if (result.success && !publisherId) {
@@ -489,19 +494,24 @@ app.post('/audit', validateWorkerSecret, async (req, res) => {
           safeBrowsingCheck: result.safeBrowsingCheck
         });
 
-        const { error: dbError } = await supabaseClient
+        const { data: dbData, error: dbError } = await supabaseClient
           .from('site_audits')
           .upsert(auditPayload, {
-            onConflict: 'publisher_id,domain'
-          });
+            onConflict: 'publisher_id'
+          })
+          .select();
 
         if (dbError) {
           console.error('[AUDIT] ❌ Database error:', dbError.message);
           console.error('[AUDIT] Error details:', dbError);
           dbSaveError = dbError.message;
-        } else {
+        } else if (dbData && dbData.length > 0) {
           console.log(`[AUDIT] ✓ Successfully saved results for publisher ${publisherId}`);
+          console.log(`[AUDIT] Database confirmed save with ID: ${dbData[0].id}`);
           dbSaveSuccess = true;
+        } else {
+          console.warn(`[AUDIT] ⚠ Upsert succeeded but no data returned - potential issue`);
+          dbSaveError = 'Upsert succeeded but no data returned';
         }
       }
     }
@@ -637,20 +647,26 @@ app.post('/audit-batch', validateWorkerSecret, async (req, res) => {
                                    result.safeBrowsingCheck?.isSafe === false ? 'unsafe' : 'not_checked',
             safe_browsing_threats: result.safeBrowsingCheck?.threats || []
           };
-          const { error: dbError } = await supabaseClient
-            .from('site_audits')
-            .upsert(auditPayload, {
-              onConflict: 'publisher_id,domain'
-            });
+          const { data: dbData, error: dbError } = await supabaseClient
+          .from('site_audits')
+          .upsert(auditPayload, {
+            onConflict: 'publisher_id'
+          })
+          .select();
 
           if (dbError) {
             console.error(`[AUDIT-BATCH] ❌ Database error for publisher ${publisher.id}:`, dbError.message);
             dbSaveError = dbError.message;
             dbFailureCount++;
-          } else {
+          } else if (dbData && dbData.length > 0) {
             console.log(`[AUDIT-BATCH] ✓ Successfully saved results for publisher ${publisher.id}`);
+            console.log(`[AUDIT-BATCH] Database confirmed save with ID: ${dbData[0].id}`);
             dbSaveSuccess = true;
             dbSuccessCount++;
+          } else {
+            console.warn(`[AUDIT-BATCH] ⚠ Upsert succeeded but no data returned - potential issue`);
+            dbSaveError = 'Upsert succeeded but no data returned';
+            dbFailureCount++;
           }
         } else if (result.success && !supabaseClient) {
           console.warn(`[AUDIT-BATCH] ⚠ Supabase not configured - skipping database save for publisher ${publisher.id}`);
@@ -808,20 +824,26 @@ app.get('/audit-all', validateWorkerSecret, async (req, res) => {
                                    result.safeBrowsingCheck?.isSafe === false ? 'unsafe' : 'not_checked',
             safe_browsing_threats: result.safeBrowsingCheck?.threats || []
           };
-          const { error: dbError } = await supabaseClient
-            .from('site_audits')
-            .upsert(auditPayload, {
-              onConflict: 'publisher_id,domain'
-            });
+          const { data: dbData, error: dbError } = await supabaseClient
+          .from('site_audits')
+          .upsert(auditPayload, {
+            onConflict: 'publisher_id'
+          })
+          .select();
 
           if (dbError) {
             console.error(`[AUDIT-ALL] ❌ Database error for publisher ${publisher.id}:`, dbError.message);
             dbSaveError = dbError.message;
             dbFailureCount++;
-          } else {
+          } else if (dbData && dbData.length > 0) {
             console.log(`[AUDIT-ALL] ✓ Successfully saved results for publisher ${publisher.id}`);
+            console.log(`[AUDIT-ALL] Database confirmed save with ID: ${dbData[0].id}`);
             dbSaveSuccess = true;
             dbSuccessCount++;
+          } else {
+            console.warn(`[AUDIT-ALL] ⚠ Upsert succeeded but no data returned - potential issue`);
+            dbSaveError = 'Upsert succeeded but no data returned';
+            dbFailureCount++;
           }
         }
 
