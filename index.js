@@ -1045,11 +1045,128 @@ export class AdvancedWebsiteCrawler {
     }
   }
 
+  async resolveDomain(siteName, publisherDomain) {
+    console.log(`[DOMAIN-RESOLVE] Attempting to resolve site_name: ${siteName}`);
+
+    if (!siteName || siteName.toLowerCase() === 'unknown') {
+      console.log(`[DOMAIN-RESOLVE] Skipping invalid site_name "${siteName}", using publisher domain`);
+      return publisherDomain;
+    }
+
+    let domain = siteName;
+    if (!domain.startsWith('http://') && !domain.startsWith('https://')) {
+      domain = `https://${domain}`;
+    }
+
+    try {
+      const url = new URL(domain);
+      console.log(`[DOMAIN-RESOLVE] ✓ Successfully resolved: ${url.hostname}`);
+      return url.hostname;
+    } catch (error) {
+      console.log(`[DOMAIN-RESOLVE] ✗ Failed to parse site_name: ${error.message}, using as-is`);
+      return siteName;
+    }
+  }
+
+  async crawlPublisherSites(publisher, siteNames = []) {
+    if (!publisher || typeof publisher !== 'object') {
+      console.error('[CRAWL-PUBLISHER-SITES] Invalid publisher object');
+      return {
+        success: false,
+        error: 'Invalid publisher object',
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    const publisherId = publisher.id || publisher.publisher_id;
+    const publisherDomain = publisher.domain || publisher.site_name;
+
+    if (!publisherId) {
+      console.error('[CRAWL-PUBLISHER-SITES] Publisher missing id/publisher_id');
+      return {
+        success: false,
+        error: 'Publisher missing required id field',
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    const sitesToAudit = Array.isArray(siteNames) && siteNames.length > 0
+      ? siteNames
+      : [publisherDomain];
+
+    console.log(`\n[CRAWL-PUBLISHER-SITES] Starting multi-site crawl for publisher ${publisherId}`);
+    console.log(`[CRAWL-PUBLISHER-SITES] Sites to audit: ${sitesToAudit.length}`);
+    sitesToAudit.forEach((site, index) => {
+      console.log(`[CRAWL-PUBLISHER-SITES]   ${index + 1}. ${site}`);
+    });
+
+    const sites = [];
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (let i = 0; i < sitesToAudit.length; i++) {
+      const siteName = sitesToAudit[i];
+      console.log(`\n[CRAWL-PUBLISHER-SITES] Processing site ${i + 1}/${sitesToAudit.length}: ${siteName}`);
+
+      try {
+        const resolvedDomain = await this.resolveDomain(siteName, publisherDomain);
+
+        console.log(`[CRAWL-PUBLISHER-SITES] Crawling domain: ${resolvedDomain}`);
+        const crawlResult = await this.crawlSite(resolvedDomain);
+
+        sites.push({
+          siteName,
+          domain: resolvedDomain,
+          crawlResult,
+          status: crawlResult.success ? 'success' : 'failed',
+          error: crawlResult.error || null
+        });
+
+        if (crawlResult.success) {
+          successCount++;
+          console.log(`[CRAWL-PUBLISHER-SITES] ✓ Successfully crawled: ${siteName}`);
+        } else {
+          failureCount++;
+          console.log(`[CRAWL-PUBLISHER-SITES] ✗ Failed to crawl: ${siteName} - ${crawlResult.error}`);
+        }
+      } catch (error) {
+        failureCount++;
+        console.error(`[CRAWL-PUBLISHER-SITES] ✗ Exception while crawling ${siteName}:`, error.message);
+        sites.push({
+          siteName,
+          domain: siteName,
+          crawlResult: null,
+          status: 'failed',
+          error: error.message
+        });
+      }
+    }
+
+    const result = {
+      success: successCount > 0,
+      publisher_id: publisherId,
+      sitesAudited: sitesToAudit.length,
+      sites,
+      summary: {
+        totalAttempted: sitesToAudit.length,
+        successCount,
+        failureCount
+      },
+      timestamp: new Date().toISOString()
+    };
+
+    console.log(`\n[CRAWL-PUBLISHER-SITES] ✓ Completed multi-site crawl`);
+    console.log(`[CRAWL-PUBLISHER-SITES] Results: ${successCount} succeeded, ${failureCount} failed`);
+    console.log(`[CRAWL-PUBLISHER-SITES] ====== Publisher ${publisherId} audit finished ======\n`);
+
+    return result;
+  }
+
   async crawlMultipleSites(domains) {
     console.log(`\n[MULTI-CRAWL] Starting crawl for ${domains.length} domains with concurrency ${this.concurrency}`);
     const results = [];
     const chunks = [];
-    
+
     for (let i = 0; i < domains.length; i += this.concurrency) {
       chunks.push(domains.slice(i, i + this.concurrency));
     }
@@ -1060,7 +1177,7 @@ export class AdvancedWebsiteCrawler {
       const chunkResults = await Promise.allSettled(
         chunk.map(domain => this.crawlSite(domain))
       );
-      
+
       chunkResults.forEach((result, index) => {
         results.push({
           domain: chunk[index],

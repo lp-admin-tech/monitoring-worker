@@ -21,11 +21,11 @@ function createRetryDelay(attempt) {
  * Safe save or update an audit record with automatic conflict resolution.
  * @param {object} record - The audit record to save
  * @param {string} table - Target Supabase table (default: 'site_audits')
- * @param {object} options - Additional options
+ * @param {object} options - Additional options including siteName
  * @returns {Promise<{success: boolean, data: object|null, error: string|null}>}
  */
 export async function saveAuditRecord(record, table = 'site_audits', options = {}) {
-  const { retryCount = 0 } = options;
+  const { retryCount = 0, siteName = 'primary' } = options;
 
   try {
     if (!record.publisher_id || !record.domain) {
@@ -37,12 +37,17 @@ export async function saveAuditRecord(record, table = 'site_audits', options = {
       };
     }
 
-    console.log(`[DB-CLIENT] Attempting to save record for domain: ${record.domain} (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+    const recordWithSiteName = {
+      ...record,
+      site_name: siteName
+    };
+
+    console.log(`[DB-CLIENT] Attempting to save record for domain: ${record.domain}, site_name: ${siteName} (attempt ${retryCount + 1}/${MAX_RETRIES})`);
 
     const { data, error } = await supabase
       .from(table)
-      .upsert(record, {
-        onConflict: 'publisher_id,domain'
+      .upsert(recordWithSiteName, {
+        onConflict: 'publisher_id,site_name'
       })
       .select();
 
@@ -54,13 +59,13 @@ export async function saveAuditRecord(record, table = 'site_audits', options = {
       );
 
       if (isDuplicateError && retryCount === 0) {
-        console.warn(`[DB-CLIENT] Duplicate key detected for ${record.domain}, attempting update instead...`);
+        console.warn(`[DB-CLIENT] Duplicate key detected for ${record.domain} (${siteName}), attempting update instead...`);
 
         const { data: updateData, error: updateError } = await supabase
           .from(table)
-          .update(record)
+          .update(recordWithSiteName)
           .eq('publisher_id', record.publisher_id)
-          .eq('domain', record.domain)
+          .eq('site_name', siteName)
           .select();
 
         if (updateError) {
@@ -72,7 +77,7 @@ export async function saveAuditRecord(record, table = 'site_audits', options = {
           };
         }
 
-        console.log(`[DB-CLIENT] Successfully updated existing record for ${record.domain}`);
+        console.log(`[DB-CLIENT] Successfully updated existing record for ${record.domain} (${siteName})`);
         return {
           success: true,
           data: updateData && updateData.length > 0 ? updateData[0] : null,
@@ -85,7 +90,7 @@ export async function saveAuditRecord(record, table = 'site_audits', options = {
         console.warn(`[DB-CLIENT] Transient error for ${record.domain}, retrying in ${delayMs}ms: ${error.message}`);
         await new Promise(resolve => setTimeout(resolve, delayMs));
 
-        return saveAuditRecord(record, table, { retryCount: retryCount + 1 });
+        return saveAuditRecord(record, table, { ...options, retryCount: retryCount + 1 });
       }
 
       console.error(`[DB-CLIENT] Upsert failed for ${record.domain}:`, error.message);
@@ -97,7 +102,7 @@ export async function saveAuditRecord(record, table = 'site_audits', options = {
     }
 
     if (data && data.length > 0) {
-      console.log(`[DB-CLIENT] Successfully saved record for ${record.domain}`);
+      console.log(`[DB-CLIENT] Successfully saved record for ${record.domain} (${siteName})`);
       return {
         success: true,
         data: data[0],
@@ -105,7 +110,7 @@ export async function saveAuditRecord(record, table = 'site_audits', options = {
       };
     }
 
-    console.log(`[DB-CLIENT] Record saved (no return data) for ${record.domain}`);
+    console.log(`[DB-CLIENT] Record saved (no return data) for ${record.domain} (${siteName})`);
     return {
       success: true,
       data: null,
@@ -120,7 +125,7 @@ export async function saveAuditRecord(record, table = 'site_audits', options = {
       console.warn(`[DB-CLIENT] Retrying after unexpected error in ${delayMs}ms`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
 
-      return saveAuditRecord(record, table, { retryCount: retryCount + 1 });
+      return saveAuditRecord(record, table, { ...options, retryCount: retryCount + 1 });
     }
 
     return {
@@ -205,4 +210,148 @@ export async function checkDatabaseHealth() {
   }
 }
 
-export default { supabase, saveAuditRecord, batchSaveAuditRecords, checkDatabaseHealth };
+/**
+ * Get all unique site_names for a publisher from reports_dimensional table.
+ * @param {string} publisherId - UUID of the publisher
+ * @returns {Promise<{success: boolean, data: array, error: string|null}>}
+ */
+export async function getPublisherSiteNames(publisherId) {
+  try {
+    if (!publisherId) {
+      console.warn('[DB-CLIENT] Validation failed: missing publisherId');
+      return {
+        success: false,
+        data: [],
+        error: 'Missing required field: publisherId'
+      };
+    }
+
+    console.log(`[DB-CLIENT] Fetching unique site_names for publisher: ${publisherId}`);
+
+    const { data, error } = await supabase
+      .rpc('get_publisher_site_names', { p_publisher_id: publisherId });
+
+    if (error) {
+      console.error(`[DB-CLIENT] Failed to fetch site_names for publisher ${publisherId}:`, error.message);
+      return {
+        success: false,
+        data: [],
+        error: `Failed to fetch site_names: ${error.message}`
+      };
+    }
+
+    const siteNames = data || [];
+    console.log(`[DB-CLIENT] Successfully fetched ${siteNames.length} site_names for publisher ${publisherId}`);
+
+    return {
+      success: true,
+      data: siteNames.map(item => item.site_name),
+      error: null
+    };
+  } catch (err) {
+    console.error(`[DB-CLIENT] Unexpected error fetching site_names:`, err.message);
+    return {
+      success: false,
+      data: [],
+      error: `Unexpected error: ${err.message}`
+    };
+  }
+}
+
+/**
+ * Filter out invalid/null site_names before batch operations.
+ * @param {array} siteNames - Array of site_names to validate
+ * @returns {array} - Filtered array of valid site_names
+ */
+export function filterValidSiteNames(siteNames) {
+  if (!Array.isArray(siteNames)) {
+    return [];
+  }
+
+  return siteNames
+    .filter(name => name && typeof name === 'string' && name.trim().length > 0)
+    .map(name => name.trim())
+    .filter((name, index, arr) => arr.indexOf(name) === index); // Remove duplicates
+}
+
+/**
+ * Transform "Unknown" site_name to publisher's primary domain.
+ * @param {string} siteName - The site_name value
+ * @param {string} publisherDomain - The publisher's primary domain (fallback)
+ * @returns {string} - Transformed site_name
+ */
+export function transformUnknownSiteName(siteName, publisherDomain = 'primary') {
+  if (!siteName || siteName === 'Unknown' || siteName.toLowerCase() === 'unknown') {
+    return publisherDomain || 'primary';
+  }
+  return siteName;
+}
+
+/**
+ * Batch save multiple audit records with site_name attribution.
+ * @param {array} records - Array of audit records with site_name
+ * @param {object} options - Configuration options
+ * @returns {Promise<{successful: number, failed: number, errors: array}>}
+ */
+export async function saveMultiSiteAuditRecords(records, options = {}) {
+  const { table = 'site_audits' } = options;
+
+  if (!Array.isArray(records) || records.length === 0) {
+    console.warn('[DB-CLIENT] Batch multi-site save called with empty or invalid records array');
+    return { successful: 0, failed: 0, errors: [] };
+  }
+
+  console.log(`[DB-CLIENT] Starting batch multi-site save for ${records.length} records`);
+
+  const results = {
+    successful: 0,
+    failed: 0,
+    errors: []
+  };
+
+  const validatedRecords = records.filter(record => {
+    if (!record.publisher_id || !record.domain) {
+      results.failed++;
+      results.errors.push({
+        domain: record.domain || 'unknown',
+        site_name: record.site_name || 'unknown',
+        error: 'Missing required fields: publisher_id and domain'
+      });
+      return false;
+    }
+    return true;
+  });
+
+  for (const record of validatedRecords) {
+    const siteName = record.site_name || 'primary';
+    const result = await saveAuditRecord(record, table, { siteName });
+
+    if (result.success) {
+      results.successful++;
+    } else {
+      results.failed++;
+      results.errors.push({
+        domain: record.domain,
+        site_name: siteName,
+        error: result.error
+      });
+    }
+  }
+
+  console.log(
+    `[DB-CLIENT] Batch multi-site save completed: ${results.successful} successful, ${results.failed} failed`
+  );
+
+  return results;
+}
+
+export default {
+  supabase,
+  saveAuditRecord,
+  batchSaveAuditRecords,
+  saveMultiSiteAuditRecords,
+  getPublisherSiteNames,
+  filterValidSiteNames,
+  transformUnknownSiteName,
+  checkDatabaseHealth
+};
