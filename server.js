@@ -1005,6 +1005,240 @@ app.get('/audit-all', validateWorkerSecret, async (req, res) => {
   }
 });
 
+app.post('/audit-batch-sites', validateWorkerSecret, async (req, res) => {
+  const { publisherId, domain, site_names } = req.body;
+
+  if (!publisherId) {
+    return res.status(400).json({ error: 'publisherId is required' });
+  }
+
+  if (!domain) {
+    return res.status(400).json({ error: 'Domain is required' });
+  }
+
+  if (!Array.isArray(site_names) || site_names.length === 0) {
+    return res.status(400).json({ error: 'site_names array is required and must not be empty' });
+  }
+
+  res.setTimeout(REQUEST_TIMEOUT);
+
+  try {
+    const crawlerInstance = initializeCrawler();
+    const supabaseClient = initializeSupabase();
+
+    const sitesToAudit = site_names.filter(name => name && typeof name === 'string' && name.trim().length > 0);
+
+    if (sitesToAudit.length === 0) {
+      return res.status(400).json({ error: 'No valid site names provided' });
+    }
+
+    console.log(`[AUDIT-BATCH-SITES] Batch site audit request for publisherId: ${publisherId}, auditing ${sitesToAudit.length} site(s): ${sitesToAudit.join(', ')}`);
+
+    let cleanupSuccess = false;
+    let cleanupMessage = '';
+
+    if (supabaseClient && publisherId) {
+      try {
+        console.log(`[AUDIT-BATCH-SITES] Triggering cleanup of old audit data for publisher ${publisherId}`);
+        const { data: cleanupResult, error: cleanupError } = await supabaseClient.rpc('trigger_audit_cleanup', {
+          p_publisher_id: publisherId,
+          p_all_publishers: false
+        });
+        if (cleanupError) {
+          console.warn(`[AUDIT-BATCH-SITES] Cleanup warning:`, cleanupError.message);
+        } else if (cleanupResult && cleanupResult.length > 0) {
+          cleanupSuccess = true;
+          cleanupMessage = cleanupResult[0].message;
+          console.log(`[AUDIT-BATCH-SITES] Cleanup completed:`, cleanupMessage);
+        }
+      } catch (cleanupErr) {
+        console.warn(`[AUDIT-BATCH-SITES] Cleanup exception:`, cleanupErr.message);
+      }
+    }
+
+    const auditResults = [];
+
+    for (const siteName of sitesToAudit) {
+      try {
+        const resolvedDomain = resolveSiteNameToDomain(siteName, domain);
+        console.log(`[AUDIT-BATCH-SITES] Starting audit for site_name: ${siteName}, resolved domain: ${resolvedDomain}`);
+        const result = await crawlerInstance.crawlSite(resolvedDomain);
+
+        let dbSaveSuccess = false;
+        let dbSaveError = null;
+
+        if (result.success && publisherId) {
+          if (!supabaseClient) {
+            console.warn(`[AUDIT-BATCH-SITES] ⚠ Supabase not configured - skipping database save for publisher ${publisherId}`);
+            dbSaveError = 'Supabase client not available. Check SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables.';
+          } else {
+            console.log(`[AUDIT-BATCH-SITES] Saving results to database for publisher ${publisherId} with site_name: ${siteName}`);
+
+            const auditPayload = {
+              publisher_id: publisherId,
+              domain: resolvedDomain,
+              site_url: resolvedDomain,
+              site_name: siteName,
+              last_crawled: new Date().toISOString(),
+              scanned_at: new Date().toISOString(),
+              is_online: true,
+              seo_score: result.seoAnalysis?.score || 0,
+              security_score: result.securityAnalysis?.score || 0,
+              performance_score: result.performanceAnalysis?.score || 0,
+              accessibility_score: result.accessibilityData?.score || 0,
+              mobile_score: 0,
+              overall_score: result.lighthouseScore?.overall || 0,
+              lighthouse_data: result.lighthouseScore || {},
+              seo_data: result.seoAnalysis || {},
+              security_data: result.securityAnalysis || {},
+              performance_data: result.performanceAnalysis || {},
+              accessibility_data: result.accessibilityData || {},
+              mobile_data: {},
+              technologies: result.technologies || {},
+              screenshot: result.screenshot,
+              performance_total_requests: result.requestStats?.total || 0,
+              performance_third_party_requests: result.requestStats?.thirdParty || 0,
+              performance_transfer_size: result.requestStats?.totalSize || 0,
+              performance_script_requests: result.requestStats?.scripts || 0,
+              accessibility_issues_count: result.accessibilityData?.issueCount || 0,
+              accessibility_missing_alt_tags: result.accessibilityData?.issues?.filter(i => i.type === 'missing-alt').length || 0,
+              content_length: result.contentAnalysis?.contentLength || 0,
+              content_uniqueness: result.contentAnalysis?.contentUniqueness || 0,
+              has_privacy_policy: result.contentAnalysis?.hasPrivacyPolicy || false,
+              has_contact_page: result.contentAnalysis?.hasContactPage || false,
+              total_images: result.imageAnalysis?.totalImages || 0,
+              has_featured_images: result.imageAnalysis?.hasFeaturedImages || false,
+              total_ads: result.adDensityAnalysis?.totalAds || 0,
+              ads_above_fold: result.adDensityAnalysis?.adsAboveFold || 0,
+              ads_in_content: result.adDensityAnalysis?.adsInContent || 0,
+              ads_sidebar: result.adDensityAnalysis?.adsSidebar || 0,
+              sticky_ads_count: result.adDensityAnalysis?.stickyAds || 0,
+              auto_refresh_ads: result.adDensityAnalysis?.autoRefreshAds > 0 || false,
+              ad_density: result.adDensityAnalysis?.adDensity || 0,
+              ad_to_content_ratio: result.adDensityAnalysis?.adToContentRatio || 0,
+              ad_networks_detected: result.adNetworksAnalysis?.networks || [],
+              ad_networks_count: result.adNetworksAnalysis?.count || 0,
+              has_google_ads: result.adNetworksAnalysis?.hasGoogleAds || false,
+              has_multiple_ad_networks: result.adNetworksAnalysis?.hasMultipleNetworks || false,
+              layout_score: result.layoutAnalysis?.score || 0,
+              layout_menu_position: result.layoutAnalysis?.menuPosition || null,
+              layout_content_above_fold: result.layoutAnalysis?.contentAboveFold || false,
+              layout_content_before_ads: result.layoutAnalysis?.contentBeforeAds || false,
+              layout_menu_accessible: result.layoutAnalysis?.menuAccessible || false,
+              layout_overlapping_ads: result.layoutAnalysis?.overlappingAds || false,
+              layout_issues: result.layoutAnalysis?.issues || [],
+              safe_browsing_status: result.safeBrowsingCheck?.isSafe === true ? 'safe' :
+                                     result.safeBrowsingCheck?.isSafe === false ? 'unsafe' : 'not_checked',
+              safe_browsing_threats: result.safeBrowsingCheck?.threats || []
+            };
+
+            console.log(`[AUDIT-BATCH-SITES] Analyzer outputs:`, {
+              contentAnalysis: result.contentAnalysis,
+              imageAnalysis: result.imageAnalysis,
+              adDensityAnalysis: result.adDensityAnalysis,
+              safeBrowsingCheck: result.safeBrowsingCheck
+            });
+
+            const saveResult = await saveAuditRecord(auditPayload);
+            if (saveResult.success) {
+              console.log(`[AUDIT-BATCH-SITES] ✓ Successfully saved results for publisher ${publisherId} with site_name: ${siteName}`);
+              dbSaveSuccess = true;
+            } else {
+              console.error('[AUDIT-BATCH-SITES] ❌ Database error:', saveResult.error);
+              dbSaveError = saveResult.error;
+            }
+          }
+        }
+
+        auditResults.push({
+          site_name: siteName,
+          success: result.success,
+          database: {
+            saved: dbSaveSuccess,
+            error: dbSaveError
+          }
+        });
+
+        console.log(`[AUDIT-BATCH-SITES] ✓ Completed audit for ${domain} with site_name: ${siteName}`);
+      } catch (siteError) {
+        console.error(`[AUDIT-BATCH-SITES] Error auditing site_name ${siteName}:`, siteError.message);
+        auditResults.push({
+          site_name: siteName,
+          success: false,
+          error: siteError.message,
+          database: {
+            saved: false,
+            error: siteError.message
+          }
+        });
+      }
+    }
+
+    let mfaScorerTriggered = false;
+    let mfaScorerError = null;
+
+    if (supabaseClient && publisherId) {
+      try {
+        console.log(`[AUDIT-BATCH-SITES] Triggering unified MFA scorer for publisher ${publisherId}`);
+        const supabaseUrl = process.env.SUPABASE_URL;
+        const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+
+        if (supabaseUrl && supabaseServiceKey) {
+          const mfaScorerUrl = `${supabaseUrl}/functions/v1/unified-mfa-site-audit-analyzer`;
+
+          const mfaResponse = await fetch(mfaScorerUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              publisherId: publisherId,
+              trigger_source: 'audit_batch_sites_worker',
+            }),
+          });
+
+          if (mfaResponse.ok) {
+            console.log(`[AUDIT-BATCH-SITES] ✓ Successfully triggered MFA scorer for publisher ${publisherId}`);
+            mfaScorerTriggered = true;
+          } else {
+            const errorText = await mfaResponse.text();
+            mfaScorerError = `Failed to trigger MFA scorer: ${mfaResponse.status} - ${errorText}`;
+            console.warn(`[AUDIT-BATCH-SITES] Failed to trigger MFA scorer for publisher ${publisherId}:`, mfaScorerError);
+          }
+        }
+      } catch (mfaErr) {
+        mfaScorerError = mfaErr instanceof Error ? mfaErr.message : 'Unknown error triggering MFA scorer';
+        console.error(`[AUDIT-BATCH-SITES] Error triggering MFA scorer for publisher ${publisherId}:`, mfaScorerError);
+      }
+    }
+
+    console.log(`[AUDIT-BATCH-SITES] ✓ Successfully completed batch site audit for ${domain} with ${sitesToAudit.length} site(s)`);
+    res.json({
+      success: true,
+      domain,
+      publisherId,
+      sitesAudited: sitesToAudit.length,
+      results: auditResults,
+      cleanup: {
+        executed: cleanupSuccess,
+        message: cleanupMessage
+      },
+      mfaScorer: {
+        triggered: mfaScorerTriggered,
+        error: mfaScorerError
+      }
+    });
+  } catch (error) {
+    console.error(`[AUDIT-BATCH-SITES] Error:`, error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      publisherId: req.body.publisherId
+    });
+  }
+});
+
 app.post('/clear-cache', validateWorkerSecret, (req, res) => {
   console.log('[CACHE-CLEAR] Clearing crawler cache...');
 
