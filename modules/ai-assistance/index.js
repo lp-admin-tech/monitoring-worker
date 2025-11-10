@@ -21,9 +21,22 @@ class AIAssistanceModule {
       model: envConfig?.openRouter?.model || process.env.OPENROUTER_MODEL || 'alibaba/tongyi-deepresearch-30b-a3b:free',
     };
 
-    this.apiKey = this.aiModel.apiKey || this.openRouter.apiKey;
-    this.model = this.aiModel.model || this.openRouter.model;
-    this.provider = this.aiModel.provider;
+    const hasAlibabaKey = !!this.aiModel.apiKey;
+    const hasOpenRouterKey = !!this.openRouter.apiKey;
+
+    if (hasOpenRouterKey && !hasAlibabaKey) {
+      this.apiKey = this.openRouter.apiKey;
+      this.model = this.openRouter.model;
+      this.provider = 'openrouter';
+    } else if (hasOpenRouterKey && hasAlibabaKey) {
+      this.apiKey = this.openRouter.apiKey;
+      this.model = this.openRouter.model;
+      this.provider = 'openrouter';
+    } else {
+      this.apiKey = this.aiModel.apiKey;
+      this.model = this.aiModel.model;
+      this.provider = this.aiModel.provider;
+    }
   }
 
   async generateComprehensiveReport(auditData, scorerOutput, policyViolations = []) {

@@ -32,20 +32,16 @@ class Logger {
 
     try {
       const logData = {
-        user_id: entry.userId,
-        action: entry.level,
-        entity_type: entry.moduleName || 'worker',
         timestamp: entry.timestamp,
-        details: {
-          message: entry.message,
-          error: entry.error,
-          ...entry.context,
-        },
+        level: entry.level,
+        message: entry.message,
         context: {
-          level: entry.level,
-          message: entry.message,
+          moduleName: entry.moduleName,
           ...entry.context,
         },
+        error: entry.error || null,
+        user_id: entry.userId || null,
+        publisher_id: entry.publisherId || null,
       };
 
       supabase.insert('audit_logs', logData).catch(err => {
