@@ -1,0 +1,237 @@
+{
+  "policies": [
+    {
+      "id": "no_adult_content",
+      "name": "No Adult Content",
+      "provider": "Google",
+      "severity": "critical",
+      "description": "Prohibited adult, pornographic, or sexually explicit content",
+      "detectionLogic": {
+        "method": "category_and_keyword",
+        "categories": ["adult"],
+        "components": ["category-detector", "restricted-keywords"]
+      },
+      "jurisdictions": ["global"],
+      "relatedPolicies": ["ias_brand_safety"],
+      "complianceFrameworks": ["Google AdSense", "Google AdMob", "Google Ad Network"]
+    },
+    {
+      "id": "no_gambling",
+      "name": "No Gambling Content",
+      "provider": "Google",
+      "severity": "critical",
+      "description": "Prohibited gambling, betting, casino, poker, and related content",
+      "detectionLogic": {
+        "method": "category_and_keyword_and_restricted",
+        "categories": ["gambling"],
+        "restrictedKeywords": ["best casino sites", "free casino", "play for real money"],
+        "components": ["category-detector", "restricted-keywords"]
+      },
+      "jurisdictions": ["global", "US", "EU"],
+      "relatedPolicies": ["ias_brand_safety"],
+      "complianceFrameworks": ["Google AdSense", "FTC"]
+    },
+    {
+      "id": "no_malware",
+      "name": "No Malware or Unsafe Software",
+      "provider": "Google",
+      "severity": "critical",
+      "description": "Prohibited malware, unsafe software, pirated content, and technical exploits",
+      "detectionLogic": {
+        "method": "keyword_and_technical",
+        "restrictedKeywords": ["crack", "keygen", "malware", "virus"],
+        "technicalChecks": ["suspicious_redirects", "iframe_injection", "script_injection"],
+        "components": ["restricted-keywords"]
+      },
+      "jurisdictions": ["global"],
+      "relatedPolicies": [],
+      "complianceFrameworks": ["Google AdSense"]
+    },
+    {
+      "id": "no_deceptive_practices",
+      "name": "No Deceptive Practices",
+      "provider": "Google",
+      "severity": "high",
+      "description": "Prohibited deceptive practices, clickbait, ad blocking evasion, and misleading content",
+      "detectionLogic": {
+        "method": "keyword_and_restricted",
+        "restrictedKeywords": ["click ads to support", "click here to continue", "disable adblock"],
+        "clickbaitDetection": true,
+        "components": ["category-detector", "restricted-keywords"]
+      },
+      "jurisdictions": ["global"],
+      "relatedPolicies": [],
+      "complianceFrameworks": ["Google AdSense", "FTC"]
+    },
+    {
+      "id": "no_violent_content",
+      "name": "No Violent or Hateful Content",
+      "provider": "Google",
+      "severity": "high",
+      "description": "Prohibited violent, hateful, discriminatory, or extremist content",
+      "detectionLogic": {
+        "method": "category_and_keyword",
+        "categories": ["violence", "hate"],
+        "components": ["category-detector", "restricted-keywords"]
+      },
+      "jurisdictions": ["global"],
+      "relatedPolicies": ["ias_brand_safety"],
+      "complianceFrameworks": ["Google AdSense"]
+    },
+    {
+      "id": "coppa_compliance",
+      "name": "COPPA Compliance",
+      "provider": "Google",
+      "severity": "critical",
+      "description": "Children's Online Privacy Protection Act compliance for US sites targeting children under 13",
+      "detectionLogic": {
+        "method": "jurisdiction_and_category_and_technical",
+        "jurisdictions": ["US"],
+        "categories": ["children"],
+        "technicalChecks": ["third_party_tracking", "persistent_identifiers", "age_verification"],
+        "components": ["jurisdiction", "category-detector"]
+      },
+      "jurisdictions": ["US"],
+      "relatedPolicies": [],
+      "complianceFrameworks": ["COPPA", "FTC"]
+    },
+    {
+      "id": "gdpr_compliance",
+      "name": "GDPR Compliance",
+      "provider": "EU",
+      "severity": "high",
+      "description": "General Data Protection Regulation compliance for EU users",
+      "detectionLogic": {
+        "method": "jurisdiction_and_technical",
+        "jurisdictions": ["EU"],
+        "technicalChecks": ["cookie_consent_banner", "privacy_policy", "data_processing_agreement"],
+        "components": ["jurisdiction"]
+      },
+      "jurisdictions": ["EU"],
+      "relatedPolicies": [],
+      "complianceFrameworks": ["GDPR", "ePrivacy Directive"]
+    },
+    {
+      "id": "ccpa_compliance",
+      "name": "CCPA Compliance",
+      "provider": "California",
+      "severity": "high",
+      "description": "California Consumer Privacy Act compliance for California residents",
+      "detectionLogic": {
+        "method": "jurisdiction_and_technical",
+        "jurisdictions": ["US_CA"],
+        "technicalChecks": ["privacy_policy_accessible", "opt_out_mechanism", "data_sale_disclosure"],
+        "components": ["jurisdiction"]
+      },
+      "jurisdictions": ["US_CA"],
+      "relatedPolicies": [],
+      "complianceFrameworks": ["CCPA", "CPRA"]
+    },
+    {
+      "id": "ias_brand_safety",
+      "name": "IAS Brand Safety Standards",
+      "provider": "IAS",
+      "severity": "high",
+      "description": "Integral Ad Science brand safety standards for ad network compliance",
+      "detectionLogic": {
+        "method": "category_and_keyword",
+        "categories": ["adult", "gambling", "violence"],
+        "components": ["category-detector"]
+      },
+      "jurisdictions": ["global"],
+      "relatedPolicies": ["no_adult_content", "no_gambling", "no_violent_content"],
+      "complianceFrameworks": ["IAS", "MRC"]
+    },
+    {
+      "id": "ias_viewability",
+      "name": "IAS Viewability Standards",
+      "provider": "IAS",
+      "severity": "medium",
+      "description": "Integral Ad Science viewability standards for ad network compliance",
+      "detectionLogic": {
+        "method": "technical",
+        "technicalChecks": ["viewport_visibility", "page_load_time", "ad_placement_visibility"],
+        "components": []
+      },
+      "jurisdictions": ["global"],
+      "relatedPolicies": [],
+      "complianceFrameworks": ["IAS", "MRC"]
+    }
+  ],
+  "detectionComponents": {
+    "category-detector": {
+      "description": "NLP-based content categorization system",
+      "categories": ["adult", "gambling", "violence", "drugs", "weapons", "hate", "education", "health", "news", "finance", "technology"],
+      "confidenceThreshold": 0.5
+    },
+    "restricted-keywords": {
+      "description": "Pattern-based keyword matching for banned monetization phrases and prohibited content",
+      "keywords": [
+        "click ads to support",
+        "click ads to view content",
+        "disable adblock",
+        "best casino sites",
+        "free casino",
+        "crack",
+        "keygen",
+        "malware"
+      ]
+    },
+    "jurisdiction": {
+      "description": "Geographic jurisdiction detection via TLD, language, currency, and geolocation",
+      "signals": ["tld", "language", "currency", "geolocation", "cookie_consent", "privacy_indicators"]
+    }
+  },
+  "violationSeverity": {
+    "critical": {
+      "level": 1,
+      "action": "immediate_suspension",
+      "description": "Immediate policy violation requiring immediate action"
+    },
+    "high": {
+      "level": 2,
+      "action": "warning_and_monitoring",
+      "description": "Significant policy violation requiring corrective action"
+    },
+    "medium": {
+      "level": 3,
+      "action": "monitoring",
+      "description": "Moderate policy concern requiring attention"
+    },
+    "low": {
+      "level": 4,
+      "action": "observation",
+      "description": "Minor policy concern for observation"
+    }
+  },
+  "complianceFrameworks": {
+    "Google AdSense": {
+      "policies": ["no_adult_content", "no_gambling", "no_malware", "no_deceptive_practices", "no_violent_content", "coppa_compliance"],
+      "strictness": "high"
+    },
+    "Google AdMob": {
+      "policies": ["no_adult_content", "no_gambling", "no_malware", "coppa_compliance"],
+      "strictness": "critical"
+    },
+    "GDPR": {
+      "policies": ["gdpr_compliance"],
+      "strictness": "critical"
+    },
+    "COPPA": {
+      "policies": ["coppa_compliance"],
+      "strictness": "critical"
+    },
+    "CCPA": {
+      "policies": ["ccpa_compliance"],
+      "strictness": "high"
+    },
+    "IAS": {
+      "policies": ["ias_brand_safety", "ias_viewability"],
+      "strictness": "high"
+    },
+    "FTC": {
+      "policies": ["no_deceptive_practices", "no_gambling", "coppa_compliance"],
+      "strictness": "high"
+    }
+  }
+}

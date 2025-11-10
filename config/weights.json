@@ -1,0 +1,15 @@
+{
+  "scoring": {
+    "contentQuality": 0.25,
+    "adBehavior": 0.20,
+    "technicalCompliance": 0.20,
+    "userExperience": 0.15,
+    "policyAdherence": 0.20
+  },
+  "riskFactors": {
+    "critical": 1.0,
+    "high": 0.75,
+    "medium": 0.5,
+    "low": 0.25
+  }
+}

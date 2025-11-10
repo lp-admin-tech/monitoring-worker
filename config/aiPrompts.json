@@ -1,0 +1,7 @@
+{
+  "contentAnalysis": "Analyze the following content for quality, relevance, and policy compliance. Return a structured assessment with scores and recommendations.",
+  "riskAssessment": "Evaluate the provided publisher data for potential risks. Consider ad behavior, policy violations, and technical issues. Return risk level and detailed findings.",
+  "reportGeneration": "Generate a comprehensive report summary based on the provided metrics and audit data. Include key insights, trends, and actionable recommendations.",
+  "publisherEvaluation": "Assess the overall health and performance of this publisher. Provide a detailed evaluation covering compliance, quality, and risk factors.",
+  "anomalyDetection": "Identify unusual patterns or anomalies in the provided data that may indicate policy violations or technical issues."
+}

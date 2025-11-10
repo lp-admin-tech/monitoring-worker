@@ -1,0 +1,835 @@
+const express = require('express');
+const { v4: uuidv4 } = require('uuid');
+const { envConfig, validateConfig } = require('../modules/env-config');
+const logger = require('../modules/logger');
+const supabase = require('../modules/supabase-client');
+const gamFetcher = require('../modules/gam-fetcher');
+
+const crawler = require('../modules/crawler');
+const contentAnalyzer = require('../modules/content-analyzer');
+const adAnalyzer = require('../modules/ad-analyzer');
+const policyChecker = require('../modules/policy-checker');
+const technicalChecker = require('../modules/technical-checker');
+const scorer = require('../modules/scoerer');
+const aiAssistance = require('../modules/ai-assistance');
+
+const app = express();
+app.use(express.json());
+
+const WORKER_SECRET = process.env.WORKER_SECRET;
+const BATCH_CONCURRENCY_LIMIT = parseInt(process.env.BATCH_CONCURRENCY_LIMIT || '3');
+const MAX_CONCURRENT_JOBS = parseInt(process.env.MAX_CONCURRENT_JOBS || '3');
+const MODULE_TIMEOUT = parseInt(process.env.MODULE_TIMEOUT || '30000');
+const RETRY_ENABLED = process.env.RETRY_ENABLED !== 'false';
+const MAX_RETRIES = 3;
+const RETRY_DELAYS = [1000, 2000, 4000];
+
+class JobQueue {
+  constructor() {
+    this.activeJobs = new Map();
+    this.jobResults = new Map();
+  }
+
+  isAtCapacity() {
+    return this.activeJobs.size >= MAX_CONCURRENT_JOBS;
+  }
+
+  addJob(jobId) {
+    this.activeJobs.set(jobId, { startTime: Date.now(), status: 'running' });
+  }
+
+  removeJob(jobId) {
+    this.activeJobs.delete(jobId);
+  }
+
+  storeResult(jobId, result) {
+    this.jobResults.set(jobId, result);
+    setTimeout(() => this.jobResults.delete(jobId), 3600000);
+  }
+
+  getResult(jobId) {
+    return this.jobResults.get(jobId);
+  }
+
+  getActiveJobCount() {
+    return this.activeJobs.size;
+  }
+}
+
+const jobQueue = new JobQueue();
+
+class BatchSiteProcessor {
+  constructor(concurrencyLimit = 3) {
+    this.concurrencyLimit = concurrencyLimit;
+    this.activeProcesses = new Map();
+    this.processQueue = [];
+  }
+
+  async processBatch(sites, jobId, publisherId, requestId) {
+    const deduplicatedSites = [...new Set(sites.map(s => typeof s === 'string' ? s : s.site_name))];
+
+    logger.info(`[${requestId}] Processing batch of ${deduplicatedSites.length} unique sites`, {
+      jobId,
+      publisherId,
+      siteCount: deduplicatedSites.length,
+      requestId,
+    });
+
+    const siteAudits = [];
+    for (const siteName of deduplicatedSites) {
+      siteAudits.push({
+        site_name: siteName,
+        status: 'pending',
+      });
+    }
+
+    for (const audit of siteAudits) {
+      await this.queueSiteAudit(audit, jobId, publisherId, requestId);
+    }
+
+    return siteAudits.length;
+  }
+
+  async queueSiteAudit(siteAudit, jobId, publisherId, requestId) {
+    return new Promise((resolve) => {
+      this.processQueue.push({ siteAudit, jobId, publisherId, requestId, resolve });
+      this.processNextSite();
+    });
+  }
+
+  processNextSite() {
+    if (this.processQueue.length === 0 || this.activeProcesses.size >= this.concurrencyLimit) {
+      return;
+    }
+
+    const { siteAudit, jobId, publisherId, requestId, resolve } = this.processQueue.shift();
+    const processId = uuidv4();
+
+    this.activeProcesses.set(processId, true);
+
+    this.executeSiteAudit(siteAudit, jobId, publisherId, requestId)
+      .then(() => resolve())
+      .finally(() => {
+        this.activeProcesses.delete(processId);
+        this.processNextSite();
+      });
+  }
+
+  async executeSiteAudit(siteAudit, jobId, publisherId, requestId) {
+    const siteStartTime = Date.now();
+
+    try {
+      const siteAuditRecord = {
+        audit_queue_id: jobId,
+        publisher_id: publisherId,
+        site_name: siteAudit.site_name,
+        status: 'processing',
+        started_at: new Date().toISOString(),
+      };
+
+      const result = await supabase.insert('site_audits', siteAuditRecord);
+      const siteAuditId = result[0]?.id;
+
+      logger.info(`[${requestId}] Started processing site ${siteAudit.site_name}`, {
+        jobId,
+        publisherId,
+        siteName: siteAudit.site_name,
+        siteAuditId,
+        requestId,
+      });
+
+      const crawlerResult = await executeWithRetry(
+        'Crawler',
+        async () => crawler.crawlSites([{ url: siteAudit.site_name }]),
+        [],
+        requestId
+      );
+
+      const modules = {
+        crawler: crawlerResult,
+      };
+
+      const analysisPromises = [];
+
+      analysisPromises.push(
+        executeWithRetry(
+          'ContentAnalyzer',
+          async () => contentAnalyzer.analyzeContent(crawlerResult.data?.content || []),
+          [],
+          requestId
+        ).then(result => ({ name: 'contentAnalyzer', ...result }))
+      );
+
+      analysisPromises.push(
+        executeWithRetry(
+          'AdAnalyzer',
+          async () => adAnalyzer.analyzeAds(crawlerResult.data?.ads || []),
+          [],
+          requestId
+        ).then(result => ({ name: 'adAnalyzer', ...result }))
+      );
+
+      analysisPromises.push(
+        executeWithRetry(
+          'PolicyChecker',
+          async () => policyChecker.checkPolicies(crawlerResult.data?.content || []),
+          [],
+          requestId
+        ).then(result => ({ name: 'policyChecker', ...result }))
+      );
+
+      analysisPromises.push(
+        executeWithRetry(
+          'TechnicalChecker',
+          async () => technicalChecker.checkTechnical(siteAudit.site_name),
+          [],
+          requestId
+        ).then(result => ({ name: 'technicalChecker', ...result }))
+      );
+
+      const analysisResults = await Promise.all(analysisPromises);
+
+      analysisResults.forEach(result => {
+        modules[result.name] = result;
+      });
+
+      const scorerInput = {
+        crawlerData: modules.crawler.data,
+        contentAnalysis: modules.contentAnalyzer.data,
+        adAnalysis: modules.adAnalyzer.data,
+        policyCheck: modules.policyChecker.data,
+        technicalCheck: modules.technicalChecker.data,
+      };
+
+      const scorerResult = await executeWithRetry(
+        'Scorer',
+        async () => scorer.computeRiskScore(scorerInput),
+        [],
+        requestId
+      );
+
+      modules.scorer = scorerResult;
+
+      const aiInput = {
+        riskScore: scorerResult.data?.riskScore,
+        findings: scorerResult.data?.findings,
+        recommendations: scorerResult.data?.recommendations,
+      };
+
+      const aiResult = await executeWithRetry(
+        'AIAssistance',
+        async () => aiAssistance.generateReport(aiInput),
+        [],
+        requestId
+      );
+
+      modules.aiAssistance = aiResult;
+
+      const completedAudit = {
+        status: 'completed',
+        crawler_data: modules.crawler.data,
+        content_analysis: modules.contentAnalyzer.data,
+        ad_analysis: modules.adAnalyzer.data,
+        policy_check: modules.policyChecker.data,
+        technical_check: modules.technicalChecker.data,
+        risk_score: modules.scorer.data?.riskScore || 0,
+        ai_report: modules.aiAssistance.data,
+        raw_results: modules,
+        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      await supabase.update('site_audits', siteAuditId, completedAudit);
+
+      logger.info(`[${requestId}] Completed site audit ${siteAudit.site_name}`, {
+        jobId,
+        publisherId,
+        siteName: siteAudit.site_name,
+        duration: Date.now() - siteStartTime,
+        riskScore: modules.scorer.data?.riskScore,
+        requestId,
+      });
+    } catch (error) {
+      logger.error(
+        `[${requestId}] Failed to process site ${siteAudit.site_name}`,
+        error,
+        { jobId, publisherId, siteName: siteAudit.site_name, requestId }
+      );
+
+      try {
+        const failedAudit = {
+          status: 'failed',
+          error_message: error.message,
+          error_stack: error.stack,
+          completed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        const existingSite = await supabase.query('site_audits', {
+          audit_queue_id: jobId,
+          site_name: siteAudit.site_name,
+        });
+
+        if (existingSite.length > 0) {
+          await supabase.update('site_audits', existingSite[0].id, failedAudit);
+        }
+      } catch (updateError) {
+        logger.error(
+          `[${requestId}] Failed to update site audit status after error`,
+          updateError,
+          { jobId, siteName: siteAudit.site_name, requestId }
+        );
+      }
+    }
+  }
+}
+
+const batchProcessor = new BatchSiteProcessor(BATCH_CONCURRENCY_LIMIT);
+
+function validateWorkerSecret(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({
+      success: false,
+      error: 'Missing or invalid Authorization header. Expected: Bearer <WORKER_SECRET>',
+    });
+  }
+
+  const token = authHeader.substring(7);
+
+  if (!WORKER_SECRET) {
+    logger.error('WORKER_SECRET is not configured in environment variables');
+    return res.status(500).json({
+      success: false,
+      error: 'Server configuration error',
+    });
+  }
+
+  if (token !== WORKER_SECRET) {
+    return res.status(401).json({
+      success: false,
+      error: 'Invalid WORKER_SECRET token',
+    });
+  }
+
+  next();
+}
+
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function addJitter(ms, jitterPercent = 0.1) {
+  const jitterAmount = ms * jitterPercent;
+  return ms + (Math.random() * jitterAmount * 2 - jitterAmount);
+}
+
+async function executeWithRetry(
+  moduleName,
+  moduleFunction,
+  args,
+  requestId
+) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      logger.info(`[${requestId}] ${moduleName}: Attempt ${attempt}/${MAX_RETRIES}`, {
+        moduleName,
+        attempt,
+        requestId,
+      });
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`${moduleName} timeout`)), MODULE_TIMEOUT)
+      );
+
+      const result = await Promise.race([
+        moduleFunction(...args),
+        timeoutPromise,
+      ]);
+
+      logger.info(`[${requestId}] ${moduleName}: Success on attempt ${attempt}`, {
+        moduleName,
+        attempt,
+        requestId,
+      });
+
+      return { success: true, data: result };
+    } catch (error) {
+      lastError = error;
+      logger.warn(
+        `[${requestId}] ${moduleName}: Attempt ${attempt} failed`,
+        { moduleName, attempt, error: error.message, requestId }
+      );
+
+      if (attempt < MAX_RETRIES && RETRY_ENABLED) {
+        const delay = addJitter(RETRY_DELAYS[attempt - 1]);
+        logger.info(`[${requestId}] Retrying ${moduleName} in ${delay}ms`, {
+          moduleName,
+          delay,
+          requestId,
+        });
+        await sleep(delay);
+      }
+    }
+  }
+
+  logger.error(
+    `[${requestId}] ${moduleName}: Failed after ${MAX_RETRIES} attempts`,
+    lastError,
+    { moduleName, maxRetries: MAX_RETRIES, requestId }
+  );
+
+  return { success: false, error: lastError?.message || 'Unknown error' };
+}
+
+async function executeAuditPipeline(job, requestId) {
+  const pipelineResults = {
+    jobId: job.id,
+    publisherId: job.publisher_id,
+    requestId,
+    startTime: new Date().toISOString(),
+    modules: {},
+    error: null,
+    status: 'running',
+  };
+
+  try {
+    await supabase.update('audit_queue', job.id, {
+      status: 'running',
+      started_at: new Date().toISOString(),
+    });
+
+    logger.info(`[${requestId}] Starting audit pipeline for publisher ${job.publisher_id}`, {
+      publisherId: job.publisher_id,
+      sites: job.sites,
+      requestId,
+    });
+
+    const publisherContext = await executeWithRetry(
+      'PublisherContextFetch',
+      async () => gamFetcher.fetchExistingPublishersData({ start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(), end: new Date().toISOString() }),
+      [],
+      requestId
+    );
+
+    if (!publisherContext.success) {
+      throw new Error(`Failed to fetch publisher context: ${publisherContext.error}`);
+    }
+
+    const crawlerResult = await executeWithRetry(
+      'Crawler',
+      async () => crawler.crawlSites(job.sites),
+      [],
+      requestId
+    );
+
+    pipelineResults.modules.crawler = {
+      success: crawlerResult.success,
+      data: crawlerResult.data,
+      error: crawlerResult.error,
+    };
+
+    if (!crawlerResult.success) {
+      logger.warn(`[${requestId}] Crawler failed, continuing with other modules`, {
+        requestId,
+      });
+    }
+
+    const analysisPromises = [];
+
+    analysisPromises.push(
+      executeWithRetry(
+        'ContentAnalyzer',
+        async () => contentAnalyzer.analyzeContent(crawlerResult.data?.content || []),
+        [],
+        requestId
+      ).then(result => ({ name: 'contentAnalyzer', ...result }))
+    );
+
+    analysisPromises.push(
+      executeWithRetry(
+        'AdAnalyzer',
+        async () => adAnalyzer.analyzeAds(crawlerResult.data?.ads || []),
+        [],
+        requestId
+      ).then(result => ({ name: 'adAnalyzer', ...result }))
+    );
+
+    analysisPromises.push(
+      executeWithRetry(
+        'PolicyChecker',
+        async () => policyChecker.checkPolicies(crawlerResult.data?.content || []),
+        [],
+        requestId
+      ).then(result => ({ name: 'policyChecker', ...result }))
+    );
+
+    analysisPromises.push(
+      executeWithRetry(
+        'TechnicalChecker',
+        async () => technicalChecker.checkTechnical(job.sites[0]?.url),
+        [],
+        requestId
+      ).then(result => ({ name: 'technicalChecker', ...result }))
+    );
+
+    const analysisResults = await Promise.all(analysisPromises);
+
+    analysisResults.forEach(result => {
+      pipelineResults.modules[result.name] = {
+        success: result.success,
+        data: result.data,
+        error: result.error,
+      };
+    });
+
+    const scorerInput = {
+      crawlerData: crawlerResult.data,
+      contentAnalysis: pipelineResults.modules.contentAnalyzer.data,
+      adAnalysis: pipelineResults.modules.adAnalyzer.data,
+      policyCheck: pipelineResults.modules.policyChecker.data,
+      technicalCheck: pipelineResults.modules.technicalChecker.data,
+    };
+
+    const scorerResult = await executeWithRetry(
+      'Scorer',
+      async () => scorer.computeRiskScore(scorerInput),
+      [],
+      requestId
+    );
+
+    pipelineResults.modules.scorer = {
+      success: scorerResult.success,
+      data: scorerResult.data,
+      error: scorerResult.error,
+    };
+
+    const aiInput = {
+      riskScore: scorerResult.data?.riskScore,
+      findings: scorerResult.data?.findings,
+      recommendations: scorerResult.data?.recommendations,
+    };
+
+    const aiResult = await executeWithRetry(
+      'AIAssistance',
+      async () => aiAssistance.generateReport(aiInput),
+      [],
+      requestId
+    );
+
+    pipelineResults.modules.aiAssistance = {
+      success: aiResult.success,
+      data: aiResult.data,
+      error: aiResult.error,
+    };
+
+    pipelineResults.status = 'completed';
+    pipelineResults.endTime = new Date().toISOString();
+
+    const auditResult = {
+      publisher_id: job.publisher_id,
+      audit_type: 'full_site_audit',
+      crawler_data: pipelineResults.modules.crawler.data,
+      content_analysis: pipelineResults.modules.contentAnalyzer.data,
+      ad_analysis: pipelineResults.modules.adAnalyzer.data,
+      policy_check: pipelineResults.modules.policyChecker.data,
+      technical_check: pipelineResults.modules.technicalChecker.data,
+      risk_score: pipelineResults.modules.scorer.data?.riskScore || 0,
+      ai_report: pipelineResults.modules.aiAssistance.data,
+      audit_timestamp: new Date().toISOString(),
+      raw_results: pipelineResults.modules,
+    };
+
+    await supabase.insert('audit_results', auditResult);
+
+    await supabase.update('audit_queue', job.id, {
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      error_message: null,
+    });
+
+    await supabase.update('publishers', job.publisher_id, {
+      last_audit_at: new Date().toISOString(),
+    });
+
+    logger.info(`[${requestId}] Audit pipeline completed successfully`, {
+      publisherId: job.publisher_id,
+      riskScore: pipelineResults.modules.scorer.data?.riskScore,
+      requestId,
+    });
+
+    return pipelineResults;
+  } catch (error) {
+    logger.error(
+      `[${requestId}] Audit pipeline failed`,
+      error,
+      { publisherId: job.publisher_id, requestId }
+    );
+
+    pipelineResults.status = 'failed';
+    pipelineResults.error = error.message;
+    pipelineResults.endTime = new Date().toISOString();
+
+    await supabase.update('audit_queue', job.id, {
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      error_message: error.message,
+    });
+
+    await supabase.insert('audit_failures', {
+      publisher_id: job.publisher_id,
+      module: 'full_pipeline',
+      error_message: error.message,
+      error_stack: error.stack,
+      failure_timestamp: new Date().toISOString(),
+      request_id: requestId,
+    });
+
+    return pipelineResults;
+  } finally {
+    jobQueue.removeJob(job.id);
+  }
+}
+
+app.post('/audit', async (req, res) => {
+  const requestId = uuidv4();
+  const { publisher_id, sites, priority = 'normal' } = req.body;
+
+  if (!publisher_id || !sites || !Array.isArray(sites) || sites.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required fields: publisher_id, sites (non-empty array)',
+      requestId,
+    });
+  }
+
+  if (jobQueue.isAtCapacity()) {
+    return res.status(503).json({
+      success: false,
+      error: `Job queue at capacity (${MAX_CONCURRENT_JOBS} concurrent jobs). Please retry later.`,
+      requestId,
+    });
+  }
+
+  try {
+    const jobId = uuidv4();
+
+    const job = {
+      id: jobId,
+      publisher_id,
+      sites,
+      priority,
+      status: 'pending',
+      queued_at: new Date().toISOString(),
+    };
+
+    await supabase.insert('audit_queue', job);
+
+    jobQueue.addJob(jobId);
+
+    logger.info(`[${requestId}] Audit job queued`, {
+      jobId,
+      publisherId: publisher_id,
+      sites: sites.length,
+      requestId,
+    });
+
+    res.status(202).json({
+      success: true,
+      jobId,
+      requestId,
+      message: 'Audit job queued for processing',
+    });
+
+    executeAuditPipeline(job, requestId)
+      .then(result => {
+        jobQueue.storeResult(jobId, result);
+        logger.info(`[${requestId}] Pipeline execution completed`, {
+          jobId,
+          status: result.status,
+          requestId,
+        });
+      })
+      .catch(err => {
+        logger.error(`[${requestId}] Pipeline execution error`, err, {
+          jobId,
+          requestId,
+        });
+        jobQueue.removeJob(jobId);
+      });
+  } catch (error) {
+    logger.error(`[${requestId}] Failed to queue audit job`, error, {
+      publisherId: publisher_id,
+      requestId,
+    });
+
+    res.status(500).json({
+      success: false,
+      error: 'Failed to queue audit job',
+      requestId,
+    });
+  }
+});
+
+app.post('/audit-batch-sites', validateWorkerSecret, async (req, res) => {
+  const requestId = uuidv4();
+  const { publisher_id, site_names, priority = 'normal' } = req.body;
+
+  logger.info(`[${requestId}] Received batch audit request`, {
+    publisherId: publisher_id,
+    siteCount: site_names?.length || 0,
+    priority,
+    requestId,
+  });
+
+  if (!publisher_id) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required field: publisher_id',
+      requestId,
+    });
+  }
+
+  if (!site_names || !Array.isArray(site_names) || site_names.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required field: site_names (non-empty array)',
+      requestId,
+    });
+  }
+
+  try {
+    const jobId = uuidv4();
+
+    const job = {
+      id: jobId,
+      publisher_id,
+      sites: site_names,
+      priority,
+      status: 'pending',
+      queued_at: new Date().toISOString(),
+    };
+
+    await supabase.insert('audit_queue', job);
+
+    jobQueue.addJob(jobId);
+
+    logger.info(`[${requestId}] Batch audit job queued`, {
+      jobId,
+      publisherId: publisher_id,
+      sites: site_names.length,
+      requestId,
+    });
+
+    res.status(202).json({
+      success: true,
+      jobId,
+      requestId,
+      message: 'Batch audit job queued for processing',
+      siteCount: site_names.length,
+      estimatedProcessingTime: `${site_names.length * 10}s`,
+    });
+
+    await supabase.update('audit_queue', jobId, {
+      status: 'running',
+      started_at: new Date().toISOString(),
+    });
+
+    const siteCount = await batchProcessor.processBatch(site_names, jobId, publisher_id, requestId);
+
+    logger.info(`[${requestId}] Batch processing completed`, {
+      jobId,
+      publisherId: publisher_id,
+      sitesProcessed: siteCount,
+      requestId,
+    });
+
+    await supabase.update('audit_queue', jobId, {
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      error_message: null,
+    });
+
+    jobQueue.removeJob(jobId);
+  } catch (error) {
+    logger.error(`[${requestId}] Failed to process batch audit request`, error, {
+      publisherId: publisher_id,
+      requestId,
+    });
+
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process batch audit request',
+      requestId,
+    });
+  }
+});
+
+app.get('/job/:jobId', async (req, res) => {
+  const { jobId } = req.params;
+  const requestId = uuidv4();
+
+  try {
+    const result = jobQueue.getResult(jobId);
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        error: 'Job result not found in cache',
+        requestId,
+      });
+    }
+
+    res.json({
+      success: true,
+      data: result,
+      requestId,
+    });
+  } catch (error) {
+    logger.error(`[${requestId}] Failed to retrieve job status`, error, { jobId, requestId });
+
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve job status',
+      requestId,
+    });
+  }
+});
+
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    activeJobs: jobQueue.getActiveJobCount(),
+    maxConcurrent: MAX_CONCURRENT_JOBS,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+async function start() {
+  const errors = validateConfig();
+  if (errors.length > 0) {
+    logger.error('Configuration validation failed', new Error(errors.join(', ')));
+    process.exit(1);
+  }
+
+  const PORT = envConfig.worker.port;
+
+  app.listen(PORT, () => {
+    logger.info(`Worker runner started on port ${PORT}`, {
+      port: PORT,
+      maxConcurrentJobs: MAX_CONCURRENT_JOBS,
+      moduleTimeout: MODULE_TIMEOUT,
+      retryEnabled: RETRY_ENABLED,
+    });
+  });
+}
+
+start().catch(err => {
+  logger.error('Failed to start worker runner', err);
+  process.exit(1);
+});
+
+module.exports = { app, jobQueue, executeAuditPipeline };

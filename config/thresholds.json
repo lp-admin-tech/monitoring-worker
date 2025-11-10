@@ -1,0 +1,24 @@
+{
+  "quality": {
+    "excellent": 90,
+    "good": 75,
+    "fair": 60,
+    "poor": 0
+  },
+  "riskLevel": {
+    "critical": 80,
+    "high": 60,
+    "medium": 40,
+    "low": 0
+  },
+  "compliance": {
+    "pass": 95,
+    "warning": 80,
+    "fail": 0
+  },
+  "engagement": {
+    "high": 70,
+    "medium": 40,
+    "low": 0
+  }
+}

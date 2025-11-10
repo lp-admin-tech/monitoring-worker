@@ -1,0 +1,70 @@
+{
+  "behavioral": {
+    "ad_density": 0.15,
+    "auto_refresh": 0.12,
+    "viewport_occlusion": 0.10,
+    "user_interaction_patterns": 0.08,
+    "scroll_jacking": 0.05
+  },
+  "content": {
+    "entropy_score": 0.20,
+    "ai_likelihood": 0.12,
+    "clickbait_score": 0.10,
+    "readability": 0.08,
+    "freshness": 0.05,
+    "semantic_similarity": 0.08
+  },
+  "technical": {
+    "performance_score": 0.10,
+    "ssl_validity": 0.05,
+    "broken_links": 0.08,
+    "domain_age": 0.06,
+    "whois_privacy": 0.04
+  },
+  "layout": {
+    "viewport_consistency": 0.08,
+    "rendering_anomalies": 0.06,
+    "hidden_elements": 0.05,
+    "aggressive_positioning": 0.07
+  },
+  "gam_correlation": {
+    "ctr_deviation": 0.15,
+    "ecpm_deviation": 0.12,
+    "fill_rate_inconsistency": 0.08,
+    "impression_spike": 0.10
+  },
+  "policy": {
+    "policy_violations": 0.10,
+    "restricted_keywords": 0.08,
+    "jurisdiction_compliance": 0.06
+  },
+  "componentWeights": {
+    "behavioral": 0.25,
+    "content": 0.25,
+    "technical": 0.15,
+    "layout": 0.15,
+    "gam_correlation": 0.15,
+    "policy": 0.05
+  },
+  "riskFactors": {
+    "critical": 0.95,
+    "high": 0.7,
+    "medium": 0.45,
+    "low": 0.2,
+    "minimal": 0.05
+  },
+  "bayesianPriors": {
+    "baselineRate": 0.15,
+    "behavioralPrior": 0.30,
+    "contentPrior": 0.25,
+    "technicalPrior": 0.20,
+    "positiveResultLikelihood": 0.85,
+    "negativeResultLikelihood": 0.10
+  },
+  "trendAnalysis": {
+    "velocityWeight": 0.30,
+    "deviationWeight": 0.25,
+    "anomalyWeight": 0.25,
+    "recencyWeight": 0.20
+  }
+}

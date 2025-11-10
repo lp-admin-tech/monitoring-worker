@@ -1,0 +1,20 @@
+{
+  "supabase": {
+    "enabled": true,
+    "timeout": 30000,
+    "retryAttempts": 3,
+    "retryDelay": 1000
+  },
+  "openrouter": {
+    "enabled": true,
+    "timeout": 60000,
+    "retryAttempts": 2,
+    "retryDelay": 2000
+  },
+  "gam": {
+    "enabled": true,
+    "timeout": 45000,
+    "retryAttempts": 3,
+    "retryDelay": 1500
+  }
+}

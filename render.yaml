@@ -2,9 +2,9 @@ services:
   - type: web
     name: site-monitoring-worker
     env: node
-    rootDir: monitoring-worker
+    rootDir: site-monitoring-worker
     buildCommand: npm install
-    startCommand: node server.js
+    startCommand: node scripts/worker-runner.js
     autoDeploy: true
     scaling:
       minInstances: 0

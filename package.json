@@ -1,25 +1,32 @@
 {
   "name": "site-monitoring-worker",
   "version": "1.0.0",
-  "description": "Website monitoring worker for MFA Buster - scans publisher sites for quality metrics",
-  "main": "index.js",
+  "description": "Site monitoring and analysis worker for detecting ad quality issues",
+  "main": "scripts/worker-runner.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
-    "test": "node test-worker.js",
-    "postinstall": "npx playwright install chromium"
+    "start": "node scripts/worker-runner.js",
+    "webhook": "node scripts/webhook-handler.js",
+    "scheduler": "node scripts/scheduler.js",
+    "dev": "NODE_ENV=development node scripts/worker-runner.js"
   },
+  "keywords": [
+    "monitoring",
+    "ads",
+    "site-audit",
+    "gam",
+    "supabase"
+  ],
+  "author": "",
+  "license": "MIT",
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
-    "express": "^4.19.2",
-    "playwright": "^1.48.0",
-    "cheerio": "^1.0.0",
-    "node-fetch": "^3.3.2",
-    "dotenv": "^16.4.5"
+    "dotenv": "^17.2.3",
+    "playwright": "^1.44.0",
+    "axios": "^1.6.0"
   },
+  "devDependencies": {},
   "engines": {
     "node": ">=18.0.0"
-  },
-  "license": "MIT"
+  }
 }

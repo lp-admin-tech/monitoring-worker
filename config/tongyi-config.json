@@ -1,0 +1,29 @@
+{
+  "provider": "openrouter",
+  "model": "deepseek/deepseek-r1",
+  "name": "Tongyi DeepResearch 30B",
+  "description": "Free model available through OpenRouter",
+  "capabilities": {
+    "compliance_analysis": true,
+    "mfa_detection": true,
+    "content_analysis": true,
+    "policy_compliance": true
+  },
+  "parameters": {
+    "temperature": 0.3,
+    "top_p": 0.9,
+    "max_tokens": 2048
+  },
+  "rate_limits": {
+    "requests_per_minute": 20,
+    "tokens_per_minute": 90000
+  },
+  "cost": "free",
+  "setup_instructions": {
+    "step_1": "Sign up at https://openrouter.ai",
+    "step_2": "Generate an API key from https://openrouter.ai/keys",
+    "step_3": "Set OPENROUTER_API_KEY in your .env file",
+    "step_4": "Set OPENROUTER_MODEL=deepseek/deepseek-r1",
+    "step_5": "The monitoring worker will automatically use this model"
+  }
+}

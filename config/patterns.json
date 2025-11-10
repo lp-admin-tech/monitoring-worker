@@ -1,0 +1,15 @@
+{
+  "publisher": {
+    "nameMinLength": 3,
+    "nameMaxLength": 255,
+    "idPattern": "^[a-zA-Z0-9-]+$"
+  },
+  "report": {
+    "dateFormat": "YYYY-MM-DD",
+    "currencyPattern": "^[A-Z]{3}$"
+  },
+  "validation": {
+    "emailPattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$",
+    "urlPattern": "^https?:\\/\\/.+"
+  }
+}

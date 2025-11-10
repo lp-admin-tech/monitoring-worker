@@ -1,0 +1,146 @@
+{
+  "mfaCases": [
+    {
+      "domain": "news.example.com",
+      "characteristics": {
+        "adDensity": 45,
+        "autoRefreshRate": 12,
+        "viewportOcclusion": 65,
+        "scrollJacking": true,
+        "entropyScore": 85,
+        "aiLikelihood": 92,
+        "clickbaitScore": 88,
+        "readabilityScore": 25,
+        "freshnessScore": 15,
+        "similarityScore": 92,
+        "performanceScore": 35,
+        "brokenLinkRatio": 0.35
+      },
+      "findings": {
+        "behavioral": "Extreme ad density combined with aggressive viewport manipulation and scroll hijacking",
+        "content": "AI-generated content with poor readability and minimal freshness indicating template recycling",
+        "technical": "Poor performance, high broken link ratio suggesting low maintenance",
+        "layout": "Aggressive ad positioning with viewport occlusion exceeding compliance thresholds",
+        "gam": "Impression spikes correlating with content updates, fill rate inconsistencies",
+        "policy": "Restricted keywords detected, multiple policy violations identified"
+      },
+      "riskScore": 0.92,
+      "recommendation": "Immediate investigation required - multiple indicators of MFA activity"
+    },
+    {
+      "domain": "tech-blog.example.org",
+      "characteristics": {
+        "adDensity": 32,
+        "autoRefreshRate": 8,
+        "viewportOcclusion": 48,
+        "scrollJacking": false,
+        "entropyScore": 62,
+        "aiLikelihood": 78,
+        "clickbaitScore": 72,
+        "readabilityScore": 45,
+        "freshnessScore": 35,
+        "similarityScore": 68,
+        "performanceScore": 58,
+        "brokenLinkRatio": 0.15
+      },
+      "findings": {
+        "behavioral": "Moderate ad density with some viewport manipulation patterns",
+        "content": "Some AI-generated content indicators with moderate readability concerns",
+        "technical": "Acceptable performance metrics with minor technical issues",
+        "layout": "Ad positioning slightly aggressive but within moderate range",
+        "gam": "Some variance in metrics but within expected ranges",
+        "policy": "Minor policy concerns requiring attention"
+      },
+      "riskScore": 0.58,
+      "recommendation": "Enhanced monitoring recommended with focus on content quality and ad behavior patterns"
+    }
+  ],
+  "compliantCases": [
+    {
+      "domain": "premium-news.example.com",
+      "characteristics": {
+        "adDensity": 18,
+        "autoRefreshRate": 0,
+        "viewportOcclusion": 12,
+        "scrollJacking": false,
+        "entropyScore": 28,
+        "aiLikelihood": 15,
+        "clickbaitScore": 12,
+        "readabilityScore": 82,
+        "freshnessScore": 88,
+        "similarityScore": 22,
+        "performanceScore": 92,
+        "brokenLinkRatio": 0.02
+      },
+      "findings": {
+        "behavioral": "Reasonable ad density with minimal viewport manipulation",
+        "content": "Primarily human-authored content with high readability and freshness",
+        "technical": "Excellent performance and site maintenance indicators",
+        "layout": "Appropriate ad placement respecting user experience",
+        "gam": "Stable metrics consistent with publisher benchmarks",
+        "policy": "Full policy compliance with no violations detected"
+      },
+      "riskScore": 0.08,
+      "recommendation": "Standard monitoring sufficient - site demonstrates strong compliance profile"
+    },
+    {
+      "domain": "established-publication.example.org",
+      "characteristics": {
+        "adDensity": 22,
+        "autoRefreshRate": 2,
+        "viewportOcclusion": 18,
+        "scrollJacking": false,
+        "entropyScore": 35,
+        "aiLikelihood": 18,
+        "clickbaitScore": 16,
+        "readabilityScore": 78,
+        "freshnessScore": 82,
+        "similarityScore": 25,
+        "performanceScore": 88,
+        "brokenLinkRatio": 0.04
+      },
+      "findings": {
+        "behavioral": "Ad density within acceptable ranges with minimal manipulation",
+        "content": "High-quality, regularly updated content with strong readability",
+        "technical": "Strong technical foundation and regular maintenance",
+        "layout": "User-friendly ad placement respecting page hierarchy",
+        "gam": "Consistent performance metrics aligned with publisher group",
+        "policy": "Comprehensive policy compliance maintained"
+      },
+      "riskScore": 0.12,
+      "recommendation": "Routine monitoring continues - exemplary compliance standards demonstrated"
+    }
+  ],
+  "interpretationGuides": {
+    "adDensityInterpretation": {
+      "low": [0, 22],
+      "moderate": [22, 35],
+      "high": [35, 50],
+      "extreme": [50, 100]
+    },
+    "entropyInterpretation": {
+      "lowVariety": [0, 35],
+      "moderate": [35, 60],
+      "high": [60, 100]
+    },
+    "readabilityInterpretation": {
+      "poorQuality": [0, 40],
+      "acceptable": [40, 70],
+      "good": [70, 100]
+    },
+    "correlationPatterns": {
+      "mfaIndicators": [
+        "High ad density + High viewport occlusion + Low readability",
+        "High AI likelihood + Low freshness + High similarity",
+        "Scroll jacking + Auto-refresh + Aggressive positioning",
+        "Fill rate spikes + Impression anomalies + CTR deviation"
+      ],
+      "complianceIndicators": [
+        "Moderate ad density + Low viewport occlusion + High readability",
+        "Low AI likelihood + High freshness + Low similarity",
+        "No scroll jacking + No auto-refresh + User-friendly positioning",
+        "Stable metrics + Consistent performance + Policy compliance"
+      ]
+    }
+  }
+}
