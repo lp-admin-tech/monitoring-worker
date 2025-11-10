@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "Site monitoring and analysis worker for detecting ad quality issues",
   "main": "scripts/worker-runner.js",
-  "type": "module",
   "scripts": {
     "start": "node scripts/worker-runner.js",
     "webhook": "node scripts/webhook-handler.js",
@@ -23,7 +22,10 @@
     "@supabase/supabase-js": "^2.57.4",
     "dotenv": "^17.2.3",
     "playwright": "^1.44.0",
-    "axios": "^1.6.0"
+    "axios": "^1.6.0",
+    "uuid": "^9.0.0",
+    "node-cron": "^3.0.3",
+    "express": "^4.18.2"
   },
   "devDependencies": {},
   "engines": {

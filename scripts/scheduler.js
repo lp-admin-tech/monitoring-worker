@@ -1,6 +1,5 @@
 const cron = require('node-cron');
 const { v4: uuidv4 } = require('uuid');
-const fetch = require('node-fetch');
 const { envConfig, validateConfig } = require('../modules/env-config');
 const logger = require('../modules/logger');
 const supabase = require('../modules/supabase-client');

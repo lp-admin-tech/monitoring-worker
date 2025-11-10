@@ -18,7 +18,7 @@ class AIAssistanceModule {
 
     this.openRouter = {
       apiKey: envConfig?.openRouter?.apiKey || process.env.OPENROUTER_API_KEY || '',
-      model: envConfig?.openRouter?.model || process.env.OPENROUTER_MODEL || 'deepseek/deepseek-r1',
+      model: envConfig?.openRouter?.model || process.env.OPENROUTER_MODEL || 'alibaba/tongyi-deepresearch-30b-a3b:free',
     };
 
     this.apiKey = this.aiModel.apiKey || this.openRouter.apiKey;
