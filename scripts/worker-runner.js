@@ -289,6 +289,8 @@ class BatchSiteProcessor {
 
       await supabase.update('site_audits', siteAuditId, completedAudit);
 
+      logger.findingsReport(modules);
+
       logger.success(`Audit completed for ${siteAudit.site_name}`, {
         jobId,
         publisherId,
