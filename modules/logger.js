@@ -232,36 +232,64 @@ class Logger {
   findingsReport(findings) {
     if (!this.shouldLog(LogLevel.INFO)) return;
 
-    const formatFindingList = (items) => {
-      if (!items || items.length === 0) return '';
-      return items.map(item => `      "${item}"`).join(',\n');
+    const formatModuleData = (data) => {
+      if (!data) return 'No data';
+
+      if (data.error) return `ERROR: ${data.error}`;
+      if (!data.data && !data.issues && !data.good) return 'Processing...';
+
+      const lines = [];
+
+      if (data.data) {
+        if (typeof data.data === 'object') {
+          const keys = Object.keys(data.data).filter(k => data.data[k] !== null && data.data[k] !== undefined);
+          if (keys.length > 0) {
+            lines.push(`Found: ${keys.join(', ')}`);
+            for (const key of keys.slice(0, 5)) {
+              const value = data.data[key];
+              if (value && typeof value === 'object') {
+                lines.push(`  - ${key}: ${JSON.stringify(value).substring(0, 80)}${JSON.stringify(value).length > 80 ? '...' : ''}`);
+              } else {
+                lines.push(`  - ${key}: ${value}`);
+              }
+            }
+          }
+        } else {
+          lines.push(`Result: ${data.data}`);
+        }
+      }
+
+      if (data.issues && data.issues.length > 0) {
+        lines.push(`Issues (${data.issues.length}):`);
+        data.issues.slice(0, 3).forEach(issue => {
+          lines.push(`  ✗ ${issue}`);
+        });
+        if (data.issues.length > 3) lines.push(`  ... and ${data.issues.length - 3} more`);
+      }
+
+      if (data.good && data.good.length > 0) {
+        lines.push(`Good (${data.good.length}):`);
+        data.good.slice(0, 3).forEach(item => {
+          lines.push(`  ✓ ${item}`);
+        });
+        if (data.good.length > 3) lines.push(`  ... and ${data.good.length - 3} more`);
+      }
+
+      return lines.length > 0 ? lines.join('\n    ') : 'No findings';
     };
 
-    let output = '(system.log){\n';
+    let output = `${COLORS.INFO}AUDIT FINDINGS\n${'='.repeat(50)}\n`;
 
     for (const [moduleName, data] of Object.entries(findings)) {
       if (moduleName !== 'timestamp' && moduleName !== 'domain' && data && typeof data === 'object') {
-        output += `  module(${moduleName}){\n`;
-
-        if (data.issues && data.issues.length > 0) {
-          output += '    found(issues:[\n';
-          output += formatFindingList(data.issues);
-          output += '\n    ])\n';
-        }
-
-        if (data.good && data.good.length > 0) {
-          output += '    good:[\n';
-          output += formatFindingList(data.good);
-          output += '\n    ]\n';
-        }
-
-        output += '  }\n\n';
+        output += `\n[${moduleName.toUpperCase()}]\n`;
+        output += `  ${formatModuleData(data)}\n`;
       }
     }
 
-    output += '}\n';
+    output += `${'='.repeat(50)}${COLORS.RESET}\n`;
 
-    console.log(`${COLORS.INFO}${output}${COLORS.RESET}`);
+    console.log(output);
 
     const entry = {
       timestamp: new Date().toISOString(),

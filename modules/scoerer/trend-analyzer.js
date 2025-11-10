@@ -337,6 +337,11 @@ class TrendAnalyzer {
         return { driftDetected: false, severity: 'none', patterns: [] };
       }
 
+      if (!publisherId) {
+        logger.warn('No publisher ID provided for pattern drift detection');
+        return { driftDetected: false, severity: 'none', patterns: [], reason: 'no_publisher_id' };
+      }
+
       const { data: recentTrends, error } = await client
         .from('publisher_risk_trends')
         .select('*')
