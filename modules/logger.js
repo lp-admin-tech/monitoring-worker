@@ -1,4 +1,10 @@
-const supabase = require('./supabase-client');
+let supabase;
+try {
+  supabase = require('./supabase-client');
+} catch (err) {
+  console.warn('Supabase client not available for logging');
+  supabase = null;
+}
 
 const LogLevel = {
   DEBUG: 'DEBUG',
@@ -22,8 +28,10 @@ class Logger {
   }
 
   async persistLog(entry) {
+    if (!supabase) return;
+
     try {
-      await supabase.insert('audit_logs', {
+      const logData = {
         user_id: entry.userId,
         action: entry.level,
         entity_type: entry.moduleName || 'worker',
@@ -38,9 +46,13 @@ class Logger {
           message: entry.message,
           ...entry.context,
         },
+      };
+
+      supabase.insert('audit_logs', logData).catch(err => {
+        console.error('[Logger] Failed to persist log:', err.message);
       });
     } catch (err) {
-      console.error('Failed to persist log:', err);
+      console.error('[Logger] Failed to persist log:', err.message);
     }
   }
 
