@@ -220,6 +220,50 @@ class Logger {
     };
     this.persistLog(entry);
   }
+
+  findingsReport(findings) {
+    if (!this.shouldLog(LogLevel.INFO)) return;
+
+    const formatFindingList = (items) => {
+      if (!items || items.length === 0) return '';
+      return items.map(item => `      "${item}"`).join(',\n');
+    };
+
+    let output = '(system.log){\n';
+
+    for (const [moduleName, data] of Object.entries(findings)) {
+      if (moduleName !== 'timestamp' && moduleName !== 'domain' && data && typeof data === 'object') {
+        output += `  module(${moduleName}){\n`;
+
+        if (data.issues && data.issues.length > 0) {
+          output += '    found(issues:[\n';
+          output += formatFindingList(data.issues);
+          output += '\n    ])\n';
+        }
+
+        if (data.good && data.good.length > 0) {
+          output += '    good:[\n';
+          output += formatFindingList(data.good);
+          output += '\n    ]\n';
+        }
+
+        output += '  }\n\n';
+      }
+    }
+
+    output += '}\n';
+
+    console.log(`${COLORS.INFO}${output}${COLORS.RESET}`);
+
+    const entry = {
+      timestamp: new Date().toISOString(),
+      level: LogLevel.INFO,
+      message: 'Audit findings report',
+      context: findings,
+      moduleName: 'findings-report',
+    };
+    this.persistLog(entry);
+  }
 }
 
 module.exports = new Logger();
