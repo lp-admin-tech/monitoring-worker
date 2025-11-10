@@ -24,13 +24,20 @@ class Logger {
   async persistLog(entry) {
     try {
       await supabase.insert('audit_logs', {
-        timestamp: entry.timestamp,
-        level: entry.level,
-        message: entry.message,
-        context: entry.context,
-        error: entry.error,
         user_id: entry.userId,
-        publisher_id: entry.publisherId,
+        action: entry.level,
+        entity_type: entry.moduleName || 'worker',
+        timestamp: entry.timestamp,
+        details: {
+          message: entry.message,
+          error: entry.error,
+          ...entry.context,
+        },
+        context: {
+          level: entry.level,
+          message: entry.message,
+          ...entry.context,
+        },
       });
     } catch (err) {
       console.error('Failed to persist log:', err);
@@ -44,8 +51,9 @@ class Logger {
       timestamp: new Date().toISOString(),
       level: LogLevel.DEBUG,
       message,
-      context,
+      context: context || {},
       userId,
+      moduleName: context?.moduleName || 'logger',
     };
 
     console.debug(`[${entry.timestamp}] ${message}`, context);
@@ -59,8 +67,9 @@ class Logger {
       timestamp: new Date().toISOString(),
       level: LogLevel.INFO,
       message,
-      context,
+      context: context || {},
       userId,
+      moduleName: context?.moduleName || 'logger',
     };
 
     console.log(`[${entry.timestamp}] ${message}`, context);
@@ -74,9 +83,10 @@ class Logger {
       timestamp: new Date().toISOString(),
       level: LogLevel.WARN,
       message,
-      context,
+      context: context || {},
       userId,
       publisherId,
+      moduleName: context?.moduleName || 'logger',
     };
 
     console.warn(`[${entry.timestamp}] ${message}`, context);
@@ -91,12 +101,29 @@ class Logger {
       level: LogLevel.ERROR,
       message,
       error: error?.message || error?.toString(),
-      context,
+      context: context || {},
       userId,
       publisherId,
+      moduleName: context?.moduleName || 'logger',
     };
 
     console.error(`[${entry.timestamp}] ${message}`, error, context);
+    this.persistLog(entry);
+  }
+
+  moduleAction(moduleName, action, context, userId, publisherId) {
+    const message = `${action}`;
+    const entry = {
+      timestamp: new Date().toISOString(),
+      level: LogLevel.INFO,
+      message,
+      context: { ...context, moduleName, action },
+      userId,
+      publisherId,
+      moduleName,
+    };
+
+    console.log(`[${entry.timestamp}] [${moduleName}] ${message}`, context);
     this.persistLog(entry);
   }
 }

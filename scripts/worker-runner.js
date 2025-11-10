@@ -168,7 +168,9 @@ class BatchSiteProcessor {
         executeWithRetry(
           'ContentAnalyzer',
           async () => {
+            logger.moduleAction('ContentAnalyzer', 'Starting content analysis', { siteName: siteAudit.site_name, requestId });
             const result = await contentAnalyzer.analyzeContent(crawlerResult.data?.content || []);
+            logger.moduleAction('ContentAnalyzer', 'Completed content analysis', { siteName: siteAudit.site_name, requestId });
             return { data: result, error: null };
           },
           {},
@@ -180,7 +182,9 @@ class BatchSiteProcessor {
         executeWithRetry(
           'AdAnalyzer',
           async () => {
+            logger.moduleAction('AdAnalyzer', 'Starting ad analysis', { siteName: siteAudit.site_name, requestId });
             const result = await adAnalyzer.processPublisher(crawlerResult.data, { width: 1920, height: 1080 });
+            logger.moduleAction('AdAnalyzer', 'Completed ad analysis', { siteName: siteAudit.site_name, requestId });
             return { data: result, error: null };
           },
           {},
@@ -192,7 +196,9 @@ class BatchSiteProcessor {
         executeWithRetry(
           'PolicyChecker',
           async () => {
+            logger.moduleAction('PolicyChecker', 'Starting policy check', { siteName: siteAudit.site_name, requestId });
             const result = await policyChecker.runPolicyCheck(crawlerResult.data?.content || []);
+            logger.moduleAction('PolicyChecker', 'Completed policy check', { siteName: siteAudit.site_name, requestId });
             return { data: result, error: null };
           },
           {},
@@ -204,7 +210,9 @@ class BatchSiteProcessor {
         executeWithRetry(
           'TechnicalChecker',
           async () => {
+            logger.moduleAction('TechnicalChecker', 'Starting technical check', { siteName: siteAudit.site_name, requestId });
             const result = await technicalChecker.runTechnicalHealthCheck(crawlerResult.data, siteAudit.site_name);
+            logger.moduleAction('TechnicalChecker', 'Completed technical check', { siteName: siteAudit.site_name, requestId });
             return { data: result, error: null };
           },
           {},
@@ -229,7 +237,9 @@ class BatchSiteProcessor {
       const scorerResult = await executeWithRetry(
         'Scorer',
         async () => {
+          logger.moduleAction('Scorer', 'Starting risk score calculation', { siteName: siteAudit.site_name, requestId });
           const result = await scorer.calculateComprehensiveScore(scorerInput);
+          logger.moduleAction('Scorer', 'Completed risk score calculation', { siteName: siteAudit.site_name, riskScore: result?.riskScore, requestId });
           return { data: result, error: null };
         },
         {},
@@ -247,7 +257,9 @@ class BatchSiteProcessor {
       const aiResult = await executeWithRetry(
         'AIAssistance',
         async () => {
+          logger.moduleAction('AIAssistance', 'Starting report generation', { siteName: siteAudit.site_name, requestId });
           const result = await aiAssistance.generateComprehensiveReport(aiInput);
+          logger.moduleAction('AIAssistance', 'Completed report generation', { siteName: siteAudit.site_name, requestId });
           return { data: result, error: null };
         },
         {},
@@ -377,7 +389,7 @@ async function executeWithRetry(
       );
 
       const result = await Promise.race([
-        moduleFunction(...args),
+        moduleFunction(...(Array.isArray(args) ? args : [])),
         timeoutPromise,
       ]);
 
