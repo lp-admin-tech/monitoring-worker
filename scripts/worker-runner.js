@@ -15,13 +15,19 @@ try {
   const ScoringEngineClass = require('../modules/scoerer');
   const AIAssistanceClass = require('../modules/ai-assistance');
   const crawlerModule = require('../modules/crawler');
+  const { createClient } = require('@supabase/supabase-js');
 
   crawler = crawlerModule;
   policyChecker = policyCheckerModule;
   technicalChecker = technicalCheckerModule;
   contentAnalyzer = new ContentAnalyzerClass();
   adAnalyzer = new AdAnalyzerClass();
-  scorer = new ScoringEngineClass();
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+  const supabaseClient = supabaseUrl && supabaseServiceKey ? createClient(supabaseUrl, supabaseServiceKey) : null;
+
+  scorer = new ScoringEngineClass(supabaseClient);
   aiAssistance = new AIAssistanceClass();
 } catch (err) {
   console.error('Failed to initialize analysis modules:', err.message);
@@ -179,9 +185,7 @@ class BatchSiteProcessor {
         executeWithRetry(
           'ContentAnalyzer',
           async () => {
-            console.log(`[${requestId}] ContentAnalyzer: Starting content analysis for ${siteAudit.site_name}`);
             const result = await contentAnalyzer.analyzeContent(crawlerResult.data?.content || []);
-            console.log(`[${requestId}] ContentAnalyzer: Completed successfully`);
             return { data: result, error: null };
           },
           {},
@@ -193,9 +197,7 @@ class BatchSiteProcessor {
         executeWithRetry(
           'AdAnalyzer',
           async () => {
-            console.log(`[${requestId}] AdAnalyzer: Starting ad analysis for ${siteAudit.site_name}`);
             const result = await adAnalyzer.processPublisher(crawlerResult.data, { width: 1920, height: 1080 });
-            console.log(`[${requestId}] AdAnalyzer: Completed successfully`);
             return { data: result, error: null };
           },
           {},
@@ -207,9 +209,7 @@ class BatchSiteProcessor {
         executeWithRetry(
           'PolicyChecker',
           async () => {
-            console.log(`[${requestId}] PolicyChecker: Starting policy check for ${siteAudit.site_name}`);
             const result = await policyChecker.runPolicyCheck(crawlerResult.data?.content || []);
-            console.log(`[${requestId}] PolicyChecker: Completed successfully`);
             return { data: result, error: null };
           },
           {},
@@ -221,9 +221,7 @@ class BatchSiteProcessor {
         executeWithRetry(
           'TechnicalChecker',
           async () => {
-            console.log(`[${requestId}] TechnicalChecker: Starting technical check for ${siteAudit.site_name}`);
             const result = await technicalChecker.runTechnicalHealthCheck(crawlerResult.data, siteAudit.site_name);
-            console.log(`[${requestId}] TechnicalChecker: Completed successfully`);
             return { data: result, error: null };
           },
           {},
@@ -248,9 +246,7 @@ class BatchSiteProcessor {
       const scorerResult = await executeWithRetry(
         'Scorer',
         async () => {
-          console.log(`[${requestId}] Scorer: Starting risk score calculation`);
           const result = await scorer.calculateComprehensiveScore(scorerInput);
-          console.log(`[${requestId}] Scorer: Completed - Risk Score: ${result?.riskScore || 'N/A'}`);
           return { data: result, error: null };
         },
         {},
@@ -268,9 +264,7 @@ class BatchSiteProcessor {
       const aiResult = await executeWithRetry(
         'AIAssistance',
         async () => {
-          console.log(`[${requestId}] AIAssistance: Starting report generation`);
           const result = await aiAssistance.generateComprehensiveReport(aiInput);
-          console.log(`[${requestId}] AIAssistance: Completed report generation`);
           return { data: result, error: null };
         },
         {},
@@ -295,12 +289,12 @@ class BatchSiteProcessor {
 
       await supabase.update('site_audits', siteAuditId, completedAudit);
 
-      logger.info(`[${requestId}] Completed site audit ${siteAudit.site_name}`, {
+      logger.success(`Audit completed for ${siteAudit.site_name}`, {
         jobId,
         publisherId,
         siteName: siteAudit.site_name,
-        duration: Date.now() - siteStartTime,
         riskScore: modules.scorer.data?.riskScore,
+        duration: `${Date.now() - siteStartTime}ms`,
         requestId,
       });
     } catch (error) {

@@ -15,46 +15,94 @@ class ScoringEngine {
     this.explanationGenerator = new ExplanationGenerator();
   }
 
+  flattenAuditData(auditData) {
+    if (!auditData) return {};
+
+    const flattened = { ...auditData };
+
+    if (auditData.contentAnalysis) {
+      flattened.entropyScore = auditData.contentAnalysis.entropy?.score || auditData.contentAnalysis.entropyScore || 0;
+      flattened.aiLikelihood = auditData.contentAnalysis.aiLikelihood?.percentage || auditData.contentAnalysis.aiLikelihood || 0;
+      flattened.clickbaitScore = auditData.contentAnalysis.clickbait?.score || auditData.contentAnalysis.clickbaitScore || 0;
+      flattened.readabilityScore = auditData.contentAnalysis.readability?.score || auditData.contentAnalysis.readabilityScore || 0;
+      flattened.freshnessScore = auditData.contentAnalysis.freshness?.score || auditData.contentAnalysis.freshnessScore || 0;
+      flattened.similarityScore = auditData.contentAnalysis.similarity?.score || auditData.contentAnalysis.similarityScore || 0;
+    }
+
+    if (auditData.adAnalysis) {
+      flattened.adDensity = auditData.adAnalysis.adDensity || auditData.adAnalysis.density?.percentage || 0;
+      flattened.autoRefreshRate = auditData.adAnalysis.autoRefreshRate || auditData.adAnalysis.autoRefresh?.rate || 0;
+      flattened.viewportOcclusionPercent = auditData.adAnalysis.viewportOcclusion?.percent || auditData.adAnalysis.viewportOcclusionPercent || 0;
+      flattened.suspiciousInteractionRatio = auditData.adAnalysis.suspiciousInteractionRatio || 0;
+      flattened.scrollJackingDetected = auditData.adAnalysis.scrollJackingDetected || false;
+    }
+
+    if (auditData.technicalCheck) {
+      const tech = auditData.technicalCheck;
+      flattened.performanceScore = tech.components?.performance?.performanceScore || tech.performanceScore || 0;
+      flattened.sslValid = tech.components?.ssl?.valid !== false;
+
+      flattened.brokenLinkRatio = tech.components?.brokenLinks?.brokenRatio || 0;
+
+      if (tech.components?.domainIntel) {
+        const domainData = tech.components.domainIntel.domainAge;
+        flattened.domainAgeMonths = domainData ? Math.round(domainData.days / 30) : 0;
+        flattened.whoisPrivate = tech.components.domainIntel.whoisPrivate || false;
+      }
+    }
+
+    if (auditData.policyCheck) {
+      flattened.policyViolationCount = auditData.policyCheck.violations?.count || auditData.policyCheck.policyViolationCount || 0;
+      flattened.restrictedKeywordMatches = auditData.policyCheck.keywords?.count || auditData.policyCheck.restrictedKeywordMatches || 0;
+      flattened.jurisdictionViolations = auditData.policyCheck.jurisdictionViolations || 0;
+    }
+
+    return flattened;
+  }
+
   async calculateComprehensiveScore(auditData, publisherData = {}, options = {}) {
     try {
-      logger.info('Starting comprehensive risk score calculation', {
+      logger.info('Score calculation started', {
+        module: 'Scorer',
         auditId: auditData?.id,
         publisherId: publisherData?.id
       });
 
+      const flattenedData = this.flattenAuditData(auditData);
+
       const componentRisks = this.riskEngine.calculateComponentRisks({
-        adDensity: auditData?.adDensity || 0,
-        autoRefreshRate: auditData?.autoRefreshRate || 0,
-        viewportOcclusionPercent: auditData?.viewportOcclusionPercent || 0,
-        suspiciousInteractionRatio: auditData?.suspiciousInteractionRatio || 0,
-        scrollJackingDetected: auditData?.scrollJackingDetected || false,
-        entropyScore: auditData?.entropyScore || 0,
-        aiLikelihood: auditData?.aiLikelihood || 0,
-        clickbaitScore: auditData?.clickbaitScore || 0,
-        readabilityScore: auditData?.readabilityScore || 0,
-        freshnessScore: auditData?.freshnessScore || 0,
-        similarityScore: auditData?.similarityScore || 0,
-        performanceScore: auditData?.performanceScore || 0,
-        sslValid: auditData?.sslValid !== false,
-        brokenLinkRatio: auditData?.brokenLinkRatio || 0,
-        domainAgeMonths: auditData?.domainAgeMonths || 0,
-        whoisPrivate: auditData?.whoisPrivate || false,
-        viewportInconsistencyRatio: auditData?.viewportInconsistencyRatio || 0,
-        renderingAnomalies: auditData?.renderingAnomalies || 0,
-        hiddenElementRatio: auditData?.hiddenElementRatio || 0,
-        aggressivePositioning: auditData?.aggressivePositioning || 0,
-        ctrDeviation: auditData?.ctrDeviation || 0,
-        ecpmDeviation: auditData?.ecpmDeviation || 0,
-        fillRateInconsistency: auditData?.fillRateInconsistency || 0,
-        impressionSpike: auditData?.impressionSpike || 0,
-        policyViolationCount: auditData?.policyViolationCount || 0,
-        restrictedKeywordMatches: auditData?.restrictedKeywordMatches || 0,
-        jurisdictionViolations: auditData?.jurisdictionViolations || 0
+        adDensity: flattenedData.adDensity || 0,
+        autoRefreshRate: flattenedData.autoRefreshRate || 0,
+        viewportOcclusionPercent: flattenedData.viewportOcclusionPercent || 0,
+        suspiciousInteractionRatio: flattenedData.suspiciousInteractionRatio || 0,
+        scrollJackingDetected: flattenedData.scrollJackingDetected || false,
+        entropyScore: flattenedData.entropyScore || 0,
+        aiLikelihood: flattenedData.aiLikelihood || 0,
+        clickbaitScore: flattenedData.clickbaitScore || 0,
+        readabilityScore: flattenedData.readabilityScore || 0,
+        freshnessScore: flattenedData.freshnessScore || 0,
+        similarityScore: flattenedData.similarityScore || 0,
+        performanceScore: flattenedData.performanceScore || 0,
+        sslValid: flattenedData.sslValid !== false,
+        brokenLinkRatio: flattenedData.brokenLinkRatio || 0,
+        domainAgeMonths: flattenedData.domainAgeMonths || 0,
+        whoisPrivate: flattenedData.whoisPrivate || false,
+        viewportInconsistencyRatio: flattenedData.viewportInconsistencyRatio || 0,
+        renderingAnomalies: flattenedData.renderingAnomalies || 0,
+        hiddenElementRatio: flattenedData.hiddenElementRatio || 0,
+        aggressivePositioning: flattenedData.aggressivePositioning || 0,
+        ctrDeviation: flattenedData.ctrDeviation || 0,
+        ecpmDeviation: flattenedData.ecpmDeviation || 0,
+        fillRateInconsistency: flattenedData.fillRateInconsistency || 0,
+        impressionSpike: flattenedData.impressionSpike || 0,
+        policyViolationCount: flattenedData.policyViolationCount || 0,
+        restrictedKeywordMatches: flattenedData.restrictedKeywordMatches || 0,
+        jurisdictionViolations: flattenedData.jurisdictionViolations || 0
       });
 
       const method = options.method || 'bayesian';
-      const riskScores = this.riskEngine.aggregateRiskScores({}, {method});
-      riskScores.componentRisks = componentRisks;
+      const riskScores = this.riskEngine.aggregateRiskScores(componentRisks, {method});
+      riskScores.riskScore = riskScores.overallRiskScore;
 
       const historicalScores = auditData?.historicalScores || [];
       const trendAnalysis = await this.trendAnalyzer.analyzeRiskTrend(
@@ -87,6 +135,8 @@ class ScoringEngine {
       const comprehensiveScore = {
         auditId: auditData?.id,
         publisherId: publisherData?.id,
+        riskScore: riskScores.overallRiskScore,
+        mfaProbability: riskScores.mfaProbability,
         scores: {
           mfaProbability: riskScores.mfaProbability,
           overallRiskScore: riskScores.overallRiskScore,
@@ -113,14 +163,16 @@ class ScoringEngine {
         timestamp: new Date().toISOString()
       };
 
-      logger.info('Comprehensive score calculated successfully', {
+      logger.success('Score calculated', {
+        module: 'Scorer',
+        riskScore: Math.round(riskScores.overallRiskScore * 100) / 100,
         riskLevel: explanation.riskLevel,
-        mfaProbability: riskScores.mfaProbability
+        publisherId: publisherData?.id
       });
 
       return comprehensiveScore;
     } catch (error) {
-      logger.error('Error calculating comprehensive score', error);
+      logger.error('Score calculation failed', error, { module: 'Scorer' });
       throw error;
     }
   }

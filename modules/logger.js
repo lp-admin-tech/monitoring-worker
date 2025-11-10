@@ -13,9 +13,18 @@ const LogLevel = {
   ERROR: 'ERROR',
 };
 
+const COLORS = {
+  INFO: '\x1b[36m',
+  WARN: '\x1b[33m',
+  ERROR: '\x1b[31m',
+  SUCCESS: '\x1b[32m',
+  RESET: '\x1b[0m',
+};
+
 class Logger {
   constructor() {
-    this.minLevel = LogLevel.DEBUG;
+    this.minLevel = LogLevel.INFO;
+    this.verbosity = process.env.LOG_VERBOSITY || 'normal';
   }
 
   setMinLevel(level) {
@@ -27,11 +36,39 @@ class Logger {
     return levels.indexOf(level) >= levels.indexOf(this.minLevel);
   }
 
+  formatContext(context = {}) {
+    const { requestId, jobId, publisherId, siteName, domain, module } = context;
+    const parts = [];
+    if (module) parts.push(module);
+    if (requestId) parts.push(`req:${requestId.substring(0, 8)}`);
+    if (jobId) parts.push(`job:${jobId.substring(0, 8)}`);
+    if (publisherId) parts.push(`pub:${publisherId.substring(0, 8)}`);
+    if (siteName) parts.push(`site:${siteName}`);
+    if (domain) parts.push(`domain:${domain}`);
+    return parts.length > 0 ? `[${parts.join(' | ')}]` : '';
+  }
+
+  formatMessage(message, data = {}) {
+    if (this.verbosity === 'minimal' && data) {
+      const filtered = {};
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== 0 && value !== false && value !== null && value !== undefined) {
+          filtered[key] = value;
+        }
+      }
+      if (Object.keys(filtered).length === 0) return message;
+      return `${message} ${JSON.stringify(filtered)}`;
+    }
+    return data && Object.keys(data).length > 0 ? `${message} ${JSON.stringify(data)}` : message;
+  }
+
   async persistLog(entry) {
     if (!supabase) return;
 
     try {
       const logData = {
+        action: entry.moduleName || 'LOG_ENTRY',
+        entity_type: 'SYSTEM_LOG',
         timestamp: entry.timestamp,
         level: entry.level,
         message: entry.message,
@@ -52,87 +89,89 @@ class Logger {
     }
   }
 
-  debug(message, context, userId) {
-    if (!this.shouldLog(LogLevel.DEBUG)) return;
-
-    const entry = {
-      timestamp: new Date().toISOString(),
-      level: LogLevel.DEBUG,
-      message,
-      context: context || {},
-      userId,
-      moduleName: context?.moduleName || 'logger',
-    };
-
-    console.debug(`[${entry.timestamp}] ${message}`, context);
-    this.persistLog(entry);
-  }
-
-  info(message, context, userId) {
+  info(message, context = {}) {
     if (!this.shouldLog(LogLevel.INFO)) return;
+
+    const contextStr = this.formatContext(context);
+    const displayMsg = this.formatMessage(message, this.verbosity === 'minimal' ? {} : context);
+    console.log(`${COLORS.INFO}${contextStr} ✓ ${displayMsg}${COLORS.RESET}`);
 
     const entry = {
       timestamp: new Date().toISOString(),
       level: LogLevel.INFO,
       message,
-      context: context || {},
-      userId,
-      moduleName: context?.moduleName || 'logger',
+      context,
+      moduleName: context?.module || 'logger',
     };
-
-    console.log(`[${entry.timestamp}] ${message}`, context);
     this.persistLog(entry);
   }
 
-  warn(message, context, userId, publisherId) {
+  success(message, context = {}) {
+    if (!this.shouldLog(LogLevel.INFO)) return;
+
+    const contextStr = this.formatContext(context);
+    console.log(`${COLORS.SUCCESS}${contextStr} ✓ ${message}${COLORS.RESET}`);
+
+    const entry = {
+      timestamp: new Date().toISOString(),
+      level: LogLevel.INFO,
+      message: `SUCCESS: ${message}`,
+      context,
+      moduleName: context?.module || 'logger',
+    };
+    this.persistLog(entry);
+  }
+
+  warn(message, context = {}) {
     if (!this.shouldLog(LogLevel.WARN)) return;
+
+    const contextStr = this.formatContext(context);
+    console.warn(`${COLORS.WARN}${contextStr} ⚠ ${message}${COLORS.RESET}`);
 
     const entry = {
       timestamp: new Date().toISOString(),
       level: LogLevel.WARN,
       message,
-      context: context || {},
-      userId,
-      publisherId,
-      moduleName: context?.moduleName || 'logger',
+      context,
+      moduleName: context?.module || 'logger',
     };
-
-    console.warn(`[${entry.timestamp}] ${message}`, context);
     this.persistLog(entry);
   }
 
-  error(message, error, context, userId, publisherId) {
+  error(message, error, context = {}) {
     if (!this.shouldLog(LogLevel.ERROR)) return;
+
+    const contextStr = this.formatContext(context);
+    const errorMsg = error?.message || error?.toString() || 'Unknown error';
+    console.error(`${COLORS.ERROR}${contextStr} ✗ ${message}: ${errorMsg}${COLORS.RESET}`);
 
     const entry = {
       timestamp: new Date().toISOString(),
       level: LogLevel.ERROR,
       message,
-      error: error?.message || error?.toString(),
-      context: context || {},
-      userId,
-      publisherId,
-      moduleName: context?.moduleName || 'logger',
+      error: errorMsg,
+      context,
+      moduleName: context?.module || 'logger',
     };
-
-    console.error(`[${entry.timestamp}] ${message}`, error, context);
     this.persistLog(entry);
   }
 
-  moduleAction(moduleName, action, context, userId, publisherId) {
-    const message = `${action}`;
-    const entry = {
-      timestamp: new Date().toISOString(),
-      level: LogLevel.INFO,
-      message,
-      context: { ...context, moduleName, action },
-      userId,
-      publisherId,
-      moduleName,
-    };
+  debug(message, context = {}) {
+    if (this.verbosity !== 'debug') return;
+    const contextStr = this.formatContext(context);
+    console.debug(`${contextStr} [DEBUG] ${message}`);
+  }
 
-    console.log(`[${entry.timestamp}] [${moduleName}] ${message}`, context);
-    this.persistLog(entry);
+  moduleStart(moduleName, context = {}) {
+    this.info(`${moduleName} starting`, { ...context, module: moduleName });
+  }
+
+  moduleComplete(moduleName, context = {}) {
+    this.success(`${moduleName} completed`, { ...context, module: moduleName });
+  }
+
+  moduleFailed(moduleName, error, context = {}) {
+    this.error(`${moduleName} failed`, error, { ...context, module: moduleName });
   }
 }
 
