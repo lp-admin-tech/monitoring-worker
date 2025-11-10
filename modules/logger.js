@@ -32,6 +32,8 @@ class Logger {
 
     try {
       const logData = {
+        action: entry.moduleName || 'LOG_ENTRY',
+        entity_type: 'SYSTEM_LOG',
         timestamp: entry.timestamp,
         level: entry.level,
         message: entry.message,
