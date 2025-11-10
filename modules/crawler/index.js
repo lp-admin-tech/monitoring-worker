@@ -61,7 +61,7 @@ class Crawler {
 
   async crawlPublisher(publisher, options = {}) {
     const {
-      sessionDuration = 52000,
+      sessionDuration = 70000,
       viewport = this.viewports[0],
       captureScreenshots = true,
       uploadResults = true,

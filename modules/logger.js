@@ -1,9 +1,15 @@
-let supabase;
-try {
-  supabase = require('./supabase-client');
-} catch (err) {
-  console.warn('Supabase client not available for logging');
-  supabase = null;
+let supabase = null;
+
+function getSupabaseClient() {
+  if (supabase === null && supabase !== false) {
+    try {
+      supabase = require('./supabase-client');
+    } catch (err) {
+      supabase = false;
+      console.warn('Supabase client not available for logging');
+    }
+  }
+  return supabase || null;
 }
 
 const LogLevel = {
@@ -63,7 +69,8 @@ class Logger {
   }
 
   async persistLog(entry) {
-    if (!supabase) return;
+    const client = getSupabaseClient();
+    if (!client) return;
 
     try {
       const logData = {
@@ -81,9 +88,7 @@ class Logger {
         publisher_id: entry.publisherId || null,
       };
 
-      supabase.insert('audit_logs', logData).catch(err => {
-        console.error('[Logger] Failed to persist log:', err.message);
-      });
+      await client.insert('audit_logs', logData);
     } catch (err) {
       console.error('[Logger] Failed to persist log:', err.message);
     }

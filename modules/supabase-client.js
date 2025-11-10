@@ -9,8 +9,6 @@ if (!supabaseUrl || !supabaseServiceKey) {
 
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-const logger = require('./logger');
-
 class SupabaseIntegration {
   async logDbOperation(operation, table, status, duration, recordCount, error, details) {
     try {
@@ -33,12 +31,12 @@ class SupabaseIntegration {
         .insert(logEntry);
 
       if (status === 'success') {
-        logger.debug(`[DB_LOG] ${operation} ${table}: ${recordCount} record(s) in ${duration}ms`);
+        console.log(`[DB_LOG] ${operation} ${table}: ${recordCount} record(s) in ${duration}ms`);
       } else {
-        logger.error(`[DB_LOG] ${operation} ${table} FAILED: ${error?.message || 'Unknown error'}`);
+        console.error(`[DB_LOG] ${operation} ${table} FAILED: ${error?.message || 'Unknown error'}`);
       }
     } catch (err) {
-      logger.error(`[DB_LOG] Failed to log database operation: ${err.message}`);
+      console.error(`[DB_LOG] Failed to log database operation: ${err.message}`);
     }
   }
 

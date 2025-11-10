@@ -283,8 +283,17 @@ class BatchSiteProcessor {
       const aiResult = await executeWithRetry(
         'AIAssistance',
         async () => {
-          const result = await aiAssistance.generateComprehensiveReport(aiInput);
-          return { data: result, error: null };
+          try {
+            const result = await aiAssistance.generateComprehensiveReport(
+              { domain: siteAudit.site_name },
+              scorerResult.data,
+              modules.policyChecker.data?.issues || []
+            );
+            return { data: result, error: null };
+          } catch (err) {
+            logger.warn(`[${requestId}] AI Assistance failed, using fallback`, { error: err.message, requestId });
+            return { data: null, error: err.message };
+          }
         },
         {},
         requestId
@@ -300,7 +309,12 @@ class BatchSiteProcessor {
         policy_check: modules.policyChecker.data,
         technical_check: modules.technicalChecker.data,
         risk_score: modules.scorer.data?.riskScore || 0,
-        ai_report: modules.aiAssistance.data,
+        ai_report: aiResult.data ? {
+          llmResponse: aiResult.data.llmResponse,
+          interpretation: aiResult.data.interpretation,
+          timestamp: aiResult.data.timestamp,
+          metadata: aiResult.data.metadata
+        } : null,
         raw_results: modules,
         completed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
