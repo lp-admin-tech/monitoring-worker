@@ -149,8 +149,27 @@ class BatchSiteProcessor {
         started_at: new Date().toISOString(),
       };
 
-      const result = await supabase.insert('site_audits', siteAuditRecord);
-      const siteAuditId = result[0]?.id;
+      let siteAuditId;
+      try {
+        const result = await supabase.insert('site_audits', siteAuditRecord);
+        siteAuditId = result[0]?.id;
+        logger.info(`[${requestId}] Successfully created site audit record`, {
+          jobId,
+          publisherId,
+          siteName: siteAudit.site_name,
+          siteAuditId,
+          requestId,
+        });
+      } catch (insertErr) {
+        logger.error(`[${requestId}] Failed to create site audit record`, insertErr, {
+          jobId,
+          publisherId,
+          siteName: siteAudit.site_name,
+          record: siteAuditRecord,
+          requestId,
+        });
+        throw insertErr;
+      }
 
       logger.info(`[${requestId}] Started processing site ${siteAudit.site_name}`, {
         jobId,
@@ -287,7 +306,27 @@ class BatchSiteProcessor {
         updated_at: new Date().toISOString(),
       };
 
-      await supabase.update('site_audits', siteAuditId, completedAudit);
+      try {
+        await supabase.update('site_audits', siteAuditId, completedAudit);
+        logger.info(`[${requestId}] Successfully updated site audit with final results`, {
+          jobId,
+          publisherId,
+          siteName: siteAudit.site_name,
+          siteAuditId,
+          status: completedAudit.status,
+          riskScore: completedAudit.risk_score,
+          requestId,
+        });
+      } catch (updateErr) {
+        logger.error(`[${requestId}] Failed to update site audit with final results`, updateErr, {
+          jobId,
+          publisherId,
+          siteName: siteAudit.site_name,
+          siteAuditId,
+          requestId,
+        });
+        throw updateErr;
+      }
 
       logger.findingsReport(modules);
 
@@ -315,13 +354,37 @@ class BatchSiteProcessor {
           updated_at: new Date().toISOString(),
         };
 
+        logger.info(`[${requestId}] Querying for existing site audit to update failure status`, {
+          jobId,
+          siteName: siteAudit.site_name,
+          requestId,
+        });
+
         const existingSite = await supabase.query('site_audits', {
           audit_queue_id: jobId,
           site_name: siteAudit.site_name,
         });
 
-        if (existingSite.length > 0) {
+        if (existingSite && existingSite.length > 0) {
+          logger.info(`[${requestId}] Found existing site audit, updating with failure status`, {
+            jobId,
+            siteName: siteAudit.site_name,
+            siteAuditId: existingSite[0].id,
+            requestId,
+          });
           await supabase.update('site_audits', existingSite[0].id, failedAudit);
+          logger.info(`[${requestId}] Successfully updated site audit with failure status`, {
+            jobId,
+            siteName: siteAudit.site_name,
+            siteAuditId: existingSite[0].id,
+            requestId,
+          });
+        } else {
+          logger.warn(`[${requestId}] No existing site audit found to update`, {
+            jobId,
+            siteName: siteAudit.site_name,
+            requestId,
+          });
         }
       } catch (updateError) {
         logger.error(
