@@ -204,10 +204,13 @@ class AIAssistanceModule {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData.error?.message || errorData.message || response.statusText;
         logger.error('OpenRouter API error', {
           status: response.status,
+          statusText: response.statusText,
           model: this.model,
-          error: errorData
+          errorMessage,
+          errorCode: errorData.error?.code,
         });
 
         if (response.status === 401) {
@@ -216,7 +219,12 @@ class AIAssistanceModule {
         }
 
         if (response.status === 429) {
-          logger.warn('OpenRouter rate limit exceeded, using fallback');
+          const retryAfter = response.headers.get('Retry-After') || 'unknown';
+          logger.warn('OpenRouter rate limit exceeded - using fallback analysis', {
+            status: 429,
+            retryAfter,
+            model: this.model
+          });
           return this.generateFallbackAnalysis(userPrompt);
         }
 
@@ -226,9 +234,12 @@ class AIAssistanceModule {
       const data = await response.json();
 
       if (data.error) {
-        logger.error('OpenRouter returned error', {
-          error: data.error,
-          model: this.model
+        const errorMessage = typeof data.error === 'object' ? JSON.stringify(data.error) : String(data.error);
+        logger.error('OpenRouter returned error response', {
+          errorMessage,
+          model: this.model,
+          errorType: data.error?.type,
+          errorCode: data.error?.code
         });
         return this.generateFallbackAnalysis(userPrompt);
       }
@@ -243,9 +254,11 @@ class AIAssistanceModule {
 
       return response_text;
     } catch (error) {
-      logger.error('Error calling OpenRouter LLM', {
-        error: error.message,
-        model: this.model
+      logger.error('Unexpected error calling OpenRouter LLM', {
+        errorMessage: error.message,
+        errorType: error.name,
+        model: this.model,
+        stack: error.stack?.substring(0, 200)
       });
       return this.generateFallbackAnalysis(userPrompt);
     }

@@ -252,6 +252,13 @@ class BatchSiteProcessor {
 
       analysisResults.forEach(result => {
         modules[result.name] = result;
+        if (result.data) {
+          logger.detailedModuleLog(result.name, result, {
+            requestId,
+            siteAuditId,
+            siteName: siteAudit.site_name,
+          });
+        }
       });
 
       const scorerInput = {
@@ -273,6 +280,14 @@ class BatchSiteProcessor {
       );
 
       modules.scorer = scorerResult;
+
+      if (scorerResult.data) {
+        logger.detailedModuleLog('Scorer', scorerResult, {
+          requestId,
+          siteAuditId,
+          siteName: siteAudit.site_name,
+        });
+      }
 
       const aiInput = {
         riskScore: scorerResult.data?.riskScore,
@@ -300,6 +315,14 @@ class BatchSiteProcessor {
       );
 
       modules.aiAssistance = aiResult;
+
+      if (aiResult.data) {
+        logger.detailedModuleLog('AIAssistance', aiResult, {
+          requestId,
+          siteAuditId,
+          siteName: siteAudit.site_name,
+        });
+      }
 
       const completedAudit = {
         status: 'completed',
@@ -342,6 +365,7 @@ class BatchSiteProcessor {
         throw updateErr;
       }
 
+      logger.auditSummary(siteAudit.site_name, modules);
       logger.findingsReport(modules);
 
       logger.success(`Audit completed for ${siteAudit.site_name}`, {

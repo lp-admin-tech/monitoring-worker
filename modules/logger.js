@@ -234,65 +234,223 @@ class Logger {
     this.persistLog(entry);
   }
 
+  auditSummary(domain, findings) {
+    if (!this.shouldLog(LogLevel.INFO)) return;
+
+    const lines = [];
+    lines.push(`\n${COLORS.INFO}AUDIT SUMMARY - ${domain}${COLORS.RESET}`);
+    lines.push('='.repeat(70));
+
+    let totalIssues = 0;
+    let totalFindings = 0;
+
+    for (const [moduleName, data] of Object.entries(findings)) {
+      if (moduleName !== 'timestamp' && moduleName !== 'domain' && data && typeof data === 'object') {
+        const issueCount = data.issues ? data.issues.length : 0;
+        const goodCount = data.good ? data.good.length : 0;
+        const hasData = data.data && Object.keys(data.data).length > 0;
+
+        totalIssues += issueCount;
+        totalFindings += goodCount;
+
+        lines.push(`\n${moduleName.toUpperCase()}`);
+        if (data.error) {
+          lines.push(`  Status: ERROR - ${data.error}`);
+        } else if (hasData || issueCount > 0 || goodCount > 0) {
+          lines.push(`  Status: PROCESSED`);
+        } else {
+          lines.push(`  Status: NO DATA`);
+        }
+
+        if (issueCount > 0) {
+          lines.push(`  Issues: ${issueCount}`);
+        }
+        if (goodCount > 0) {
+          lines.push(`  Positive Findings: ${goodCount}`);
+        }
+      }
+    }
+
+    lines.push(`\n${'='.repeat(70)}`);
+    lines.push(`Total Issues Found: ${totalIssues}`);
+    lines.push(`Total Positive Findings: ${totalFindings}`);
+    lines.push(`${COLORS.RESET}`);
+
+    console.log(lines.join('\n'));
+  }
+
+  detailedModuleLog(moduleName, result, context = {}) {
+    if (!this.shouldLog(LogLevel.INFO)) return;
+
+    const timestamp = new Date().toISOString();
+    const lines = [];
+
+    lines.push(`\n${COLORS.INFO}[DETAILED ${moduleName.toUpperCase()} REPORT]${COLORS.RESET}`);
+    lines.push(`Timestamp: ${timestamp}`);
+
+    if (context.requestId) lines.push(`Request ID: ${context.requestId}`);
+    if (context.siteAuditId) lines.push(`Audit ID: ${context.siteAuditId}`);
+    if (context.siteName) lines.push(`Site: ${context.siteName}`);
+
+    lines.push('\nEXECUTION STATUS:');
+    if (result.success !== undefined) {
+      lines.push(`  Status: ${result.success ? 'SUCCESS' : 'FAILED'}`);
+    }
+    if (result.error) {
+      lines.push(`  Error: ${result.error}`);
+    }
+
+    if (result.data) {
+      lines.push('\nDATA COLLECTED:');
+
+      const formatValue = (val, indent = 2) => {
+        const padding = ' '.repeat(indent);
+        if (Array.isArray(val)) {
+          return `Array[${val.length}]`;
+        } else if (val === null) {
+          return 'null';
+        } else if (typeof val === 'object') {
+          const keys = Object.keys(val).slice(0, 8);
+          return `Object { ${keys.join(', ')} ${Object.keys(val).length > 8 ? '...' : ''} }`;
+        } else if (typeof val === 'string' && val.length > 100) {
+          return `"${val.substring(0, 100)}..."`;
+        }
+        return JSON.stringify(val);
+      };
+
+      if (typeof result.data === 'object') {
+        const entries = Object.entries(result.data);
+        if (entries.length > 0) {
+          entries.forEach(([key, value]) => {
+            lines.push(`  ${key}: ${formatValue(value)}`);
+          });
+        } else {
+          lines.push('  No data fields');
+        }
+      } else {
+        lines.push(`  Value: ${formatValue(result.data)}`);
+      }
+    }
+
+    if (result.issues && Array.isArray(result.issues) && result.issues.length > 0) {
+      lines.push(`\nISSUES FOUND (${result.issues.length}):`);
+      result.issues.slice(0, 10).forEach((issue, idx) => {
+        const issueStr = typeof issue === 'object' ? JSON.stringify(issue) : String(issue);
+        lines.push(`  ${idx + 1}. ${issueStr.substring(0, 150)}${issueStr.length > 150 ? '...' : ''}`);
+      });
+      if (result.issues.length > 10) {
+        lines.push(`  ... and ${result.issues.length - 10} more issues`);
+      }
+    }
+
+    if (result.good && Array.isArray(result.good) && result.good.length > 0) {
+      lines.push(`\nPOSITIVE FINDINGS (${result.good.length}):`);
+      result.good.slice(0, 10).forEach((item, idx) => {
+        const itemStr = typeof item === 'object' ? JSON.stringify(item) : String(item);
+        lines.push(`  ${idx + 1}. ${itemStr.substring(0, 150)}${itemStr.length > 150 ? '...' : ''}`);
+      });
+      if (result.good.length > 10) {
+        lines.push(`  ... and ${result.good.length - 10} more findings`);
+      }
+    }
+
+    lines.push('');
+    console.log(lines.join('\n'));
+
+    const entry = {
+      timestamp,
+      level: LogLevel.INFO,
+      message: `Detailed module report: ${moduleName}`,
+      context: {
+        moduleName,
+        ...context,
+        resultKeys: result.data ? Object.keys(result.data) : [],
+        issueCount: result.issues ? result.issues.length : 0,
+        goodCount: result.good ? result.good.length : 0,
+      },
+    };
+    this.persistLog(entry);
+  }
+
   findingsReport(findings) {
     if (!this.shouldLog(LogLevel.INFO)) return;
 
-    const formatModuleData = (data) => {
+    const formatModuleData = (moduleName, data) => {
       if (!data) return 'No data';
 
       if (data.error) return `ERROR: ${data.error}`;
-      if (!data.data && !data.issues && !data.good) return 'Processing...';
 
       const lines = [];
 
       if (data.data) {
         if (typeof data.data === 'object') {
-          const keys = Object.keys(data.data).filter(k => data.data[k] !== null && data.data[k] !== undefined);
-          if (keys.length > 0) {
-            lines.push(`Found: ${keys.join(', ')}`);
-            for (const key of keys.slice(0, 5)) {
-              const value = data.data[key];
-              if (value && typeof value === 'object') {
-                lines.push(`  - ${key}: ${JSON.stringify(value).substring(0, 80)}${JSON.stringify(value).length > 80 ? '...' : ''}`);
+          const dataEntries = Object.entries(data.data).filter(
+            ([k, v]) => v !== null && v !== undefined && v !== ''
+          );
+
+          if (dataEntries.length > 0) {
+            for (const [key, value] of dataEntries) {
+              if (Array.isArray(value)) {
+                lines.push(`  ${key}: [${value.length} items]`);
+                value.slice(0, 3).forEach(item => {
+                  if (typeof item === 'object') {
+                    lines.push(`    - ${JSON.stringify(item).substring(0, 120)}${JSON.stringify(item).length > 120 ? '...' : ''}`);
+                  } else {
+                    lines.push(`    - ${item}`);
+                  }
+                });
+                if (value.length > 3) lines.push(`    ... and ${value.length - 3} more`);
+              } else if (typeof value === 'object') {
+                lines.push(`  ${key}:`);
+                const objEntries = Object.entries(value).slice(0, 5);
+                objEntries.forEach(([k, v]) => {
+                  const valStr = typeof v === 'object' ? JSON.stringify(v).substring(0, 80) : String(v);
+                  lines.push(`    ${k}: ${valStr}`);
+                });
               } else {
-                lines.push(`  - ${key}: ${value}`);
+                lines.push(`  ${key}: ${value}`);
               }
             }
+          } else {
+            lines.push('  No data collected');
           }
         } else {
-          lines.push(`Result: ${data.data}`);
+          lines.push(`  Result: ${data.data}`);
         }
       }
 
-      if (data.issues && data.issues.length > 0) {
-        lines.push(`Issues (${data.issues.length}):`);
-        data.issues.slice(0, 3).forEach(issue => {
-          lines.push(`  ✗ ${issue}`);
+      if (data.issues && Array.isArray(data.issues) && data.issues.length > 0) {
+        lines.push(`\n  Issues (${data.issues.length}):`);
+        data.issues.slice(0, 5).forEach(issue => {
+          const issueStr = typeof issue === 'object' ? JSON.stringify(issue).substring(0, 100) : String(issue);
+          lines.push(`    ✗ ${issueStr}`);
         });
-        if (data.issues.length > 3) lines.push(`  ... and ${data.issues.length - 3} more`);
+        if (data.issues.length > 5) lines.push(`    ... and ${data.issues.length - 5} more issues`);
       }
 
-      if (data.good && data.good.length > 0) {
-        lines.push(`Good (${data.good.length}):`);
-        data.good.slice(0, 3).forEach(item => {
-          lines.push(`  ✓ ${item}`);
+      if (data.good && Array.isArray(data.good) && data.good.length > 0) {
+        lines.push(`\n  Good (${data.good.length}):`);
+        data.good.slice(0, 5).forEach(item => {
+          const itemStr = typeof item === 'object' ? JSON.stringify(item).substring(0, 100) : String(item);
+          lines.push(`    ✓ ${itemStr}`);
         });
-        if (data.good.length > 3) lines.push(`  ... and ${data.good.length - 3} more`);
+        if (data.good.length > 5) lines.push(`    ... and ${data.good.length - 5} more items`);
       }
 
-      return lines.length > 0 ? lines.join('\n    ') : 'No findings';
+      return lines.length > 0 ? lines.join('\n') : 'No findings';
     };
 
-    let output = `${COLORS.INFO}AUDIT FINDINGS\n${'='.repeat(50)}\n`;
+    let output = `${COLORS.INFO}AUDIT FINDINGS\n${'='.repeat(70)}\n`;
 
     for (const [moduleName, data] of Object.entries(findings)) {
       if (moduleName !== 'timestamp' && moduleName !== 'domain' && data && typeof data === 'object') {
         output += `\n[${moduleName.toUpperCase()}]\n`;
-        output += `  ${formatModuleData(data)}\n`;
+        output += formatModuleData(moduleName, data);
+        output += '\n';
       }
     }
 
-    output += `${'='.repeat(50)}${COLORS.RESET}\n`;
+    output += `${'='.repeat(70)}${COLORS.RESET}\n`;
 
     console.log(output);
 

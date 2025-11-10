@@ -338,7 +338,11 @@ class TrendAnalyzer {
       }
 
       if (!publisherId) {
-        logger.warn('No publisher ID provided for pattern drift detection');
+        logger.warn('No publisher ID provided for pattern drift detection', {
+          reason: 'no_publisher_id',
+          source: 'detectPatternDrift',
+          context: 'Pattern drift analysis skipped - publisher ID required for historical comparison'
+        });
         return { driftDetected: false, severity: 'none', patterns: [], reason: 'no_publisher_id' };
       }
 
