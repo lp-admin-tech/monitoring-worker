@@ -24,7 +24,7 @@ const COLORS = {
 class Logger {
   constructor() {
     this.minLevel = LogLevel.INFO;
-    this.verbosity = process.env.LOG_VERBOSITY || 'normal';
+    this.verbosity = process.env.LOG_VERBOSITY || 'minimal';
   }
 
   setMinLevel(level) {
@@ -92,8 +92,12 @@ class Logger {
   info(message, context = {}) {
     if (!this.shouldLog(LogLevel.INFO)) return;
 
+    if (this.verbosity === 'minimal') {
+      return;
+    }
+
     const contextStr = this.formatContext(context);
-    const displayMsg = this.formatMessage(message, this.verbosity === 'minimal' ? {} : context);
+    const displayMsg = this.formatMessage(message, context);
     console.log(`${COLORS.INFO}${contextStr} ✓ ${displayMsg}${COLORS.RESET}`);
 
     const entry = {
@@ -108,6 +112,10 @@ class Logger {
 
   success(message, context = {}) {
     if (!this.shouldLog(LogLevel.INFO)) return;
+
+    if (this.verbosity === 'minimal') {
+      return;
+    }
 
     const contextStr = this.formatContext(context);
     console.log(`${COLORS.SUCCESS}${contextStr} ✓ ${message}${COLORS.RESET}`);
