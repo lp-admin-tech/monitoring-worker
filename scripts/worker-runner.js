@@ -475,7 +475,7 @@ async function executeAuditPipeline(job, requestId) {
 
     const crawlerResult = await executeWithRetry(
       'Crawler',
-      async () => crawler.crawlSites(job.sites),
+      async () => crawler.crawlMultipleSites(job.sites),
       [],
       requestId
     );

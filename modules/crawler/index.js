@@ -18,8 +18,20 @@ class Crawler {
     ];
     this.viewports = [
       { width: 1920, height: 1080, name: 'desktop' },
-      { width: 768, height: 1024, name: 'tablet' },
-      { width: 375, height: 667, name: 'mobile' },
+    ];
+    this.commonDirectories = [
+      '/news',
+      '/blog',
+      '/category',
+      '/articles',
+      '/sports',
+      '/entertainment',
+      '/business',
+      '/health',
+      '/tech',
+      '/lifestyle',
+      '/politics',
+      '/world',
     ];
   }
 
@@ -49,7 +61,7 @@ class Crawler {
 
   async crawlPublisher(publisher, options = {}) {
     const {
-      sessionDuration = 40000,
+      sessionDuration = 52000,
       viewport = this.viewports[0],
       captureScreenshots = true,
       uploadResults = true,
@@ -155,16 +167,30 @@ class Crawler {
 
   async crawlPublisherSubdirectories(publisher, options = {}) {
     const results = [];
+    let directoriesToCrawl = publisher.subdirectories || [];
 
-    if (!publisher.subdirectories || publisher.subdirectories.length === 0) {
-      return [await this.crawlPublisher(publisher, options)];
+    const mainCrawlResult = await this.crawlPublisher(publisher, options);
+    results.push(mainCrawlResult);
+
+    if (directoriesToCrawl.length === 0) {
+      const page = await this.browser.newPage();
+      try {
+        await this.navigateToPage(page, publisher.site_url);
+        const discoveredDirs = await this.discoverDirectories(page, publisher.site_url);
+        directoriesToCrawl = discoveredDirs;
+        logger.info(`Auto-discovered ${discoveredDirs.length} directories for ${publisher.site_name}`);
+      } catch (error) {
+        logger.warn(`Failed to auto-discover directories: ${error.message}`);
+      } finally {
+        await page.close().catch(() => {});
+      }
     }
 
-    for (const subdirectory of publisher.subdirectories) {
+    for (const subdirectory of directoriesToCrawl) {
       try {
         const subdirPublisher = {
           ...publisher,
-          site_url: `${publisher.site_url}/${subdirectory}`.replace(/\/+/g, '/'),
+          site_url: `${publisher.site_url}${subdirectory}`.replace(/\/+/g, '/'),
         };
 
         const crawlResult = await this.crawlPublisher(subdirPublisher, options);
@@ -205,6 +231,85 @@ class Crawler {
       logger.error('Failed to capture screenshot', error);
       return null;
     }
+  }
+
+  async discoverDirectories(page, baseUrl) {
+    const discoveredDirs = new Set();
+    try {
+      const baseUrlObj = new URL(baseUrl);
+      const baseDomain = `${baseUrlObj.protocol}//${baseUrlObj.host}`;
+
+      const links = await page.locator('a[href]').all();
+
+      for (const link of links) {
+        try {
+          const href = await link.getAttribute('href');
+          if (!href) continue;
+
+          const absoluteUrl = new URL(href, baseUrl).href;
+          const absoluteUrlObj = new URL(absoluteUrl);
+
+          if (absoluteUrlObj.hostname === baseUrlObj.hostname) {
+            const pathname = absoluteUrlObj.pathname;
+            const segments = pathname.split('/').filter(s => s.length > 0);
+
+            if (segments.length > 0) {
+              const firstSegment = '/' + segments[0];
+
+              if (firstSegment !== '/' && !firstSegment.includes('.')) {
+                discoveredDirs.add(firstSegment);
+              }
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+
+      const dirsArray = Array.from(discoveredDirs);
+      logger.info(`Discovered ${dirsArray.length} directories on ${baseUrl}: ${dirsArray.join(', ')}`);
+
+      return dirsArray;
+    } catch (error) {
+      logger.warn(`Error discovering directories: ${error.message}`);
+      return [];
+    }
+  }
+
+  async crawlMultipleSites(sites, options = {}) {
+    const results = [];
+
+    if (!Array.isArray(sites) || sites.length === 0) {
+      return { content: [], ads: [] };
+    }
+
+    for (const site of sites) {
+      try {
+        const siteName = typeof site === 'string' ? site : site.site_name;
+        const siteUrl = typeof site === 'string' ? site : site.site_url;
+
+        const publisherData = {
+          id: `site-${Date.now()}`,
+          site_name: siteName,
+          site_url: siteUrl,
+          subdirectories: site.subdirectories || [],
+        };
+
+        const crawlResults = await this.crawlPublisherSubdirectories(publisherData, options);
+        results.push(...crawlResults);
+      } catch (error) {
+        logger.error(`Error crawling site: ${site}`, error);
+        results.push({
+          site: site,
+          error: error.message,
+        });
+      }
+    }
+
+    return {
+      content: results.filter(r => !r.error),
+      ads: results.filter(r => r.adElements).flatMap(r => r.adElements || []),
+    };
   }
 }
 
