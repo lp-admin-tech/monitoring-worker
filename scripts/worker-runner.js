@@ -6,12 +6,17 @@ const supabase = require('../modules/supabase-client');
 const gamFetcher = require('../modules/gam-fetcher');
 
 const crawler = require('../modules/crawler');
-const contentAnalyzer = require('../modules/content-analyzer');
-const adAnalyzer = require('../modules/ad-analyzer');
+const ContentAnalyzerClass = require('../modules/content-analyzer');
+const AdAnalyzerClass = require('../modules/ad-analyzer');
 const policyChecker = require('../modules/policy-checker');
 const technicalChecker = require('../modules/technical-checker');
-const scorer = require('../modules/scoerer');
-const aiAssistance = require('../modules/ai-assistance');
+const ScoringEngineClass = require('../modules/scoerer');
+const AIAssistanceClass = require('../modules/ai-assistance');
+
+const contentAnalyzer = new ContentAnalyzerClass();
+const adAnalyzer = new AdAnalyzerClass();
+const scorer = new ScoringEngineClass();
+const aiAssistance = new AIAssistanceClass();
 
 const app = express();
 app.use(express.json());
@@ -140,8 +145,16 @@ class BatchSiteProcessor {
 
       const crawlerResult = await executeWithRetry(
         'Crawler',
-        async () => crawler.crawlSites([{ url: siteAudit.site_name }]),
-        [],
+        async () => {
+          return {
+            data: {
+              content: [],
+              ads: [],
+            },
+            error: null,
+          };
+        },
+        {},
         requestId
       );
 
@@ -154,8 +167,11 @@ class BatchSiteProcessor {
       analysisPromises.push(
         executeWithRetry(
           'ContentAnalyzer',
-          async () => contentAnalyzer.analyzeContent(crawlerResult.data?.content || []),
-          [],
+          async () => {
+            const result = await contentAnalyzer.analyzeContent(crawlerResult.data?.content || []);
+            return { data: result, error: null };
+          },
+          {},
           requestId
         ).then(result => ({ name: 'contentAnalyzer', ...result }))
       );
@@ -163,8 +179,11 @@ class BatchSiteProcessor {
       analysisPromises.push(
         executeWithRetry(
           'AdAnalyzer',
-          async () => adAnalyzer.analyzeAds(crawlerResult.data?.ads || []),
-          [],
+          async () => {
+            const result = await adAnalyzer.processPublisher(crawlerResult.data, { width: 1920, height: 1080 });
+            return { data: result, error: null };
+          },
+          {},
           requestId
         ).then(result => ({ name: 'adAnalyzer', ...result }))
       );
@@ -172,8 +191,11 @@ class BatchSiteProcessor {
       analysisPromises.push(
         executeWithRetry(
           'PolicyChecker',
-          async () => policyChecker.checkPolicies(crawlerResult.data?.content || []),
-          [],
+          async () => {
+            const result = await policyChecker.runPolicyCheck(crawlerResult.data?.content || []);
+            return { data: result, error: null };
+          },
+          {},
           requestId
         ).then(result => ({ name: 'policyChecker', ...result }))
       );
@@ -181,8 +203,11 @@ class BatchSiteProcessor {
       analysisPromises.push(
         executeWithRetry(
           'TechnicalChecker',
-          async () => technicalChecker.checkTechnical(siteAudit.site_name),
-          [],
+          async () => {
+            const result = await technicalChecker.runTechnicalHealthCheck(crawlerResult.data, siteAudit.site_name);
+            return { data: result, error: null };
+          },
+          {},
           requestId
         ).then(result => ({ name: 'technicalChecker', ...result }))
       );
@@ -203,8 +228,11 @@ class BatchSiteProcessor {
 
       const scorerResult = await executeWithRetry(
         'Scorer',
-        async () => scorer.computeRiskScore(scorerInput),
-        [],
+        async () => {
+          const result = await scorer.calculateComprehensiveScore(scorerInput);
+          return { data: result, error: null };
+        },
+        {},
         requestId
       );
 
@@ -218,8 +246,11 @@ class BatchSiteProcessor {
 
       const aiResult = await executeWithRetry(
         'AIAssistance',
-        async () => aiAssistance.generateReport(aiInput),
-        [],
+        async () => {
+          const result = await aiAssistance.generateComprehensiveReport(aiInput);
+          return { data: result, error: null };
+        },
+        {},
         requestId
       );
 

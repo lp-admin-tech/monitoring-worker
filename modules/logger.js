@@ -23,7 +23,7 @@ class Logger {
 
   async persistLog(entry) {
     try {
-      await supabase.insert('logs', {
+      await supabase.insert('audit_logs', {
         timestamp: entry.timestamp,
         level: entry.level,
         message: entry.message,
