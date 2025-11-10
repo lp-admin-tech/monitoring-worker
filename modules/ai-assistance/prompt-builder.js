@@ -2,7 +2,26 @@ const logger = require('../logger');
 
 class PromptBuilder {
   constructor() {
-    this.systemRole = `You are an expert content compliance analyst specializing in detecting Made-For-Advertising (MFA) sites and publisher fraud patterns. Your role is to translate technical metrics and audit data into clear, actionable insights for compliance teams. Provide balanced, evidence-based assessments that explain findings in plain language.`;
+    this.systemRole = `You are an expert content compliance analyst specializing in detecting Made-For-Advertising (MFA) sites and publisher fraud patterns. Your role is to translate technical metrics and audit data into clear, actionable insights using Token-Oriented Object Notation (TOON).
+
+TOON Format Guidelines:
+- Use function-like syntax: keyword(parameter)
+- Arrays use brackets: field:[item1, item2]
+- Values use parentheses: field(value) or key(key=value)
+- No JSON - maintain human-readable structure
+- Be concise and specific in all descriptions
+- No repetition between sections
+
+For each module analysis:
+1. interpret() - What the metrics mean
+2. detect() - Specific issues identified
+3. explain() - Root cause analysis
+4. suggest() - Actionable fixes
+5. highlight() - Positive signals
+6. calculate() - Score impact
+7. combine() - Summary combining all elements
+
+Output in clean, structured TOON format. Be balanced, evidence-based, and explain findings in plain language.`;
   }
 
   buildComprehensivePrompt(auditData, scorerOutput, policyViolations = []) {
@@ -147,17 +166,32 @@ ${policyViolations && policyViolations.length > 0
   buildAnalysisRequestSection() {
     return `## ANALYSIS REQUEST
 
-Based on the provided metrics, trends, and policy findings, please provide:
+Analyze findings using TOON format. For each significant module/finding:
 
-1. **Executive Summary** (2-3 sentences) - Overall assessment of MFA risk
-2. **Primary Findings** - Top 3-5 key indicators and what they suggest
-3. **Content Quality Assessment** - Analysis of content authenticity and quality
-4. **Ad Behavior Analysis** - Evaluation of aggressive ad practices
-5. **Risk Categorization** - Is this likely MFA, potentially problematic, or compliant?
-6. **Confidence Level** - How confident are you in this assessment?
-7. **Recommended Actions** - Specific next steps for the compliance team
+For each module analysis:
+- interpret() - What does this metric mean for site quality?
+- detect() - Identify specific issues that arise from this
+- explain() - Root cause for the issue
+- suggest() - Actionable fix to improve the score
+- highlight() - Positive signals to maintain quality
+- calculate() - Impact on overall quality/risk score
+- combine() - Brief summary connecting all findings
 
-Format your response in clear, structured sections. Use plain language avoiding technical jargon where possible. Be specific and cite the metrics that support your conclusions.`;
+Output format for each module:
+module(name)
+found(issues:["problem1", "problem2"])
+cause:["root cause for problem1", "root cause for problem2"]
+fix:["actionable fix for problem1", "actionable fix for problem2"]
+impact(score_change="numerical or qualitative value")
+good:["positive signal1", "positive signal2"]
+review_summary("Brief evaluation combining causes, fixes, and improvements")
+
+Guidelines:
+- Be concise and specific
+- Avoid repetition
+- Give realistic fixes that match site context
+- Infer missing details logically from signals
+- Maintain human-readable TOON format (no JSON)`;
   }
 
   formatComponentRisks(componentScores) {

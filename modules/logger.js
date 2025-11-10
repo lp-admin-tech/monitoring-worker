@@ -173,6 +173,53 @@ class Logger {
   moduleFailed(moduleName, error, context = {}) {
     this.error(`${moduleName} failed`, error, { ...context, module: moduleName });
   }
+
+  auditResults(results) {
+    if (!this.shouldLog(LogLevel.INFO)) return;
+
+    const formatIssues = (issues) => {
+      if (!issues || issues.length === 0) return '';
+      return issues.map(issue => `  - ${issue}`).join('\n');
+    };
+
+    const formatGood = (good) => {
+      if (!good || good.length === 0) return '';
+      return good.map(item => `  + ${item}`).join('\n');
+    };
+
+    const formatModule = (moduleName, data) => {
+      const parts = [`\n  ${moduleName.toUpperCase()}`];
+
+      if (data.issues && data.issues.length > 0) {
+        parts.push(`\n    Issues:\n${formatIssues(data.issues)}`);
+      }
+
+      if (data.good && data.good.length > 0) {
+        parts.push(`\n    Good:\n${formatGood(data.good)}`);
+      }
+
+      return parts.join('');
+    };
+
+    let output = `${COLORS.INFO}AUDIT RESULTS${COLORS.RESET}\n`;
+
+    for (const [moduleName, data] of Object.entries(results)) {
+      if (moduleName !== 'timestamp' && moduleName !== 'domain' && data && typeof data === 'object') {
+        output += formatModule(moduleName, data);
+      }
+    }
+
+    console.log(output);
+
+    const entry = {
+      timestamp: new Date().toISOString(),
+      level: LogLevel.INFO,
+      message: 'Audit results',
+      context: results,
+      moduleName: 'audit-results',
+    };
+    this.persistLog(entry);
+  }
 }
 
 module.exports = new Logger();

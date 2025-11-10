@@ -41,14 +41,74 @@ class AnalysisInterpreter {
 
   parseFindings(llmResponse) {
     const findings = {
-      summary: this.extractSection(llmResponse, 'Executive Summary', 'Summary') || '',
+      modules: this.parseTOONModules(llmResponse),
+      summary: this.extractSectionOrNull(llmResponse, 'Executive Summary', 'Summary'),
       primaryFindings: this.extractBulletPoints(llmResponse, 'Primary Findings'),
-      contentQuality: this.extractSection(llmResponse, 'Content Quality') || '',
-      adBehavior: this.extractSection(llmResponse, 'Ad Behavior') || '',
+      contentQuality: this.extractSectionOrNull(llmResponse, 'Content Quality'),
+      adBehavior: this.extractSectionOrNull(llmResponse, 'Ad Behavior'),
       recommendations: this.extractBulletPoints(llmResponse, 'Recommended Actions')
     };
 
     return findings;
+  }
+
+  parseTOONModules(text) {
+    const modules = {};
+    const modulePattern = /module\(([^)]+)\)\s*\n([\s\S]*?)(?=module\(|$)/g;
+    let match;
+
+    while ((match = modulePattern.exec(text)) !== null) {
+      const moduleName = match[1].trim();
+      const moduleContent = match[2];
+
+      modules[moduleName] = {
+        name: moduleName,
+        found: this.extractTOONArray(moduleContent, 'found'),
+        cause: this.extractTOONArray(moduleContent, 'cause'),
+        fix: this.extractTOONArray(moduleContent, 'fix'),
+        good: this.extractTOONArray(moduleContent, 'good'),
+        impact: this.extractTOONValue(moduleContent, 'impact'),
+        review_summary: this.extractTOONValue(moduleContent, 'review_summary')
+      };
+    }
+
+    return modules;
+  }
+
+  extractTOONArray(text, fieldName) {
+    const regex = new RegExp(`${fieldName}\\s*:\\s*\\[([^\\]]+)\\]`, 'i');
+    const match = text.match(regex);
+    if (!match) return [];
+
+    return match[1]
+      .split(',')
+      .map(item => item.trim().replace(/^["']|["']$/g, ''))
+      .filter(item => item);
+  }
+
+  extractTOONValue(text, fieldName) {
+    const regex = new RegExp(`${fieldName}\\s*\\(\\s*([^)]*)\\s*\\)`, 'i');
+    const match = text.match(regex);
+    if (!match) return null;
+
+    const content = match[1].trim();
+    if (content.startsWith('"') || content.startsWith("'")) {
+      return content.replace(/^["']|["']$/g, '');
+    }
+
+    const keyValueMatch = content.match(/([^=]+)=(.+)/);
+    if (keyValueMatch) {
+      return {
+        [keyValueMatch[1].trim()]: keyValueMatch[2].trim()
+      };
+    }
+
+    return content;
+  }
+
+  extractSectionOrNull(text, ...sectionNames) {
+    const section = this.extractSection(text, ...sectionNames);
+    return section || null;
   }
 
   categorizeFinding(llmResponse, auditData, scorerOutput) {
