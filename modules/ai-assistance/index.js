@@ -2,6 +2,7 @@ const logger = require('../logger');
 const PromptBuilder = require('./prompt-builder');
 const AnalysisInterpreter = require('./analysis');
 const ReportFormatter = require('./formatter');
+const { OpenRouterRateLimiter } = require('./rate-limiter');
 
 class AIAssistanceModule {
   constructor(envConfig = {}) {
@@ -9,6 +10,7 @@ class AIAssistanceModule {
     this.promptBuilder = new PromptBuilder();
     this.analysisInterpreter = new AnalysisInterpreter();
     this.reportFormatter = new ReportFormatter();
+    this.rateLimiter = new OpenRouterRateLimiter();
 
     this.aiModel = {
       apiKey: envConfig?.aiModel?.apiKey || process.env.AI_MODEL_API_KEY || '',
@@ -176,12 +178,7 @@ class AIAssistanceModule {
   }
 
   async callOpenRouterLLM(systemPrompt, userPrompt) {
-    try {
-      logger.debug('Calling OpenRouter LLM', {
-        model: this.model,
-        isDeepResearch: this.model.includes('deepseek')
-      });
-
+    const makeRequest = async () => {
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -204,31 +201,11 @@ class AIAssistanceModule {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        const errorMessage = errorData.error?.message || errorData.message || response.statusText;
-        logger.error('OpenRouter API error', {
-          status: response.status,
-          statusText: response.statusText,
-          model: this.model,
-          errorMessage,
-          errorCode: errorData.error?.code,
-        });
-
-        if (response.status === 401) {
-          logger.error('Invalid OpenRouter API key - check OPENROUTER_API_KEY');
-          return this.generateFallbackAnalysis(userPrompt);
-        }
-
-        if (response.status === 429) {
-          const retryAfter = response.headers.get('Retry-After') || 'unknown';
-          logger.warn('OpenRouter rate limit exceeded - using fallback analysis', {
-            status: 429,
-            retryAfter,
-            model: this.model
-          });
-          return this.generateFallbackAnalysis(userPrompt);
-        }
-
-        throw new Error(`OpenRouter API error: ${response.status} ${response.statusText}`);
+        const error = new Error(`OpenRouter API error: ${response.status} ${response.statusText}`);
+        error.status = response.status;
+        error.retryAfter = response.headers.get('Retry-After');
+        error.data = errorData;
+        throw error;
       }
 
       const data = await response.json();
@@ -244,21 +221,43 @@ class AIAssistanceModule {
         return this.generateFallbackAnalysis(userPrompt);
       }
 
-      const response_text = data.choices?.[0]?.message?.content || '';
+      return data.choices?.[0]?.message?.content || '';
+    };
+
+    try {
+      logger.debug('Calling OpenRouter LLM with rate limiting', {
+        model: this.model,
+      });
+
+      const result = await this.rateLimiter.executeWithRetry(makeRequest, 3);
+
+      if (!result.success) {
+        const error = result.error;
+        logger.error('OpenRouter request failed', {
+          status: error?.status,
+          message: error?.message,
+          retryExhausted: result.retryExhausted,
+          attempt: result.attempt
+        });
+
+        if (error?.status === 401) {
+          logger.error('Invalid OpenRouter API key - check OPENROUTER_API_KEY');
+        }
+
+        return this.generateFallbackAnalysis(userPrompt);
+      }
 
       logger.info('OpenRouter response successful', {
-        responseLength: response_text.length,
-        tokensUsed: data.usage?.total_tokens,
+        responseLength: result.data?.length,
         model: this.model
       });
 
-      return response_text;
+      return result.data;
     } catch (error) {
       logger.error('Unexpected error calling OpenRouter LLM', {
         errorMessage: error.message,
         errorType: error.name,
-        model: this.model,
-        stack: error.stack?.substring(0, 200)
+        model: this.model
       });
       return this.generateFallbackAnalysis(userPrompt);
     }
@@ -502,6 +501,50 @@ ${analysisHints.recommendations.join('\n')}`;
   setLLMApiKey(apiKey) {
     this.apiKey = apiKey;
     logger.info('LLM API key updated');
+  }
+
+  extractCausesAndFixes(llmResponse) {
+    const causes = [];
+    const fixes = [];
+
+    const causePatterns = [
+      /Cause[s]?:\s*\n([\s\S]*?)(?=\n(?:Fix|Recommendation|Solution)|$)/gi,
+      /Root Cause[s]?:\s*\n([\s\S]*?)(?=\n(?:Fix|Recommendation|Solution)|$)/gi,
+      /Why:\s*\n([\s\S]*?)(?=\n(?:Fix|Recommendation|Solution|How to|What to)|$)/gi,
+      /Issue[s]?:\s*\n([\s\S]*?)(?=\n(?:Fix|Recommendation|Solution)|$)/gi,
+    ];
+
+    const fixPatterns = [
+      /Fix[es]?:\s*\n([\s\S]*?)(?=\n(?:Cause|Recommendation|Alternative)|$)/gi,
+      /Solution[s]?:\s*\n([\s\S]*?)(?=\n(?:Cause|Recommendation|Alternative)|$)/gi,
+      /Recommendation[s]?:\s*\n([\s\S]*?)(?=\n(?:Cause|Fix|Alternative)|$)/gi,
+      /How to [^:]*:\s*\n([\s\S]*?)(?=\n(?:Cause|Fix|Why|Alternative)|$)/gi,
+    ];
+
+    causePatterns.forEach((pattern) => {
+      let match;
+      while ((match = pattern.exec(llmResponse)) !== null) {
+        const items = match[1]
+          .split(/\n-\s*|\n\d+\.\s*/)
+          .filter((item) => item.trim().length > 0);
+        causes.push(...items.map((item) => item.trim()));
+      }
+    });
+
+    fixPatterns.forEach((pattern) => {
+      let match;
+      while ((match = pattern.exec(llmResponse)) !== null) {
+        const items = match[1]
+          .split(/\n-\s*|\n\d+\.\s*/)
+          .filter((item) => item.trim().length > 0);
+        fixes.push(...items.map((item) => item.trim()));
+      }
+    });
+
+    return {
+      causes: causes.slice(0, 10),
+      fixes: fixes.slice(0, 10),
+    };
   }
 
   getConfiguration() {

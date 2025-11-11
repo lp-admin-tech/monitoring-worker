@@ -6,6 +6,8 @@ const supabase = require('../modules/supabase-client');
 const gamFetcher = require('../modules/gam-fetcher');
 
 let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker;
+let server = null;
+const activeProcesses = new Set();
 
 try {
   const ContentAnalyzerClass = require('../modules/content-analyzer');
@@ -438,26 +440,44 @@ class BatchSiteProcessor {
 const batchProcessor = new BatchSiteProcessor(BATCH_CONCURRENCY_LIMIT);
 
 function validateWorkerSecret(req, res, next) {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({
+  if (!WORKER_SECRET) {
+    logger.error('WORKER_SECRET is not configured in environment variables', new Error('Missing WORKER_SECRET'));
+    return res.status(500).json({
       success: false,
-      error: 'Missing or invalid Authorization header. Expected: Bearer <WORKER_SECRET>',
+      error: 'Server configuration error: WORKER_SECRET not set',
     });
   }
 
-  const token = authHeader.substring(7);
+  const authHeader = req.headers.authorization;
 
-  if (!WORKER_SECRET) {
-    logger.error('WORKER_SECRET is not configured in environment variables');
-    return res.status(500).json({
+  if (!authHeader) {
+    logger.warn('Request received without Authorization header');
+    return res.status(401).json({
       success: false,
-      error: 'Server configuration error',
+      error: 'Missing Authorization header. Expected: Authorization: Bearer <WORKER_SECRET>',
+    });
+  }
+
+  if (!authHeader.startsWith('Bearer ')) {
+    logger.warn('Request received with invalid Authorization header format');
+    return res.status(401).json({
+      success: false,
+      error: 'Invalid Authorization header format. Expected: Bearer <WORKER_SECRET>',
+    });
+  }
+
+  const token = authHeader.substring(7).trim();
+
+  if (!token) {
+    logger.warn('Request received with empty token');
+    return res.status(401).json({
+      success: false,
+      error: 'Empty token provided',
     });
   }
 
   if (token !== WORKER_SECRET) {
+    logger.warn('Request received with invalid token');
     return res.status(401).json({
       success: false,
       error: 'Invalid WORKER_SECRET token',
@@ -547,6 +567,9 @@ async function executeAuditPipeline(job, requestId) {
     status: 'running',
   };
 
+  const processId = uuidv4();
+  activeProcesses.add(processId);
+
   try {
     await supabase.update('audit_queue', job.id, {
       status: 'running',
@@ -555,7 +578,7 @@ async function executeAuditPipeline(job, requestId) {
 
     logger.info(`[${requestId}] Starting audit pipeline for publisher ${job.publisher_id}`, {
       publisherId: job.publisher_id,
-      sites: job.sites,
+      siteCount: job.sites.length,
       requestId,
     });
 
@@ -741,31 +764,47 @@ async function executeAuditPipeline(job, requestId) {
 
     return pipelineResults;
   } finally {
+    activeProcesses.delete(processId);
     jobQueue.removeJob(job.id);
+    logger.info(`[${requestId}] Audit pipeline cleanup completed`, {
+      jobId: job.id,
+      requestId,
+    });
   }
 }
 
-app.post('/audit', async (req, res) => {
+app.post('/audit', validateWorkerSecret, async (req, res) => {
   const requestId = uuidv4();
   const { publisher_id, sites, priority = 'normal' } = req.body;
 
-  if (!publisher_id || !sites || !Array.isArray(sites) || sites.length === 0) {
-    return res.status(400).json({
-      success: false,
-      error: 'Missing required fields: publisher_id, sites (non-empty array)',
-      requestId,
-    });
-  }
-
-  if (jobQueue.isAtCapacity()) {
-    return res.status(503).json({
-      success: false,
-      error: `Job queue at capacity (${MAX_CONCURRENT_JOBS} concurrent jobs). Please retry later.`,
-      requestId,
-    });
-  }
-
   try {
+    if (!publisher_id || !sites || !Array.isArray(sites) || sites.length === 0) {
+      logger.warn(`[${requestId}] Invalid audit request parameters`, {
+        hasPublisherId: !!publisher_id,
+        hasSites: !!sites,
+        isSitesArray: Array.isArray(sites),
+        requestId,
+      });
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: publisher_id, sites (non-empty array)',
+        requestId,
+      });
+    }
+
+    if (jobQueue.isAtCapacity()) {
+      logger.warn(`[${requestId}] Job queue at capacity`, {
+        activeJobs: jobQueue.getActiveJobCount(),
+        maxConcurrent: MAX_CONCURRENT_JOBS,
+        requestId,
+      });
+      return res.status(503).json({
+        success: false,
+        error: `Job queue at capacity (${MAX_CONCURRENT_JOBS} concurrent jobs). Please retry later.`,
+        requestId,
+      });
+    }
+
     const jobId = uuidv4();
 
     const job = {
@@ -778,13 +817,12 @@ app.post('/audit', async (req, res) => {
     };
 
     await supabase.insert('audit_queue', job);
-
     jobQueue.addJob(jobId);
 
-    logger.info(`[${requestId}] Audit job queued`, {
+    logger.info(`[${requestId}] Audit job queued successfully`, {
       jobId,
       publisherId: publisher_id,
-      sites: sites.length,
+      siteCount: sites.length,
       requestId,
     });
 
@@ -793,7 +831,11 @@ app.post('/audit', async (req, res) => {
       jobId,
       requestId,
       message: 'Audit job queued for processing',
+      siteCount: sites.length,
     });
+
+    const processId = uuidv4();
+    activeProcesses.add(processId);
 
     executeAuditPipeline(job, requestId)
       .then(result => {
@@ -805,21 +847,24 @@ app.post('/audit', async (req, res) => {
         });
       })
       .catch(err => {
-        logger.error(`[${requestId}] Pipeline execution error`, err, {
+        logger.error(`[${requestId}] Pipeline execution failed`, err, {
           jobId,
           requestId,
         });
+      })
+      .finally(() => {
+        activeProcesses.delete(processId);
         jobQueue.removeJob(jobId);
       });
   } catch (error) {
     logger.error(`[${requestId}] Failed to queue audit job`, error, {
-      publisherId: publisher_id,
+      publisherId: req.body?.publisher_id,
       requestId,
     });
 
     res.status(500).json({
       success: false,
-      error: 'Failed to queue audit job',
+      error: error.message || 'Failed to queue audit job',
       requestId,
     });
   }
@@ -836,25 +881,30 @@ app.post('/audit-batch-sites', validateWorkerSecret, async (req, res) => {
     requestId,
   });
 
-  if (!publisher_id) {
-    return res.status(400).json({
-      success: false,
-      error: 'Missing required field: publisher_id',
-      requestId,
-    });
-  }
-
-  if (!site_names || !Array.isArray(site_names) || site_names.length === 0) {
-    return res.status(400).json({
-      success: false,
-      error: 'Missing required field: site_names (non-empty array)',
-      requestId,
-    });
-  }
-
   try {
-    const jobId = uuidv4();
+    if (!publisher_id) {
+      logger.warn(`[${requestId}] Missing publisher_id in batch audit request`, { requestId });
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required field: publisher_id',
+        requestId,
+      });
+    }
 
+    if (!site_names || !Array.isArray(site_names) || site_names.length === 0) {
+      logger.warn(`[${requestId}] Invalid site_names in batch audit request`, {
+        hasSiteNames: !!site_names,
+        isSiteNamesArray: Array.isArray(site_names),
+        requestId,
+      });
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required field: site_names (non-empty array)',
+        requestId,
+      });
+    }
+
+    const jobId = uuidv4();
     const job = {
       id: jobId,
       publisher_id,
@@ -865,13 +915,12 @@ app.post('/audit-batch-sites', validateWorkerSecret, async (req, res) => {
     };
 
     await supabase.insert('audit_queue', job);
-
     jobQueue.addJob(jobId);
 
-    logger.info(`[${requestId}] Batch audit job queued`, {
+    logger.info(`[${requestId}] Batch audit job queued successfully`, {
       jobId,
       publisherId: publisher_id,
-      sites: site_names.length,
+      siteCount: site_names.length,
       requestId,
     });
 
@@ -884,36 +933,65 @@ app.post('/audit-batch-sites', validateWorkerSecret, async (req, res) => {
       estimatedProcessingTime: `${site_names.length * 10}s`,
     });
 
-    await supabase.update('audit_queue', jobId, {
-      status: 'running',
-      started_at: new Date().toISOString(),
-    });
+    const processId = uuidv4();
+    activeProcesses.add(processId);
 
-    const siteCount = await batchProcessor.processBatch(site_names, jobId, publisher_id, requestId);
+    (async () => {
+      try {
+        await supabase.update('audit_queue', jobId, {
+          status: 'running',
+          started_at: new Date().toISOString(),
+        });
 
-    logger.info(`[${requestId}] Batch processing completed`, {
-      jobId,
-      publisherId: publisher_id,
-      sitesProcessed: siteCount,
-      requestId,
-    });
+        const siteCount = await batchProcessor.processBatch(site_names, jobId, publisher_id, requestId);
 
-    await supabase.update('audit_queue', jobId, {
-      status: 'completed',
-      completed_at: new Date().toISOString(),
-      error_message: null,
-    });
+        logger.info(`[${requestId}] Batch processing completed successfully`, {
+          jobId,
+          publisherId: publisher_id,
+          sitesProcessed: siteCount,
+          requestId,
+        });
 
-    jobQueue.removeJob(jobId);
+        await supabase.update('audit_queue', jobId, {
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          error_message: null,
+        });
+      } catch (error) {
+        logger.error(`[${requestId}] Batch processing failed`, error, {
+          jobId,
+          publisherId: publisher_id,
+          requestId,
+        });
+
+        await supabase.update('audit_queue', jobId, {
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error_message: error.message,
+        });
+
+        await supabase.insert('audit_failures', {
+          publisher_id,
+          module: 'batch_processor',
+          error_message: error.message,
+          error_stack: error.stack,
+          failure_timestamp: new Date().toISOString(),
+          request_id: requestId,
+        });
+      } finally {
+        activeProcesses.delete(processId);
+        jobQueue.removeJob(jobId);
+      }
+    })();
   } catch (error) {
-    logger.error(`[${requestId}] Failed to process batch audit request`, error, {
-      publisherId: publisher_id,
+    logger.error(`[${requestId}] Failed to queue batch audit job`, error, {
+      publisherId: req.body?.publisher_id,
       requestId,
     });
 
     res.status(500).json({
       success: false,
-      error: 'Failed to process batch audit request',
+      error: error.message || 'Failed to queue batch audit job',
       requestId,
     });
   }
@@ -959,6 +1037,44 @@ app.get('/health', (req, res) => {
   });
 });
 
+async function gracefulShutdown(signal) {
+  logger.info(`Received ${signal} signal, initiating graceful shutdown`);
+
+  if (server) {
+    server.close(() => {
+      logger.info('HTTP server closed');
+    });
+  }
+
+  const shutdownTimeout = setTimeout(() => {
+    logger.warn('Graceful shutdown timeout exceeded, forcing exit');
+    process.exit(1);
+  }, 30000);
+
+  try {
+    await new Promise(resolve => {
+      const checkInterval = setInterval(() => {
+        if (activeProcesses.size === 0 && jobQueue.getActiveJobCount() === 0) {
+          clearInterval(checkInterval);
+          clearTimeout(shutdownTimeout);
+          logger.info('All processes completed, shutting down');
+          resolve();
+        }
+      }, 500);
+
+      if (activeProcesses.size === 0 && jobQueue.getActiveJobCount() === 0) {
+        clearInterval(checkInterval);
+        clearTimeout(shutdownTimeout);
+        resolve();
+      }
+    });
+  } catch (error) {
+    logger.error('Error during graceful shutdown', error);
+  }
+
+  process.exit(0);
+}
+
 async function start() {
   const errors = validateConfig();
   if (errors.length > 0) {
@@ -968,15 +1084,33 @@ async function start() {
 
   const PORT = envConfig.worker.port;
 
-  app.listen(PORT, () => {
-    logger.info(`Worker runner started on port ${PORT}`, {
+  server = app.listen(PORT, () => {
+    logger.info(`Worker runner started successfully on port ${PORT}`, {
       port: PORT,
       maxConcurrentJobs: MAX_CONCURRENT_JOBS,
       moduleTimeout: MODULE_TIMEOUT,
       retryEnabled: RETRY_ENABLED,
+      nodeEnv: process.env.NODE_ENV || 'production',
     });
   });
+
+  server.on('error', (err) => {
+    logger.error('Server error', err);
+    process.exit(1);
+  });
 }
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught exception', err);
+  gracefulShutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled rejection', new Error(`Unhandled Promise rejection: ${reason}`));
+});
 
 start().catch(err => {
   logger.error('Failed to start worker runner', err);

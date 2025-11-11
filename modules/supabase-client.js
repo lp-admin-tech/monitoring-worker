@@ -116,6 +116,10 @@ class SupabaseIntegration {
   async insert(table, data) {
     const startTime = Date.now();
     try {
+      if (!data) {
+        throw new Error('Insert data cannot be null or undefined');
+      }
+
       const { data: result, error } = await supabase
         .from(table)
         .insert(data)
@@ -123,8 +127,10 @@ class SupabaseIntegration {
 
       const duration = Date.now() - startTime;
       if (error) {
+        const errorMsg = error.message || JSON.stringify(error);
+        console.error(`[INSERT] Error for table ${table}: ${errorMsg}`);
         await this.logDbOperation('INSERT', table, 'failure', duration, 1, error, data);
-        throw error;
+        throw new Error(`Failed to insert into ${table}: ${errorMsg}`);
       }
       await this.logDbOperation('INSERT', table, 'success', duration, result?.length || 1, null, { insertedId: result?.[0]?.id });
       return result;
@@ -138,6 +144,13 @@ class SupabaseIntegration {
   async update(table, id, data) {
     const startTime = Date.now();
     try {
+      if (!id) {
+        throw new Error('Update ID cannot be null or undefined');
+      }
+      if (!data || Object.keys(data).length === 0) {
+        throw new Error('Update data cannot be empty');
+      }
+
       const { data: result, error } = await supabase
         .from(table)
         .update(data)
@@ -146,8 +159,10 @@ class SupabaseIntegration {
 
       const duration = Date.now() - startTime;
       if (error) {
+        const errorMsg = error.message || JSON.stringify(error);
+        console.error(`[UPDATE] Error for table ${table} id ${id}: ${errorMsg}`);
         await this.logDbOperation('UPDATE', table, 'failure', duration, 1, error, { id, fieldsUpdated: Object.keys(data) });
-        throw error;
+        throw new Error(`Failed to update ${table}: ${errorMsg}`);
       }
       await this.logDbOperation('UPDATE', table, 'success', duration, result?.length || 1, null, { id, fieldsUpdated: Object.keys(data) });
       return result;
@@ -165,7 +180,9 @@ class SupabaseIntegration {
 
       if (filters) {
         Object.entries(filters).forEach(([key, value]) => {
-          query = query.eq(key, value);
+          if (value !== null && value !== undefined) {
+            query = query.eq(key, value);
+          }
         });
       }
 
@@ -173,11 +190,13 @@ class SupabaseIntegration {
       const duration = Date.now() - startTime;
 
       if (error) {
+        const errorMsg = error.message || JSON.stringify(error);
+        console.error(`[SELECT] Error for table ${table}: ${errorMsg}`);
         await this.logDbOperation('SELECT', table, 'failure', duration, 0, error, { filters });
-        throw error;
+        throw new Error(`Failed to query ${table}: ${errorMsg}`);
       }
       await this.logDbOperation('SELECT', table, 'success', duration, data?.length || 0, null, { filters });
-      return data;
+      return data || [];
     } catch (err) {
       const duration = Date.now() - startTime;
       await this.logDbOperation('SELECT', table, 'failure', duration, 0, err, { filters });
