@@ -4,6 +4,20 @@ const AnalysisInterpreter = require('./analysis');
 const ReportFormatter = require('./formatter');
 const { OpenRouterRateLimiter } = require('./rate-limiter');
 
+let supabase = null;
+
+function getSupabaseClient() {
+  if (supabase === null && supabase !== false) {
+    try {
+      supabase = require('../supabase-client');
+    } catch (err) {
+      supabase = false;
+      logger.warn('Supabase client not available for AI results persistence');
+    }
+  }
+  return supabase || null;
+}
+
 class AIAssistanceModule {
   constructor(envConfig = {}) {
     this.config = envConfig;
@@ -41,11 +55,57 @@ class AIAssistanceModule {
     }
   }
 
-  async generateComprehensiveReport(auditData, scorerOutput, policyViolations = []) {
+  async persistAIResults(result, siteAuditId, publisherId) {
+    const client = getSupabaseClient();
+    if (!client || !siteAuditId) {
+      logger.warn('Cannot persist AI results - missing supabase client or siteAuditId', {
+        hasSuperbase: !!client,
+        siteAuditId
+      });
+      return;
+    }
+
+    try {
+      const aiResultData = {
+        site_audit_id: siteAuditId,
+        publisher_id: publisherId || null,
+        llm_response: result.llmResponse || null,
+        interpretation: result.interpretation || null,
+        risk_categorization: result.interpretation?.categorization?.primaryCategory || null,
+        risk_level: result.interpretation?.riskAssessment?.riskLevel || null,
+        timestamp: result.timestamp || new Date().toISOString(),
+        metadata: result.metadata || null,
+      };
+
+      const { error } = await client.from('ai_analysis_results').insert([aiResultData]);
+
+      if (error) {
+        logger.error('Failed to persist AI results to database', new Error(error.message), {
+          siteAuditId,
+          publisherId,
+          errorDetails: error
+        });
+      } else {
+        logger.info('AI analysis results persisted to database', {
+          siteAuditId,
+          publisherId,
+          category: aiResultData.risk_categorization
+        });
+      }
+    } catch (err) {
+      logger.error('Error persisting AI results', err, {
+        siteAuditId,
+        publisherId
+      });
+    }
+  }
+
+  async generateComprehensiveReport(auditData, scorerOutput, policyViolations = [], siteAuditId = null, publisherId = null) {
     try {
       logger.info('Starting comprehensive AI report generation', {
         domain: auditData?.domain,
-        auditId: scorerOutput?.auditId
+        auditId: scorerOutput?.auditId,
+        siteAuditId
       });
 
       const promptData = this.promptBuilder.buildComprehensivePrompt(
@@ -75,7 +135,7 @@ class AIAssistanceModule {
         category: interpretation.categorization.primaryCategory
       });
 
-      return {
+      const result = {
         llmResponse,
         interpretation,
         timestamp: new Date().toISOString(),
@@ -84,6 +144,10 @@ class AIAssistanceModule {
           promptVersion: promptData.metadata
         }
       };
+
+      await this.persistAIResults(result, siteAuditId, publisherId);
+
+      return result;
     } catch (error) {
       logger.error('Error generating comprehensive report', error);
       throw error;

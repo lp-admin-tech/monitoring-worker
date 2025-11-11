@@ -74,8 +74,6 @@ class Logger {
 
     try {
       const logData = {
-        action: entry.moduleName || 'LOG_ENTRY',
-        entity_type: 'SYSTEM_LOG',
         timestamp: entry.timestamp,
         level: entry.level,
         message: entry.message,
@@ -88,7 +86,11 @@ class Logger {
         publisher_id: entry.publisherId || null,
       };
 
-      await client.insert('audit_logs', logData);
+      const { error } = await client.from('audit_logs').insert([logData]);
+
+      if (error) {
+        console.error('[Logger] Database error persisting log:', error.message);
+      }
     } catch (err) {
       console.error('[Logger] Failed to persist log:', err.message);
     }

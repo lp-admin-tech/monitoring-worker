@@ -322,7 +322,9 @@ class BatchSiteProcessor {
             const result = await aiAssistance.generateComprehensiveReport(
               { domain: siteAudit.site_name },
               scorerResult.data,
-              modules.policyChecker.data?.issues || []
+              modules.policyChecker.data?.issues || [],
+              siteAuditId,
+              publisherId
             );
             return { data: result, error: null };
           } catch (err) {
