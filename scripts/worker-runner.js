@@ -263,7 +263,7 @@ class BatchSiteProcessor {
         }
       });
 
-      const scorerInput = {
+      let scorerInput = {
         crawlerData: modules.crawler.data,
         contentAnalysis: modules.contentAnalyzer.data,
         adAnalysis: modules.adAnalyzer.data,
@@ -271,10 +271,28 @@ class BatchSiteProcessor {
         technicalCheck: modules.technicalChecker.data,
       };
 
+      if (publisherId) {
+        try {
+          logger.info(`[${requestId}] Enriching audit data with GAM metrics`, { publisherId, requestId });
+          scorerInput = await scorer.enrichAuditDataWithGAM(scorerInput, publisherId);
+          logger.info(`[${requestId}] GAM enrichment completed`, {
+            hasCTR: !!scorerInput.ctr,
+            hasECPM: !!scorerInput.ecpm,
+            hasFillRate: !!scorerInput.fillRate,
+            requestId
+          });
+        } catch (gamError) {
+          logger.warn(`[${requestId}] GAM enrichment failed, continuing without GAM data`, {
+            error: gamError.message,
+            requestId
+          });
+        }
+      }
+
       const scorerResult = await executeWithRetry(
         'Scorer',
         async () => {
-          const result = await scorer.calculateComprehensiveScore(scorerInput);
+          const result = await scorer.calculateComprehensiveScore(scorerInput, { id: publisherId });
           return { data: result, error: null };
         },
         {},

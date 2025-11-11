@@ -3,6 +3,7 @@ const RiskEngine = require('./risk-engine');
 const TrendAnalyzer = require('./trend-analyzer');
 const BenchmarksModule = require('./benchmarks');
 const ExplanationGenerator = require('./explanation');
+const GAMMetricsAnalyzer = require('../gam-metrics-analyzer');
 const weights = require('./weights.json');
 
 class ScoringEngine {
@@ -13,6 +14,7 @@ class ScoringEngine {
     this.trendAnalyzer = new TrendAnalyzer(weights, supabaseClient);
     this.benchmarks = new BenchmarksModule(supabaseClient);
     this.explanationGenerator = new ExplanationGenerator();
+    this.gamAnalyzer = new GAMMetricsAnalyzer(supabaseClient);
   }
 
   flattenAuditData(auditData) {
@@ -57,7 +59,47 @@ class ScoringEngine {
       flattened.jurisdictionViolations = auditData.policyCheck.jurisdictionViolations || 0;
     }
 
+    if (auditData.gamMetrics) {
+      flattened.ctr = auditData.gamMetrics.ctr || auditData.ctr || 0;
+      flattened.ecpm = auditData.gamMetrics.ecpm || auditData.ecpm || 0;
+      flattened.fillRate = auditData.gamMetrics.fillRate || auditData.fillRate || 0;
+    } else {
+      flattened.ctr = auditData.ctr || 0;
+      flattened.ecpm = auditData.ecpm || 0;
+      flattened.fillRate = auditData.fillRate || 0;
+    }
+
+    if (auditData.gamComparison) {
+      flattened.ctrDeviation = auditData.gamComparison.deviations?.ctrDeviation || auditData.ctrDeviation || 0;
+      flattened.ecpmDeviation = auditData.gamComparison.deviations?.ecpmDeviation || auditData.ecpmDeviation || 0;
+      flattened.fillRateInconsistency = auditData.gamComparison.deviations?.fillRateDeviation || auditData.fillRateInconsistency || 0;
+    } else {
+      flattened.ctrDeviation = auditData.ctrDeviation || 0;
+      flattened.ecpmDeviation = auditData.ecpmDeviation || 0;
+      flattened.fillRateInconsistency = auditData.fillRateInconsistency || 0;
+    }
+
+    if (auditData.gamSpikeAnalysis) {
+      flattened.impressionSpike = auditData.gamSpikeAnalysis.spikeRatio || auditData.impressionSpike || 0;
+    } else {
+      flattened.impressionSpike = auditData.impressionSpike || 0;
+    }
+
     return flattened;
+  }
+
+  async enrichAuditDataWithGAM(auditData, publisherId) {
+    try {
+      if (!this.gamAnalyzer || !publisherId) {
+        logger.warn('GAM enrichment skipped', { reason: !this.gamAnalyzer ? 'no analyzer' : 'no publisherId' });
+        return auditData;
+      }
+
+      return await this.gamAnalyzer.enrichAuditDataWithGAM(auditData, publisherId);
+    } catch (error) {
+      logger.error('Error enriching audit data with GAM', error);
+      return auditData;
+    }
   }
 
   async calculateComprehensiveScore(auditData, publisherData = {}, options = {}) {
