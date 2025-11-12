@@ -346,6 +346,8 @@ class BatchSiteProcessor {
         });
       }
 
+      const scorerData = modules.scorer.data || {};
+
       const completedAudit = {
         status: 'completed',
         crawler_data: modules.crawler.data,
@@ -353,7 +355,18 @@ class BatchSiteProcessor {
         ad_analysis: modules.adAnalyzer.data,
         policy_check: modules.policyChecker.data,
         technical_check: modules.technicalChecker.data,
-        risk_score: modules.scorer.data?.riskScore || 0,
+        risk_score: scorerData.riskScore || 0,
+        score_breakdown: scorerData.scores?.componentScores || null,
+        mfa_probability: scorerData.mfaProbability || null,
+        risk_level: scorerData.explanation?.riskLevel || null,
+        methodology: scorerData.methodology || null,
+        primary_causes: scorerData.explanation?.primaryReasons || null,
+        contributing_factors: scorerData.explanation?.contributingFactors || null,
+        recommendations: scorerData.explanation?.recommendations || null,
+        trend_data: scorerData.trend || null,
+        explanation_details: scorerData.explanation || null,
+        confidence_score: scorerData.explanation?.confidenceScore || null,
+        explanation_timestamp: scorerData.timestamp || null,
         ai_report: aiResult.data ? {
           llmResponse: aiResult.data.llmResponse,
           interpretation: aiResult.data.interpretation,
