@@ -150,7 +150,7 @@ class GAMFetcher {
 
       const formattedData = data.map(row => ({
         publisher_id: row.dimensionValues?.[0]?.value,
-        report_date: row.dimensionValues?.[1]?.value,
+        date: row.dimensionValues?.[1]?.value,
         ad_requests: parseInt(row.metricValues?.[0]?.value || 0),
         impressions: parseInt(row.metricValues?.[1]?.value || 0),
         clicks: parseInt(row.metricValues?.[2]?.value || 0),

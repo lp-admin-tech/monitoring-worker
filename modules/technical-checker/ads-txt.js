@@ -23,7 +23,9 @@ const KNOWN_NETWORKS = {
   'smartyads.com': 'SmartyAds',
 };
 
-async function fetchAdsTxt(domain, timeout = 10000) {
+async function fetchAdsTxt(domain, timeout = 10000, retryAttempt = 1) {
+  const maxRetries = 2;
+
   try {
     const url = `https://${domain}/ads.txt`;
     const controller = new AbortController();
@@ -55,21 +57,41 @@ async function fetchAdsTxt(domain, timeout = 10000) {
       };
     } catch (error) {
       clearTimeout(timeoutId);
+
       if (error.name === 'AbortError') {
+        if (retryAttempt === 1 && retryAttempt < maxRetries) {
+          logger.warn(
+            `ads.txt fetch timeout on attempt ${retryAttempt}, retrying in 1 second`,
+            { domain, timeout }
+          );
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          return fetchAdsTxt(domain, timeout, retryAttempt + 1);
+        }
+
+        logger.warn(
+          'ads.txt fetch timeout (retries exhausted), skipping ads.txt',
+          { domain, timeout, retryAttempt }
+        );
         return {
           found: false,
-          error: 'Fetch timeout',
+          error: 'Fetch timeout - retries exhausted',
           content: null,
+          skipped: true,
         };
       }
+
       throw error;
     }
   } catch (error) {
-    logger.warn('Failed to fetch ads.txt', { domain, error: error.message });
+    logger.warn('Failed to fetch ads.txt, skipping ads.txt validation', {
+      domain,
+      error: error.message,
+    });
     return {
       found: false,
       error: error.message,
       content: null,
+      skipped: true,
     };
   }
 }
@@ -179,6 +201,24 @@ async function validateAdsTxt(domain) {
     const fetchResult = await fetchAdsTxt(domain);
 
     if (!fetchResult.found) {
+      if (fetchResult.skipped) {
+        logger.warn('ads.txt validation skipped', {
+          domain,
+          reason: fetchResult.error,
+        });
+        return {
+          found: false,
+          valid: null,
+          statusCode: fetchResult.statusCode || 0,
+          error: fetchResult.error,
+          entries: [],
+          validation: null,
+          score: 50,
+          quality: 'skipped',
+          skipped: true,
+        };
+      }
+
       return {
         found: false,
         valid: false,
@@ -187,7 +227,7 @@ async function validateAdsTxt(domain) {
         entries: [],
         validation: null,
         score: 0,
-        quality: 'critical',
+        quality: 'missing',
       };
     }
 
@@ -211,15 +251,19 @@ async function validateAdsTxt(domain) {
       },
     };
   } catch (error) {
-    logger.error('ads.txt validation error', error, { domain });
+    logger.warn('ads.txt validation error, audit will continue', {
+      domain,
+      error: error.message,
+    });
     return {
       found: false,
-      valid: false,
+      valid: null,
       error: error.message,
       entries: [],
       validation: null,
-      score: 0,
+      score: 50,
       quality: 'error',
+      skipped: true,
     };
   }
 }

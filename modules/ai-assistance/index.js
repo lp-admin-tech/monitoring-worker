@@ -4,18 +4,19 @@ const AnalysisInterpreter = require('./analysis');
 const ReportFormatter = require('./formatter');
 const { OpenRouterRateLimiter } = require('./rate-limiter');
 
-let supabase = null;
+let supabaseClient = null;
 
 function getSupabaseClient() {
-  if (supabase === null && supabase !== false) {
+  if (supabaseClient === null && supabaseClient !== false) {
     try {
-      supabase = require('../supabase-client');
+      const supabaseModule = require('../supabase-client');
+      supabaseClient = supabaseModule.supabaseClient || supabaseModule;
     } catch (err) {
-      supabase = false;
+      supabaseClient = false;
       logger.warn('Supabase client not available for AI results persistence');
     }
   }
-  return supabase || null;
+  return supabaseClient || null;
 }
 
 class AIAssistanceModule {

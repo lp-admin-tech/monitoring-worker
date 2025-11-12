@@ -1,7 +1,10 @@
-const supabase = require('../supabase-client');
+const supabaseModule = require('../supabase-client');
+const { supabaseClient } = require('../supabase-client');
 const logger = require('../logger');
 const fs = require('fs');
 const path = require('path');
+
+const supabase = supabaseClient;
 
 async function uploadToStorage(publisherId, data) {
   try {

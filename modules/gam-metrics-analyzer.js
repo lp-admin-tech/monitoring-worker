@@ -21,15 +21,15 @@ class GAMMetricsAnalyzer {
         .from('reports_dimensional')
         .select('*')
         .eq('publisher_id', publisherId)
-        .order('report_date', { ascending: false })
+        .order('date', { ascending: false })
         .limit(90);
 
       if (dateRange?.start && dateRange?.end) {
         const startDate = new Date(dateRange.start).toISOString().split('T')[0];
         const endDate = new Date(dateRange.end).toISOString().split('T')[0];
         query = query
-          .gte('report_date', startDate)
-          .lte('report_date', endDate);
+          .gte('date', startDate)
+          .lte('date', endDate);
       }
 
       const { data, error } = await query;
@@ -88,8 +88,8 @@ class GAMMetricsAnalyzer {
         fillRate: Math.min(Math.max(fillRate, 0), 1),
         dataPoints: gamData.length,
         dateRange: {
-          start: gamData[gamData.length - 1]?.report_date,
-          end: gamData[0]?.report_date
+          start: gamData[gamData.length - 1]?.date,
+          end: gamData[0]?.date
         }
       };
     } catch (error) {

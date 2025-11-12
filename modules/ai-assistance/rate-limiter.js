@@ -65,15 +65,24 @@ class RateLimiter {
 }
 
 class OpenRouterRateLimiter extends RateLimiter {
-  constructor() {
+  constructor(options = {}) {
     super({
       maxRequestsPerMinute: 10,
       maxConcurrent: 2,
     });
+    this.maxRetries = options.maxRetries || 3;
+    this.initialBackoffMs = options.initialBackoffMs || 2000;
+    this.backoffMultiplier = options.backoffMultiplier || 2;
   }
 
-  async executeWithRetry(fn, maxRetries = 3) {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  calculateBackoffDelay(attempt) {
+    return this.initialBackoffMs * Math.pow(this.backoffMultiplier, attempt - 1);
+  }
+
+  async executeWithRetry(fn, maxRetries = null) {
+    const retries = maxRetries ?? this.maxRetries;
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
       try {
         await this.acquire();
         try {
@@ -84,17 +93,32 @@ class OpenRouterRateLimiter extends RateLimiter {
           this.release();
 
           if (error.status === 429) {
-            const retryAfter = error.retryAfter || Math.pow(2, attempt) * 1000;
-            logger.warn(`Rate limited (429), retry ${attempt}/${maxRetries}`, {
-              waitMs: retryAfter,
-            });
+            const backoffDelay = this.calculateBackoffDelay(attempt);
+            const retryAfter = error.retryAfter || backoffDelay;
 
-            if (attempt < maxRetries) {
+            logger.warn(
+              `Rate limited (429), retry attempt ${attempt}/${retries}`,
+              {
+                waitMs: retryAfter,
+                backoffDelay,
+                multiplier: this.backoffMultiplier,
+              }
+            );
+
+            if (attempt < retries) {
               await new Promise((resolve) =>
                 setTimeout(resolve, retryAfter)
               );
               continue;
             } else {
+              logger.error(
+                'Rate limit retries exhausted',
+                {
+                  totalAttempts: attempt,
+                  maxRetries: retries,
+                  lastBackoffMs: retryAfter,
+                }
+              );
               return { success: false, error, retryExhausted: true };
             }
           }
@@ -103,6 +127,13 @@ class OpenRouterRateLimiter extends RateLimiter {
         }
       } catch (error) {
         this.release();
+        logger.error(
+          'Error during executeWithRetry',
+          {
+            attempt,
+            error: error.message,
+          }
+        );
         return { success: false, error, attempt };
       }
     }

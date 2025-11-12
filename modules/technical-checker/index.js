@@ -230,15 +230,24 @@ function generateSummary(components) {
   }
 
   if (components.adsTxt) {
-    const adsTxtStatus = components.adsTxt.found ? (components.adsTxt.valid ? 'healthy' : 'invalid') : 'missing';
+    let adsTxtStatus = 'missing';
+    if (components.adsTxt.skipped) {
+      adsTxtStatus = 'skipped';
+    } else if (components.adsTxt.found) {
+      adsTxtStatus = components.adsTxt.valid ? 'healthy' : 'invalid';
+    }
     summary.componentStatus.adsTxt = adsTxtStatus;
 
-    if (!components.adsTxt.found) {
+    if (!components.adsTxt.found && !components.adsTxt.skipped) {
       summary.totalIssues++;
       summary.criticalIssues.push('Missing ads.txt file');
     }
 
-    if (!components.adsTxt.valid && components.adsTxt.summary?.invalidEntries > 0) {
+    if (components.adsTxt.skipped) {
+      summary.warnings.push(`ads.txt validation skipped: ${components.adsTxt.error}`);
+    }
+
+    if (!components.adsTxt.valid && !components.adsTxt.skipped && components.adsTxt.summary?.invalidEntries > 0) {
       summary.warnings.push(`ads.txt: ${components.adsTxt.summary.invalidEntries} invalid entries found`);
     }
   }

@@ -207,3 +207,4 @@ class SupabaseIntegration {
 }
 
 module.exports = new SupabaseIntegration();
+module.exports.supabaseClient = supabase;

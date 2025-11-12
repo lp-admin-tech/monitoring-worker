@@ -212,11 +212,15 @@ class Crawler {
     try {
       await page.goto(url, {
         waitUntil: 'networkidle',
-        timeout: 30000,
+        timeout: 60000,
+      });
+
+      await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {
+        logger.warn(`Network idle timeout for ${url}, proceeding with available content`);
       });
     } catch (error) {
       logger.warn(`Navigation timeout for ${url}, continuing with partial load`, error);
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(3000);
     }
   }
 

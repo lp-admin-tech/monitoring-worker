@@ -1,15 +1,18 @@
-let supabase = null;
+let supabaseClient = null;
+const LogQueueManager = require('./log-queue-manager');
+const logQueueManager = new LogQueueManager(1000);
 
 function getSupabaseClient() {
-  if (supabase === null && supabase !== false) {
+  if (supabaseClient === null && supabaseClient !== false) {
     try {
-      supabase = require('./supabase-client');
+      const { supabaseClient: client } = require('./supabase-client');
+      supabaseClient = client;
     } catch (err) {
-      supabase = false;
+      supabaseClient = false;
       console.warn('Supabase client not available for logging');
     }
   }
-  return supabase || null;
+  return supabaseClient || null;
 }
 
 const LogLevel = {
@@ -70,7 +73,11 @@ class Logger {
 
   async persistLog(entry) {
     const client = getSupabaseClient();
-    if (!client) return;
+    if (!client) {
+      logQueueManager.addToQueue(entry);
+      console.warn('[Logger] Supabase client unavailable. Log queued for later retry.');
+      return;
+    }
 
     try {
       const logData = {
@@ -89,10 +96,12 @@ class Logger {
       const { error } = await client.from('audit_logs').insert([logData]);
 
       if (error) {
-        console.error('[Logger] Database error persisting log:', error.message);
+        logQueueManager.addToQueue(entry);
+        console.warn('[Logger] Database error persisting log. Log queued for retry:', error.message);
       }
     } catch (err) {
-      console.error('[Logger] Failed to persist log:', err.message);
+      logQueueManager.addToQueue(entry);
+      console.error('[Logger] Failed to persist log. Log queued for retry:', err.message);
     }
   }
 
@@ -465,6 +474,46 @@ class Logger {
     };
     this.persistLog(entry);
   }
+
+  getQueueManager() {
+    return logQueueManager;
+  }
+
+  getQueueStats() {
+    return logQueueManager.getQueueStats();
+  }
+
+  async flushQueue() {
+    console.log('[Logger] Flushing queued logs...');
+    const stats = logQueueManager.getQueueStats();
+    console.log(`[Logger] Queue stats before flush:`, stats);
+
+    await logQueueManager.flush((entry) => {
+      const logData = {
+        timestamp: entry.timestamp,
+        level: entry.level,
+        message: entry.message,
+        context: {
+          moduleName: entry.moduleName,
+          ...entry.context,
+        },
+        error: entry.error || null,
+        user_id: entry.userId || null,
+        publisher_id: entry.publisherId || null,
+      };
+
+      const client = getSupabaseClient();
+      if (!client) {
+        throw new Error('Supabase client not available for flushing queue');
+      }
+
+      return client.from('audit_logs').insert([logData]);
+    });
+
+    const finalStats = logQueueManager.getQueueStats();
+    console.log('[Logger] Queue stats after flush:', finalStats);
+  }
 }
 
 module.exports = new Logger();
+module.exports.logQueueManager = logQueueManager;

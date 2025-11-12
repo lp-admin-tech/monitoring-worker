@@ -21,6 +21,7 @@ class ContentAnalyzer {
   async analyzeContent(text, options = {}) {
     try {
       if (!text || typeof text !== 'string' || text.length === 0) {
+        logger.warn('Content analyzer received empty or invalid text input');
         return this.getEmptyAnalysis();
       }
 
@@ -43,6 +44,17 @@ class ContentAnalyzer {
 
       const freshnessMetrics = this.freshness.analyze(text, options.metadata);
       logger.debug('Freshness analysis complete', freshnessMetrics);
+
+      if (this.validateMetrics({
+        entropy: entropyMetrics,
+        similarity: similarityMetrics,
+        readability: readabilityMetrics,
+        ai: aiMetrics,
+        clickbait: clickbaitMetrics,
+        freshness: freshnessMetrics,
+      })) {
+        logger.warn('All metrics returned zero or null values. Content extraction may have failed.');
+      }
 
       const linguisticFingerprint = this.aggregateResults(text, {
         entropy: entropyMetrics,
@@ -68,6 +80,18 @@ class ContentAnalyzer {
         status: 'analysis_failed',
       };
     }
+  }
+
+  validateMetrics(metrics) {
+    const metricsAreEmpty = Object.values(metrics).every(metric => {
+      if (!metric || typeof metric !== 'object') return true;
+
+      return Object.values(metric).every(value =>
+        value === 0 || value === false || value === null || value === undefined || value === ''
+      );
+    });
+
+    return metricsAreEmpty;
   }
 
   async analyzeMultiplePages(pages) {
