@@ -91,6 +91,8 @@ class Logger {
         error: entry.error || null,
         user_id: entry.userId || null,
         publisher_id: entry.publisherId || null,
+        action: entry.action || 'log',
+        entity_type: entry.entityType || 'worker_process',
       };
 
       const { error } = await client.from('audit_logs').insert([logData]);
@@ -500,6 +502,8 @@ class Logger {
         error: entry.error || null,
         user_id: entry.userId || null,
         publisher_id: entry.publisherId || null,
+        action: entry.action || 'log',
+        entity_type: entry.entityType || 'worker_process',
       };
 
       const client = getSupabaseClient();
