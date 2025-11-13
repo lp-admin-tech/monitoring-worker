@@ -355,7 +355,7 @@ class BatchSiteProcessor {
         ad_analysis: modules.adAnalyzer.data,
         policy_check: modules.policyChecker.data,
         technical_check: modules.technicalChecker.data,
-        risk_score: scorerData.riskScore || 0,
+        risk_score: Number(scorerData.riskScore) || 0,
         score_breakdown: scorerData.scores?.componentScores || null,
         mfa_probability: scorerData.mfaProbability || null,
         risk_level: scorerData.explanation?.riskLevel || null,
@@ -389,6 +389,72 @@ class BatchSiteProcessor {
           riskScore: completedAudit.risk_score,
           requestId,
         });
+
+        await Promise.all([
+          (async () => {
+            try {
+              if (modules.adAnalyzer?.data) {
+                await supabase.insert('ad_analysis_results', {
+                  site_audit_id: siteAuditId,
+                  publisher_id: publisherId,
+                  analysis_data: modules.adAnalyzer.data,
+                  risk_score: modules.adAnalyzer.data?.riskAssessment?.overallRiskScore || 0,
+                  timestamp: new Date().toISOString(),
+                });
+              }
+            } catch (err) {
+              logger.warn(`[${requestId}] Failed to insert ad analysis results`, { error: err.message, requestId });
+            }
+          })(),
+          (async () => {
+            try {
+              if (modules.technicalChecker?.data) {
+                await supabase.insert('technical_check_results', {
+                  site_audit_id: siteAuditId,
+                  publisher_id: publisherId,
+                  check_data: modules.technicalChecker.data,
+                  risk_score: modules.technicalChecker.data?.overallRiskScore || 0,
+                  timestamp: new Date().toISOString(),
+                });
+              }
+            } catch (err) {
+              logger.warn(`[${requestId}] Failed to insert technical check results`, { error: err.message, requestId });
+            }
+          })(),
+          (async () => {
+            try {
+              if (modules.contentAnalyzer?.data) {
+                await supabase.insert('content_analysis_results', {
+                  site_audit_id: siteAuditId,
+                  publisher_id: publisherId,
+                  analysis_data: modules.contentAnalyzer.data,
+                  risk_score: modules.contentAnalyzer.data?.overallRiskScore || 0,
+                  timestamp: new Date().toISOString(),
+                });
+              }
+            } catch (err) {
+              logger.warn(`[${requestId}] Failed to insert content analysis results`, { error: err.message, requestId });
+            }
+          })(),
+          (async () => {
+            try {
+              if (aiResult.data) {
+                await supabase.insert('ai_analysis_results', {
+                  site_audit_id: siteAuditId,
+                  publisher_id: publisherId,
+                  llm_response: aiResult.data.llmResponse,
+                  interpretation: aiResult.data.interpretation,
+                  risk_categorization: aiResult.data.interpretation?.PRIMARY_CATEGORY || null,
+                  risk_level: aiResult.data.interpretation?.RISK_LEVEL || null,
+                  timestamp: aiResult.data.timestamp || new Date().toISOString(),
+                  metadata: aiResult.data.metadata,
+                });
+              }
+            } catch (err) {
+              logger.warn(`[${requestId}] Failed to insert AI analysis results`, { error: err.message, requestId });
+            }
+          })(),
+        ]);
       } catch (updateErr) {
         logger.error(`[${requestId}] Failed to update site audit with final results`, updateErr, {
           jobId,
