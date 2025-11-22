@@ -5,7 +5,7 @@ const logger = require('../modules/logger');
 const supabase = require('../modules/supabase-client');
 const gamFetcher = require('../modules/gam-fetcher');
 
-let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker, technicalCheckerDb, contentAnalyzerDb, adAnalyzerDb, policyCheckerDb, aiAssistanceDb, crawlerDb, moduleDataOrchestrator;
+let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker, technicalCheckerDb, contentAnalyzerDb, adAnalyzerDb, policyCheckerDb, aiAssistanceDb, crawlerDb, moduleDataOrchestrator, directoryAuditOrchestrator;
 let server = null;
 const activeProcesses = new Set();
 
@@ -56,7 +56,7 @@ try {
     logger
   });
 
-  const directoryAuditOrchestrator = new DirectoryAuditOrchestrator({
+  directoryAuditOrchestrator = new DirectoryAuditOrchestrator({
     contentAnalyzer,
     adAnalyzer,
     policyChecker,
