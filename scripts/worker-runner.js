@@ -10,6 +10,9 @@ let server = null;
 const activeProcesses = new Set();
 
 try {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+
   const ContentAnalyzerClass = require('../modules/content-analyzer');
   const AdAnalyzerClass = require('../modules/ad-analyzer');
   const policyCheckerModule = require('../modules/policy-checker');
@@ -40,8 +43,7 @@ try {
   contentAnalyzer = new ContentAnalyzerClass();
   adAnalyzer = new AdAnalyzerClass();
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+
   const supabaseClient = supabaseUrl && supabaseServiceKey ? createClient(supabaseUrl, supabaseServiceKey) : null;
 
   scorer = new ScoringEngineClass(supabaseClient);
