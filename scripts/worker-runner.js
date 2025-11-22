@@ -932,4 +932,4 @@ start().catch(err => {
   process.exit(1);
 });
 
-module.exports = { app, jobQueue, executeAuditPipeline };
+module.exports = { app, jobQueue };
