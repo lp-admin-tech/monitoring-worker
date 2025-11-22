@@ -5,11 +5,14 @@ const logger = require('../modules/logger');
 const supabase = require('../modules/supabase-client');
 const gamFetcher = require('../modules/gam-fetcher');
 
-let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker, technicalCheckerDb, contentAnalyzerDb, adAnalyzerDb, policyCheckerDb, aiAssistanceDb, crawlerDb, moduleDataOrchestrator;
+let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker, technicalCheckerDb, contentAnalyzerDb, adAnalyzerDb, policyCheckerDb, aiAssistanceDb, crawlerDb, moduleDataOrchestrator, directoryAuditOrchestrator, crossModuleAnalyzer;
 let server = null;
 const activeProcesses = new Set();
 
 try {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+
   const ContentAnalyzerClass = require('../modules/content-analyzer');
   const AdAnalyzerClass = require('../modules/ad-analyzer');
   const policyCheckerModule = require('../modules/policy-checker');
@@ -25,23 +28,22 @@ try {
   const crawlerModule = require('../modules/crawler');
   const ModuleDataPersistence = require('../modules/database-orchestrator');
   const DirectoryAuditOrchestrator = require('../modules/directory-audit-orchestrator');
-  const crossModuleAnalyzer = require('../modules/cross-module-analyzer');
+  const crossModuleAnalyzerModule = require('../modules/cross-module-analyzer');
   const { createClient } = require('@supabase/supabase-js');
 
   crawler = crawlerModule;
   policyChecker = policyCheckerModule;
   technicalChecker = technicalCheckerModule;
+  crawlerDb = crawlerDbModule;
+  policyCheckerDb = policyCheckerDbModule;
   technicalCheckerDb = technicalCheckerDbModule;
   contentAnalyzerDb = contentAnalyzerDbModule;
-  adAnalyzerDb = adAnalyzerDbModule;
-  policyCheckerDb = policyCheckerDbModule;
+  adAnalyzerDb = new adAnalyzerDbModule(supabaseUrl, supabaseServiceKey);
   aiAssistanceDb = aiAssistanceDbModule;
-  crawlerDb = crawlerDbModule;
   contentAnalyzer = new ContentAnalyzerClass();
   adAnalyzer = new AdAnalyzerClass();
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+
   const supabaseClient = supabaseUrl && supabaseServiceKey ? createClient(supabaseUrl, supabaseServiceKey) : null;
 
   scorer = new ScoringEngineClass(supabaseClient);
@@ -56,13 +58,15 @@ try {
     logger
   });
 
-  const directoryAuditOrchestrator = new DirectoryAuditOrchestrator({
+  directoryAuditOrchestrator = new DirectoryAuditOrchestrator({
     contentAnalyzer,
     adAnalyzer,
     policyChecker,
     technicalChecker,
     crawler
   });
+
+  crossModuleAnalyzer = crossModuleAnalyzerModule;
 } catch (err) {
   console.error('Failed to initialize analysis modules:', err.message);
   console.error('Stack:', err.stack);
@@ -932,4 +936,4 @@ start().catch(err => {
   process.exit(1);
 });
 
-module.exports = { app, jobQueue, executeAuditPipeline };
+module.exports = { app, jobQueue };

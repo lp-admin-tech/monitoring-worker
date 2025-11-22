@@ -289,38 +289,65 @@ class Crawler {
 
   async discoverDirectories(page, baseUrl) {
     try {
-      const baseUrlObj = new URL(baseUrl);
+      // Normalize URL to ensure it has a protocol
+      let normalizedUrl = baseUrl;
+      if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
+        normalizedUrl = `https://${normalizedUrl}`;
+      }
+
+      try {
+        new URL(normalizedUrl); // Validate URL before passing to evaluate
+      } catch (e) {
+        logger.warn(`Invalid base URL for directory discovery: ${baseUrl}`);
+        return [];
+      }
 
       // Use evaluate for performance - extracting thousands of links via Locators is slow
       const discoveredDirs = await page.evaluate((baseUrl) => {
-        const baseUrlObj = new URL(baseUrl);
-        const discovered = new Set();
-        const links = document.querySelectorAll('a[href]');
+        try {
+          // Validate baseUrl before using it
+          if (!baseUrl || typeof baseUrl !== 'string') {
+            return [];
+          }
 
-        for (const link of links) {
+          // Try to construct URL, return empty array if invalid
+          let baseUrlObj;
           try {
-            const href = link.href;
-            if (!href) continue;
+            baseUrlObj = new URL(baseUrl);
+          } catch (e) {
+            return [];
+          }
 
-            const absoluteUrl = new URL(href, baseUrl);
+          const discovered = new Set();
+          const links = document.querySelectorAll('a[href]');
 
-            if (absoluteUrl.hostname === baseUrlObj.hostname) {
-              const pathname = absoluteUrl.pathname;
-              const segments = pathname.split('/').filter(s => s.length > 0);
+          for (const link of links) {
+            try {
+              const href = link.href;
+              if (!href) continue;
 
-              if (segments.length > 0) {
-                const firstSegment = '/' + segments[0];
-                if (firstSegment !== '/' && !firstSegment.includes('.')) {
-                  discovered.add(firstSegment);
+              const absoluteUrl = new URL(href, baseUrl);
+
+              if (absoluteUrl.hostname === baseUrlObj.hostname) {
+                const pathname = absoluteUrl.pathname;
+                const segments = pathname.split('/').filter(s => s.length > 0);
+
+                if (segments.length > 0) {
+                  const firstSegment = '/' + segments[0];
+                  if (firstSegment !== '/' && !firstSegment.includes('.')) {
+                    discovered.add(firstSegment);
+                  }
                 }
               }
-            }
-          } catch (e) { continue; }
+            } catch (e) { continue; }
+          }
+          return Array.from(discovered);
+        } catch (err) {
+          return [];
         }
-        return Array.from(discovered);
-      }, baseUrl);
+      }, normalizedUrl);
 
-      logger.info(`Discovered ${discoveredDirs.length} directories on ${baseUrl}`);
+      logger.info(`Discovered ${discoveredDirs.length} directories on ${normalizedUrl}`);
       return discoveredDirs;
     } catch (error) {
       logger.warn(`Error discovering directories: ${error.message}`);
