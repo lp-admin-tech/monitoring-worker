@@ -34,12 +34,12 @@ try {
   crawler = crawlerModule;
   policyChecker = policyCheckerModule;
   technicalChecker = technicalCheckerModule;
-  crawlerDb = new crawlerDbModule(supabaseUrl, supabaseServiceKey);
-  policyCheckerDb = new policyCheckerDbModule(supabaseUrl, supabaseServiceKey);
-  technicalCheckerDb = new technicalCheckerDbModule(supabaseUrl, supabaseServiceKey);
-  contentAnalyzerDb = new contentAnalyzerDbModule(supabaseUrl, supabaseServiceKey);
-  adAnalyzerDb = new adAnalyzerDbModule(supabaseUrl, supabaseServiceKey);
-  aiAssistanceDb = new aiAssistanceDbModule(supabaseUrl, supabaseServiceKey);
+  crawlerDb = crawlerDbModule;
+  policyCheckerDb = policyCheckerDbModule;
+  technicalCheckerDb = technicalCheckerDbModule;
+  contentAnalyzerDb = contentAnalyzerDbModule;
+  adAnalyzerDb = adAnalyzerDbModule;
+  aiAssistanceDb = aiAssistanceDbModule;
   contentAnalyzer = new ContentAnalyzerClass();
   adAnalyzer = new AdAnalyzerClass();
 
