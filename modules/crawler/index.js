@@ -404,8 +404,65 @@ class Crawler {
   }
 
   async extractPageContent(page) {
-    // Basic text extraction for content analyzer
-    return await page.evaluate(() => document.body.innerText);
+    try {
+      // Wait for body to be available
+      await page.waitForSelector('body', { timeout: 5000 }).catch(() => { });
+
+      return await page.evaluate(() => {
+        // Helper to clean text
+        const cleanText = (text) => {
+          return text
+            .replace(/\\s+/g, ' ')
+            .replace(/[\\n\\r]+/g, ' ')
+            .trim();
+        };
+
+        // 1. Try common content selectors first (usually higher quality)
+        const contentSelectors = [
+          'article',
+          'main',
+          '[role="main"]',
+          '.post-content',
+          '.article-content',
+          '.entry-content',
+          '#content',
+          '.content'
+        ];
+
+        for (const selector of contentSelectors) {
+          const element = document.querySelector(selector);
+          if (element) {
+            const text = cleanText(element.innerText);
+            if (text.length > 100) { // Threshold for meaningful content
+              return text;
+            }
+          }
+        }
+
+        // 2. Fallback to body innerText
+        const bodyText = cleanText(document.body.innerText);
+        if (bodyText.length > 50) {
+          return bodyText;
+        }
+
+        // 3. Fallback to textContent (includes hidden text, but better than nothing)
+        const bodyContent = cleanText(document.body.textContent);
+        if (bodyContent.length > 50) {
+          return bodyContent;
+        }
+
+        // 4. Last resort: meta description
+        const metaDesc = document.querySelector('meta[name="description"]');
+        if (metaDesc && metaDesc.content) {
+          return metaDesc.content;
+        }
+
+        return "No content extracted";
+      });
+    } catch (error) {
+      logger.warn('Error extracting page content', error);
+      return "Error extracting content";
+    }
   }
 }
 

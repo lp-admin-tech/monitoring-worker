@@ -203,104 +203,105 @@ class AIAssistanceModule {
   }
 
   async callLLM(systemPrompt, userPrompt) {
-    try {
-      if (!this.apiKey) {
-        logger.warn('No AI API key configured, using fallback analysis');
-        return this.generateFallbackAnalysis(userPrompt);
-      }
+    let primaryError = null;
 
-      logger.debug('Calling LLM', {
-        model: this.model,
-        provider: this.provider,
-        systemPromptLength: systemPrompt.length,
-        userPromptLength: userPrompt.length
-      });
+    // 1. Try Primary Model (if configured)
+    if (this.apiKey) {
+      try {
+        logger.debug('Calling Primary LLM', {
+          model: this.model,
+          provider: this.provider
+        });
 
-      if (this.provider === 'alibaba') {
-        return await this.callAlibabaLLM(systemPrompt, userPrompt);
-      } else {
-        return await this.callOpenRouterLLM(systemPrompt, userPrompt);
+        if (this.provider === 'alibaba') {
+          return await this.callAlibabaLLM(systemPrompt, userPrompt);
+        } else {
+          return await this.callOpenRouterLLM(systemPrompt, userPrompt);
+        }
+      } catch (error) {
+        primaryError = error;
+        logger.warn('Primary LLM failed, attempting backup', { error: error.message });
       }
-    } catch (error) {
-      logger.error('Error calling LLM', error);
-      logger.warn('Using fallback analysis due to LLM error');
-      return this.generateFallbackAnalysis(userPrompt);
+    } else {
+      logger.info('No primary API key configured, skipping to backup');
     }
+
+    // 2. Try Backup Model (DeepSeek via OpenRouter)
+    // Check if we have an OpenRouter key (either as primary or specifically for backup)
+    const openRouterKey = this.openRouter.apiKey || (this.provider === 'openrouter' ? this.apiKey : null);
+
+    if (openRouterKey) {
+      try {
+        return await this.callBackupLLM(systemPrompt, userPrompt, openRouterKey);
+      } catch (error) {
+        logger.warn('Backup LLM failed', { error: error.message });
+      }
+    } else {
+      logger.warn('No OpenRouter key available for backup LLM');
+    }
+
+    // 3. Fallback to Rule-Based Analysis
+    logger.warn('All LLM attempts failed, using rule-based fallback');
+    return this.generateFallbackAnalysis(userPrompt);
   }
 
   async callAlibabaLLM(systemPrompt, userPrompt) {
-    try {
-      logger.debug('Calling Alibaba LLM', { model: this.model });
-
-      const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-          'X-DashScope-Async': 'enable'
-        },
-        body: JSON.stringify({
-          model: this.model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          parameters: {
-            temperature: 0.3,
-            top_p: 0.9,
-            max_tokens: 2048
-          }
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        logger.error('Alibaba LLM API error', {
-          status: response.status,
-          error: errorData
-        });
-
-        if (response.status === 401) {
-          logger.error('Invalid Alibaba API key');
-          return this.generateFallbackAnalysis(userPrompt);
+    const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+        'X-DashScope-Async': 'enable'
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        parameters: {
+          temperature: 0.3,
+          top_p: 0.9,
+          max_tokens: 2048
         }
+      })
+    });
 
-        throw new Error(`Alibaba LLM API error: ${response.status} ${response.statusText}`);
-      }
-
-      const data = await response.json();
-
-      if (data.code && data.code !== 'Success') {
-        logger.error('Alibaba LLM returned error', data.message);
-        return this.generateFallbackAnalysis(userPrompt);
-      }
-
-      const response_text = data.output?.text || '';
-
-      logger.info('Alibaba LLM response successful', {
-        responseLength: response_text.length,
-        usage: data.usage
-      });
-
-      return response_text;
-    } catch (error) {
-      logger.error('Error calling Alibaba LLM', error);
-      return this.generateFallbackAnalysis(userPrompt);
+    if (!response.ok) {
+      throw new Error(`Alibaba LLM API error: ${response.status} ${response.statusText}`);
     }
+
+    const data = await response.json();
+
+    if (data.code && data.code !== 'Success') {
+      throw new Error(`Alibaba LLM returned error: ${data.message}`);
+    }
+
+    return data.output?.text || '';
   }
 
   async callOpenRouterLLM(systemPrompt, userPrompt) {
+    return this.performOpenRouterCall(this.model, this.apiKey, systemPrompt, userPrompt);
+  }
+
+  async callBackupLLM(systemPrompt, userPrompt, apiKey) {
+    const backupModel = 'deepseek/deepseek-r1-distill-llama-70b:free';
+    logger.info('Calling Backup LLM (DeepSeek)', { model: backupModel });
+    return this.performOpenRouterCall(backupModel, apiKey, systemPrompt, userPrompt);
+  }
+
+  async performOpenRouterCall(model, apiKey, systemPrompt, userPrompt) {
     const makeRequest = async () => {
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`,
+          'Authorization': `Bearer ${apiKey}`,
           'HTTP-Referer': 'https://compliance-monitor.local',
           'X-Title': 'Compliance AI Assistant'
         },
         body: JSON.stringify({
-          model: this.model,
+          model: model,
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt }
@@ -315,7 +316,6 @@ class AIAssistanceModule {
         const errorData = await response.json().catch(() => ({}));
         const error = new Error(`OpenRouter API error: ${response.status} ${response.statusText}`);
         error.status = response.status;
-        error.retryAfter = response.headers.get('Retry-After');
         error.data = errorData;
         throw error;
       }
@@ -323,56 +323,19 @@ class AIAssistanceModule {
       const data = await response.json();
 
       if (data.error) {
-        const errorMessage = typeof data.error === 'object' ? JSON.stringify(data.error) : String(data.error);
-        logger.error('OpenRouter returned error response', {
-          errorMessage,
-          model: this.model,
-          errorType: data.error?.type,
-          errorCode: data.error?.code
-        });
-        return this.generateFallbackAnalysis(userPrompt);
+        throw new Error(`OpenRouter returned error: ${JSON.stringify(data.error)}`);
       }
 
       return data.choices?.[0]?.message?.content || '';
     };
 
-    try {
-      logger.debug('Calling OpenRouter LLM with rate limiting', {
-        model: this.model,
-      });
+    const result = await this.rateLimiter.executeWithRetry(makeRequest, 3);
 
-      const result = await this.rateLimiter.executeWithRetry(makeRequest, 3);
-
-      if (!result.success) {
-        const error = result.error;
-        logger.error('OpenRouter request failed', {
-          status: error?.status,
-          message: error?.message,
-          retryExhausted: result.retryExhausted,
-          attempt: result.attempt
-        });
-
-        if (error?.status === 401) {
-          logger.error('Invalid OpenRouter API key - check OPENROUTER_API_KEY');
-        }
-
-        return this.generateFallbackAnalysis(userPrompt);
-      }
-
-      logger.info('OpenRouter response successful', {
-        responseLength: result.data?.length,
-        model: this.model
-      });
-
-      return result.data;
-    } catch (error) {
-      logger.error('Unexpected error calling OpenRouter LLM', {
-        errorMessage: error.message,
-        errorType: error.name,
-        model: this.model
-      });
-      return this.generateFallbackAnalysis(userPrompt);
+    if (!result.success) {
+      throw result.error || new Error('OpenRouter request failed after retries');
     }
+
+    return result.data;
   }
 
   generateFallbackAnalysis(userPrompt) {
@@ -385,10 +348,10 @@ class AIAssistanceModule {
 ## Executive Summary
 
 ${analysisHints.mfaProbability > 0.7 ?
-  'This site shows multiple indicators consistent with Made-For-Advertising patterns. Investigation is recommended.' :
-  analysisHints.mfaProbability > 0.5 ?
-  'This site has several concerning patterns that warrant further investigation.' :
-  'This site appears to meet baseline compliance standards based on available metrics.'}
+        'This site shows multiple indicators consistent with Made-For-Advertising patterns. Investigation is recommended.' :
+        analysisHints.mfaProbability > 0.5 ?
+          'This site has several concerning patterns that warrant further investigation.' :
+          'This site appears to meet baseline compliance standards based on available metrics.'}
 
 ## Primary Findings
 

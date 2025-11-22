@@ -113,8 +113,12 @@ class DirectoryAuditOrchestrator {
             // 5. Run full audit on each directory
             for (const directory of directoriesToAudit) {
                 try {
-                    const directoryUrl = `${publisher.site_url}${directory}`.replace(/\/+/g, '/');
-                    const directoryUrl2 = directoryUrl.replace(':/', '://'); // Fix protocol
+                    let baseUrl = publisher.site_url;
+                    if (!baseUrl.startsWith('http')) {
+                        baseUrl = 'https://' + baseUrl;
+                    }
+                    const directoryUrl = `${baseUrl}${directory}`.replace(/(?<!:)\/+/g, '/'); // Replace multiple slashes but not after protocol
+                    const directoryUrl2 = directoryUrl;
 
                     logger.info(`Running audit on directory: ${directory}`, {
                         url: directoryUrl2
@@ -324,6 +328,11 @@ class DirectoryAuditOrchestrator {
      */
     async discoverDirectories(page, baseUrl) {
         try {
+            // Ensure protocol exists
+            if (!baseUrl.startsWith('http')) {
+                baseUrl = 'https://' + baseUrl;
+            }
+
             const discoveredDirs = await page.evaluate((baseUrlParam) => {
                 const discoveredSet = new Set();
                 const baseUrlObj = new URL(baseUrlParam);
