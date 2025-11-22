@@ -5,7 +5,7 @@ const logger = require('../modules/logger');
 const supabase = require('../modules/supabase-client');
 const gamFetcher = require('../modules/gam-fetcher');
 
-let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker, technicalCheckerDb, contentAnalyzerDb, adAnalyzerDb, policyCheckerDb, aiAssistanceDb, crawlerDb, moduleDataOrchestrator, directoryAuditOrchestrator;
+let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker, technicalCheckerDb, contentAnalyzerDb, adAnalyzerDb, policyCheckerDb, aiAssistanceDb, crawlerDb, moduleDataOrchestrator, directoryAuditOrchestrator, crossModuleAnalyzer;
 let server = null;
 const activeProcesses = new Set();
 
@@ -25,18 +25,18 @@ try {
   const crawlerModule = require('../modules/crawler');
   const ModuleDataPersistence = require('../modules/database-orchestrator');
   const DirectoryAuditOrchestrator = require('../modules/directory-audit-orchestrator');
-  const crossModuleAnalyzer = require('../modules/cross-module-analyzer');
+  const CrossModuleAnalyzer = require('../modules/cross-module-analyzer');
   const { createClient } = require('@supabase/supabase-js');
 
   crawler = crawlerModule;
   policyChecker = policyCheckerModule;
   technicalChecker = technicalCheckerModule;
-  technicalCheckerDb = technicalCheckerDbModule;
-  contentAnalyzerDb = contentAnalyzerDbModule;
-  adAnalyzerDb = adAnalyzerDbModule;
-  policyCheckerDb = policyCheckerDbModule;
-  aiAssistanceDb = aiAssistanceDbModule;
-  crawlerDb = crawlerDbModule;
+  crawlerDb = new crawlerDbModule(supabaseUrl, supabaseServiceKey);
+  policyCheckerDb = new policyCheckerDbModule(supabaseUrl, supabaseServiceKey);
+  technicalCheckerDb = new technicalCheckerDbModule(supabaseUrl, supabaseServiceKey);
+  contentAnalyzerDb = new contentAnalyzerDbModule(supabaseUrl, supabaseServiceKey);
+  adAnalyzerDb = new adAnalyzerDbModule(supabaseUrl, supabaseServiceKey);
+  aiAssistanceDb = new aiAssistanceDbModule(supabaseUrl, supabaseServiceKey);
   contentAnalyzer = new ContentAnalyzerClass();
   adAnalyzer = new AdAnalyzerClass();
 
@@ -62,6 +62,15 @@ try {
     policyChecker,
     technicalChecker,
     crawler
+  });
+
+  crossModuleAnalyzer = new CrossModuleAnalyzer({
+    contentAnalyzerDb,
+    adAnalyzerDb,
+    policyCheckerDb,
+    technicalCheckerDb,
+    aiAssistanceDb,
+    crawlerDb
   });
 } catch (err) {
   console.error('Failed to initialize analysis modules:', err.message);
