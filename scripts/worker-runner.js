@@ -28,7 +28,7 @@ try {
   const crawlerModule = require('../modules/crawler');
   const ModuleDataPersistence = require('../modules/database-orchestrator');
   const DirectoryAuditOrchestrator = require('../modules/directory-audit-orchestrator');
-  const CrossModuleAnalyzer = require('../modules/cross-module-analyzer');
+  const crossModuleAnalyzerModule = require('../modules/cross-module-analyzer');
   const { createClient } = require('@supabase/supabase-js');
 
   crawler = crawlerModule;
@@ -38,7 +38,7 @@ try {
   policyCheckerDb = policyCheckerDbModule;
   technicalCheckerDb = technicalCheckerDbModule;
   contentAnalyzerDb = contentAnalyzerDbModule;
-  adAnalyzerDb = adAnalyzerDbModule;
+  adAnalyzerDb = new adAnalyzerDbModule(supabaseUrl, supabaseServiceKey);
   aiAssistanceDb = aiAssistanceDbModule;
   contentAnalyzer = new ContentAnalyzerClass();
   adAnalyzer = new AdAnalyzerClass();
@@ -66,14 +66,7 @@ try {
     crawler
   });
 
-  crossModuleAnalyzer = new CrossModuleAnalyzer({
-    contentAnalyzerDb,
-    adAnalyzerDb,
-    policyCheckerDb,
-    technicalCheckerDb,
-    aiAssistanceDb,
-    crawlerDb
-  });
+  crossModuleAnalyzer = crossModuleAnalyzerModule;
 } catch (err) {
   console.error('Failed to initialize analysis modules:', err.message);
   console.error('Stack:', err.stack);
