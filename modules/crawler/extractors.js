@@ -4,64 +4,116 @@ async function extractAdElements(page) {
   try {
     const adElements = await page.evaluate(() => {
       const ads = [];
-      const adPatterns = [
-        { selector: '[id*="ad"], [class*="ad"]', type: 'id-class-based' },
-        { selector: '[id*="gpt"], [class*="gpt"]', type: 'gpt-based' },
-        { selector: 'div[data-ad-slot], div[data-adsbygoogle]', type: 'data-attribute' },
-        { selector: 'ins.adsbygoogle', type: 'google-ads-tag' },
-      ];
 
-      const seenElements = new Set();
+      // Helper to check if an element matches ad patterns
+      const isAd = (el) => {
+        // 1. ID/Class Patterns
+        if (el.id && (el.id.includes('ad-') || el.id.includes('gpt-') || el.id.includes('dfp-'))) return 'id-pattern';
+        if (el.className && typeof el.className === 'string' && (el.className.includes('ad-slot') || el.className.includes('adsbygoogle'))) return 'class-pattern';
 
-      for (const pattern of adPatterns) {
-        document.querySelectorAll(pattern.selector).forEach((el) => {
-          if (seenElements.has(el)) return;
-          seenElements.add(el);
+        // 2. Attribute Patterns (Strong signals)
+        if (el.hasAttribute('data-google-query-id')) return 'google-query-id';
+        if (el.hasAttribute('data-ad-slot')) return 'data-ad-slot';
+        if (el.hasAttribute('data-ad-unit')) return 'data-ad-unit';
 
-          const rect = el.getBoundingClientRect();
-          const computedStyle = window.getComputedStyle(el);
+        // 3. Tag Patterns
+        if (el.tagName === 'INS' && el.classList.contains('adsbygoogle')) return 'google-ins';
+        if (el.tagName === 'GPT-AD') return 'gpt-tag';
 
-          ads.push({
-            type: pattern.type,
-            id: el.id,
-            className: el.className,
-            tag: el.tagName,
-            dataAttributes: Array.from(el.attributes)
-              .filter(attr => attr.name.startsWith('data-'))
-              .reduce((acc, attr) => {
-                acc[attr.name] = attr.value;
-                return acc;
-              }, {}),
-            position: {
-              x: rect.x,
-              y: rect.y,
-              width: rect.width,
-              height: rect.height,
-            },
-            viewportPosition: {
-              top: rect.top,
-              bottom: rect.bottom,
-              left: rect.left,
-              right: rect.right,
-            },
-            visibility: {
-              visible: rect.width > 0 && rect.height > 0,
-              display: computedStyle.display,
-              visibility: computedStyle.visibility,
-              opacity: computedStyle.opacity,
-            },
-            html: el.outerHTML.substring(0, 500),
-          });
+        return null;
+      };
+
+      // Helper to traverse Shadow DOM
+      const findAllAds = (root) => {
+        const elements = root.querySelectorAll('*');
+        elements.forEach(el => {
+          const type = isAd(el);
+          if (type) {
+            // Check visibility
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+
+            if (rect.width > 1 || rect.height > 1) { // Filter out 1x1 tracking pixels from "ads" list if desired, or keep them
+              ads.push({
+                type,
+                id: el.id,
+                className: typeof el.className === 'string' ? el.className : '',
+                tag: el.tagName,
+                dataAttributes: Array.from(el.attributes)
+                  .filter(attr => attr.name.startsWith('data-'))
+                  .reduce((acc, attr) => {
+                    acc[attr.name] = attr.value;
+                    return acc;
+                  }, {}),
+                position: {
+                  x: rect.x,
+                  y: rect.y,
+                  width: rect.width,
+                  height: rect.height,
+                },
+                viewportPosition: {
+                  top: rect.top,
+                  bottom: rect.bottom,
+                  left: rect.left,
+                  right: rect.right,
+                },
+                visibility: {
+                  visible: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
+                  display: style.display,
+                  visibility: style.visibility,
+                  opacity: style.opacity,
+                },
+                html: el.outerHTML.substring(0, 500),
+                isShadow: !!root.host
+              });
+            }
+          }
+
+          if (el.shadowRoot) {
+            findAllAds(el.shadowRoot);
+          }
         });
-      }
+      };
+
+      findAllAds(document);
+
+      // Also check for iframes that look like ads but weren't caught by above patterns
+      document.querySelectorAll('iframe').forEach(iframe => {
+        try {
+          const src = iframe.src || '';
+          if (src.includes('doubleclick.net') || src.includes('googlesyndication.com') || src.includes('adnxs.com')) {
+            const rect = iframe.getBoundingClientRect();
+            ads.push({
+              type: 'ad-iframe',
+              id: iframe.id,
+              src: src,
+              position: { width: rect.width, height: rect.height },
+              visibility: { visible: rect.width > 0 && rect.height > 0 }
+            });
+          }
+        } catch (e) { }
+      });
 
       return ads;
     });
 
+    // Extract global ad signals (Behavioral)
+    const globalSignals = await page.evaluate(() => {
+      return {
+        hasGPT: !!(window.googletag && window.googletag.apiReady),
+        hasPrebid: !!(window.pbjs && window.pbjs.que),
+        hasAmazonApstag: !!(window.apstag),
+        googleQueryIdsFound: document.querySelectorAll('[data-google-query-id]').length
+      };
+    });
+
     logger.debug('Ad elements extracted', {
       count: adElements.length,
-      types: [...new Set(adElements.map(ad => ad.type))],
+      signals: globalSignals
     });
+
+    // Attach signals to the array for downstream use (hacky but effective)
+    adElements.globalSignals = globalSignals;
 
     return adElements;
   } catch (error) {

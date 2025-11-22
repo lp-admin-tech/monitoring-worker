@@ -3,6 +3,7 @@ const PromptBuilder = require('./prompt-builder');
 const AnalysisInterpreter = require('./analysis');
 const ReportFormatter = require('./formatter');
 const { OpenRouterRateLimiter } = require('./rate-limiter');
+const aiDb = require('./db');
 
 let supabaseClient = null;
 
@@ -56,48 +57,94 @@ class AIAssistanceModule {
     }
   }
 
-  async persistAIResults(result, siteAuditId, publisherId) {
-    const client = getSupabaseClient();
-    if (!client || !siteAuditId) {
-      logger.warn('Cannot persist AI results - missing supabase client or siteAuditId', {
-        hasSuperbase: !!client,
-        siteAuditId
-      });
+  async persistAIResults(result, siteAuditId, publisherId, previousResult = null) {
+    if (!siteAuditId) {
+      logger.warn('Cannot persist AI results - missing siteAuditId', { siteAuditId });
       return;
     }
 
     try {
-      const aiResultData = {
-        site_audit_id: siteAuditId,
-        publisher_id: publisherId || null,
-        llm_response: result.llmResponse || null,
-        interpretation: result.interpretation || null,
-        risk_categorization: result.interpretation?.categorization?.primaryCategory || null,
-        risk_level: result.interpretation?.riskAssessment?.riskLevel || null,
-        timestamp: result.timestamp || new Date().toISOString(),
-        metadata: result.metadata || null,
+      const startTime = Date.now();
+
+      logger.info('Starting AI results persistence', {
+        siteAuditId,
+        publisherId
+      });
+
+      const saveLLMResponse = await aiDb.saveLLMResponse(
+        siteAuditId,
+        publisherId,
+        result.llmResponse || '',
+        result.metadata || {}
+      );
+
+      const analysisResultId = saveLLMResponse.data?.id;
+      if (!analysisResultId) {
+        throw new Error('Failed to create analysis result record');
+      }
+
+      await aiDb.saveInterpretation(
+        analysisResultId,
+        result.interpretation || {},
+        publisherId
+      );
+
+      await aiDb.saveRiskCategorization(
+        analysisResultId,
+        result.interpretation?.categorization?.primaryCategory || null,
+        result.interpretation?.riskAssessment?.riskLevel || null
+      );
+
+      if (result.interpretation?.recommendations) {
+        await aiDb.saveRecommendations(
+          siteAuditId,
+          publisherId,
+          analysisResultId,
+          result.interpretation.recommendations
+        );
+      }
+
+      const metadataPayload = {
+        model: result.metadata?.model || this.model,
+        tokenCount: result.metadata?.tokenCount || 0,
+        processingTimeMs: Date.now() - startTime,
+        provider: result.metadata?.provider || this.provider,
+        metadata: result.metadata || {}
       };
 
-      const { error } = await client.from('ai_analysis_results').insert([aiResultData]);
+      await aiDb.saveMetadata(analysisResultId, metadataPayload);
 
-      if (error) {
-        logger.error('Failed to persist AI results to database', new Error(error.message), {
-          siteAuditId,
+      if (result.interpretation) {
+        await aiDb.trackInterpretationVersion(
+          analysisResultId,
           publisherId,
-          errorDetails: error
-        });
-      } else {
-        logger.info('AI analysis results persisted to database', {
-          siteAuditId,
+          result.interpretation,
+          previousResult?.interpretation || null
+        );
+      }
+
+      if (result.qualityMetrics) {
+        await aiDb.saveQualityMetrics(analysisResultId, {
           publisherId,
-          category: aiResultData.risk_categorization
+          ...result.qualityMetrics
         });
       }
+
+      logger.info('AI analysis results persisted to database successfully', {
+        siteAuditId,
+        publisherId,
+        analysisResultId,
+        category: result.interpretation?.categorization?.primaryCategory,
+        processingTimeMs: Date.now() - startTime
+      });
+
+      return { success: true, analysisResultId, data: saveLLMResponse.data };
     } catch (err) {
       logger.error('Error persisting AI results', err, {
         siteAuditId,
         publisherId
       });
+      return { success: false, error: err.message };
     }
   }
 
@@ -618,8 +665,69 @@ ${analysisHints.recommendations.join('\n')}`;
       hasApiKey: !!this.apiKey,
       promptBuilder: 'active',
       analysisInterpreter: 'active',
-      reportFormatter: 'active'
+      reportFormatter: 'active',
+      persistenceDb: 'active'
     };
+  }
+
+  async getHistoricalPatterns(publisherId, daysBack = 30) {
+    try {
+      logger.info('Fetching historical AI patterns', { publisherId, daysBack });
+      return await aiDb.queryHistoricalPatterns(publisherId, daysBack);
+    } catch (err) {
+      logger.error('Error fetching historical patterns', err, { publisherId });
+      throw err;
+    }
+  }
+
+  async getRecommendationTrends(publisherId, daysBack = 30) {
+    try {
+      logger.info('Fetching recommendation trends', { publisherId, daysBack });
+      return await aiDb.queryRecommendationTrends(publisherId, daysBack);
+    } catch (err) {
+      logger.error('Error fetching recommendation trends', err, { publisherId });
+      throw err;
+    }
+  }
+
+  async getAnalysisHistory(analysisResultId, limit = 20) {
+    try {
+      logger.info('Fetching analysis history', { analysisResultId, limit });
+      return await aiDb.getAnalysisHistory(analysisResultId, limit);
+    } catch (err) {
+      logger.error('Error fetching analysis history', err, { analysisResultId });
+      throw err;
+    }
+  }
+
+  async savePromptTemplate(templateName, systemPrompt, userPromptTemplate, metadata = {}) {
+    try {
+      logger.info('Saving prompt template', { templateName });
+      return await aiDb.savePromptTemplate(templateName, systemPrompt, userPromptTemplate, metadata);
+    } catch (err) {
+      logger.error('Error saving prompt template', err, { templateName });
+      throw err;
+    }
+  }
+
+  async getPromptTemplates(filters = {}) {
+    try {
+      logger.info('Fetching prompt templates', { filters });
+      return await aiDb.getPromptTemplates(filters);
+    } catch (err) {
+      logger.error('Error fetching prompt templates', err, { filters });
+      throw err;
+    }
+  }
+
+  async getQualityMetrics(analysisResultId) {
+    try {
+      logger.info('Fetching quality metrics', { analysisResultId });
+      return await aiDb.getQualityMetrics(analysisResultId);
+    } catch (err) {
+      logger.error('Error fetching quality metrics', err, { analysisResultId });
+      throw err;
+    }
   }
 }
 

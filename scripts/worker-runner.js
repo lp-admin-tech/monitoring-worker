@@ -5,7 +5,7 @@ const logger = require('../modules/logger');
 const supabase = require('../modules/supabase-client');
 const gamFetcher = require('../modules/gam-fetcher');
 
-let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker;
+let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker, technicalCheckerDb, contentAnalyzerDb, adAnalyzerDb, policyCheckerDb, aiAssistanceDb, crawlerDb, moduleDataOrchestrator;
 let server = null;
 const activeProcesses = new Set();
 
@@ -14,14 +14,29 @@ try {
   const AdAnalyzerClass = require('../modules/ad-analyzer');
   const policyCheckerModule = require('../modules/policy-checker');
   const technicalCheckerModule = require('../modules/technical-checker');
+  const technicalCheckerDbModule = require('../modules/technical-checker/db');
+  const contentAnalyzerDbModule = require('../modules/content-analyzer/db');
+  const adAnalyzerDbModule = require('../modules/ad-analyzer/db');
+  const policyCheckerDbModule = require('../modules/policy-checker/db');
+  const aiAssistanceDbModule = require('../modules/ai-assistance/db');
+  const crawlerDbModule = require('../modules/crawler/db');
   const ScoringEngineClass = require('../modules/scoerer');
   const AIAssistanceClass = require('../modules/ai-assistance');
   const crawlerModule = require('../modules/crawler');
+  const ModuleDataPersistence = require('../modules/database-orchestrator');
+  const DirectoryAuditOrchestrator = require('../modules/directory-audit-orchestrator');
+  const crossModuleAnalyzer = require('../modules/cross-module-analyzer');
   const { createClient } = require('@supabase/supabase-js');
 
   crawler = crawlerModule;
   policyChecker = policyCheckerModule;
   technicalChecker = technicalCheckerModule;
+  technicalCheckerDb = technicalCheckerDbModule;
+  contentAnalyzerDb = contentAnalyzerDbModule;
+  adAnalyzerDb = adAnalyzerDbModule;
+  policyCheckerDb = policyCheckerDbModule;
+  aiAssistanceDb = aiAssistanceDbModule;
+  crawlerDb = crawlerDbModule;
   contentAnalyzer = new ContentAnalyzerClass();
   adAnalyzer = new AdAnalyzerClass();
 
@@ -31,6 +46,23 @@ try {
 
   scorer = new ScoringEngineClass(supabaseClient);
   aiAssistance = new AIAssistanceClass();
+  moduleDataOrchestrator = new ModuleDataPersistence({
+    contentAnalyzerDb,
+    adAnalyzerDb,
+    policyCheckerDb,
+    technicalCheckerDb,
+    aiAssistanceDb,
+    crawlerDb,
+    logger
+  });
+
+  const directoryAuditOrchestrator = new DirectoryAuditOrchestrator({
+    contentAnalyzer,
+    adAnalyzer,
+    policyChecker,
+    technicalChecker,
+    crawler
+  });
 } catch (err) {
   console.error('Failed to initialize analysis modules:', err.message);
   console.error('Stack:', err.stack);
@@ -181,87 +213,32 @@ class BatchSiteProcessor {
         requestId,
       });
 
-      const crawlerResult = await executeWithRetry(
-        'Crawler',
-        async () => {
-          return {
-            data: {
-              content: [],
-              ads: [],
-            },
-            error: null,
-          };
+      // Use DirectoryAuditOrchestrator to run the audit
+      // This runs all modules on the main site AND all discovered subdirectories
+      const orchestratorResult = await directoryAuditOrchestrator.runDirectoryAwareAudit(
+        {
+          id: publisherId,
+          site_url: siteAudit.site_name,
+          subdirectories: []
         },
-        {},
-        requestId
+        siteAuditId
       );
 
+      // Extract main site results for backward compatibility and scoring
+      const mainSiteModules = orchestratorResult.mainSite.modules;
+      const mainSiteCrawlData = orchestratorResult.mainSite.crawlData;
+
+      // Map to expected 'modules' structure for existing logic
       const modules = {
-        crawler: crawlerResult,
+        crawler: { success: true, data: mainSiteCrawlData },
+        contentAnalyzer: { name: 'contentAnalyzer', ...mainSiteModules.contentAnalyzer },
+        adAnalyzer: { name: 'adAnalyzer', ...mainSiteModules.adAnalyzer },
+        policyChecker: { name: 'policyChecker', ...mainSiteModules.policyChecker },
+        technicalChecker: { name: 'technicalChecker', ...mainSiteModules.technicalChecker },
       };
 
-      const analysisPromises = [];
-
-      analysisPromises.push(
-        executeWithRetry(
-          'ContentAnalyzer',
-          async () => {
-            const result = await contentAnalyzer.analyzeContent(crawlerResult.data?.content || []);
-            return { data: result, error: null };
-          },
-          {},
-          requestId
-        ).then(result => ({ name: 'contentAnalyzer', ...result }))
-      );
-
-      analysisPromises.push(
-        executeWithRetry(
-          'AdAnalyzer',
-          async () => {
-            const result = await adAnalyzer.processPublisher(crawlerResult.data, { width: 1920, height: 1080 });
-            return { data: result, error: null };
-          },
-          {},
-          requestId
-        ).then(result => ({ name: 'adAnalyzer', ...result }))
-      );
-
-      analysisPromises.push(
-        executeWithRetry(
-          'PolicyChecker',
-          async () => {
-            const result = await policyChecker.runPolicyCheck(crawlerResult.data?.content || []);
-            return { data: result, error: null };
-          },
-          {},
-          requestId
-        ).then(result => ({ name: 'policyChecker', ...result }))
-      );
-
-      analysisPromises.push(
-        executeWithRetry(
-          'TechnicalChecker',
-          async () => {
-            const result = await technicalChecker.runTechnicalHealthCheck(crawlerResult.data, siteAudit.site_name);
-            return { data: result, error: null };
-          },
-          {},
-          requestId
-        ).then(result => ({ name: 'technicalChecker', ...result }))
-      );
-
-      const analysisResults = await Promise.all(analysisPromises);
-
-      analysisResults.forEach(result => {
-        modules[result.name] = result;
-        if (result.data) {
-          logger.detailedModuleLog(result.name, result, {
-            requestId,
-            siteAuditId,
-            siteName: siteAudit.site_name,
-          });
-        }
-      });
+      // Aggregate results for AI/Scorer context
+      const aggregatedResults = directoryAuditOrchestrator.aggregateResults(orchestratorResult);
 
       let scorerInput = {
         crawlerData: modules.crawler.data,
@@ -269,6 +246,8 @@ class BatchSiteProcessor {
         adAnalysis: modules.adAnalyzer.data,
         policyCheck: modules.policyChecker.data,
         technicalCheck: modules.technicalChecker.data,
+        // Add directory context for scorer if it can handle it, or just use it for AI
+        directoryContext: aggregatedResults
       };
 
       if (publisherId) {
@@ -313,15 +292,20 @@ class BatchSiteProcessor {
         riskScore: scorerResult.data?.riskScore,
         findings: scorerResult.data?.findings,
         recommendations: scorerResult.data?.recommendations,
+        directoryContext: aggregatedResults // Pass directory info to AI
       };
 
       const aiResult = await executeWithRetry(
         'AIAssistance',
         async () => {
           try {
+            // We pass aggregated directory info to the AI report generator
+            // Note: generateComprehensiveReport might need update to handle this extra arg, 
+            // or we append it to findings/recommendations before passing
+
             const result = await aiAssistance.generateComprehensiveReport(
               { domain: siteAudit.site_name },
-              scorerResult.data,
+              { ...scorerResult.data, directoryContext: aggregatedResults }, // Inject directory context into scorer data for AI
               modules.policyChecker.data?.issues || [],
               siteAuditId,
               publisherId
@@ -374,6 +358,22 @@ class BatchSiteProcessor {
           metadata: aiResult.data.metadata
         } : null,
         raw_results: modules,
+        // Add directory detection results
+        is_directory: aggregatedResults.isDirectory,
+        directory_type: aggregatedResults.directoryType,
+        directory_confidence: aggregatedResults.directoryConfidence,
+        directory_data: {
+          detection: orchestratorResult.directoryDetection,
+          summary: orchestratorResult.summary,
+          directories: orchestratorResult.directories.map(d => ({
+            directory: d.directory,
+            url: d.url,
+            success: d.success,
+            modules: d.modules, // Store full module data, not just keys
+            error: d.error
+          })),
+          aggregatedScores: aggregatedResults.aggregatedScores
+        },
         completed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -387,74 +387,86 @@ class BatchSiteProcessor {
           siteAuditId,
           status: completedAudit.status,
           riskScore: completedAudit.risk_score,
+          isDirectory: completedAudit.is_directory,
           requestId,
         });
 
-        await Promise.all([
-          (async () => {
-            try {
-              if (modules.adAnalyzer?.data) {
-                await supabase.insert('ad_analysis_results', {
-                  site_audit_id: siteAuditId,
-                  publisher_id: publisherId,
-                  analysis_data: modules.adAnalyzer.data,
-                  risk_score: modules.adAnalyzer.data?.riskAssessment?.overallRiskScore || 0,
-                  timestamp: new Date().toISOString(),
+        const persistenceResults = await moduleDataOrchestrator.saveAllModuleResults(
+          siteAuditId,
+          publisherId,
+          modules,
+          requestId
+        );
+
+        logger.info(`[${requestId}] Module data persistence results`, {
+          jobId,
+          publisherId,
+          siteName: siteAudit.site_name,
+          siteAuditId,
+          successfulModules: persistenceResults.summary.successfulModules,
+          failedModules: persistenceResults.summary.failedModules,
+          totalDuration: persistenceResults.summary.totalDuration,
+          requestId,
+        });
+
+        if (persistenceResults.partialFailures.length > 0) {
+          logger.warn(`[${requestId}] Partial failures during module data persistence`, {
+            jobId,
+            publisherId,
+            siteName: siteAudit.site_name,
+            siteAuditId,
+            failures: persistenceResults.partialFailures,
+            requestId,
+          });
+        }
+
+        // Persist results for all discovered directories
+        if (orchestratorResult.directories && orchestratorResult.directories.length > 0) {
+          logger.info(`[${requestId}] Persisting data for ${orchestratorResult.directories.length} directories`, { requestId });
+
+          for (const dirResult of orchestratorResult.directories) {
+            if (dirResult.success && dirResult.modules) {
+              try {
+                await moduleDataOrchestrator.saveAllModuleResults(
+                  siteAuditId,
+                  publisherId,
+                  dirResult.modules,
+                  requestId,
+                  dirResult.url // Pass directory URL for specific persistence
+                );
+              } catch (dirPersistErr) {
+                logger.error(`[${requestId}] Failed to persist directory data for ${dirResult.url}`, dirPersistErr, {
+                  requestId,
+                  directory: dirResult.url
                 });
               }
-            } catch (err) {
-              logger.warn(`[${requestId}] Failed to insert ad analysis results`, { error: err.message, requestId });
             }
-          })(),
-          (async () => {
-            try {
-              if (modules.technicalChecker?.data) {
-                await supabase.insert('technical_check_results', {
-                  site_audit_id: siteAuditId,
-                  publisher_id: publisherId,
-                  check_data: modules.technicalChecker.data,
-                  risk_score: modules.technicalChecker.data?.overallRiskScore || 0,
-                  timestamp: new Date().toISOString(),
-                });
-              }
-            } catch (err) {
-              logger.warn(`[${requestId}] Failed to insert technical check results`, { error: err.message, requestId });
-            }
-          })(),
-          (async () => {
-            try {
-              if (modules.contentAnalyzer?.data) {
-                await supabase.insert('content_analysis_results', {
-                  site_audit_id: siteAuditId,
-                  publisher_id: publisherId,
-                  analysis_data: modules.contentAnalyzer.data,
-                  risk_score: modules.contentAnalyzer.data?.overallRiskScore || 0,
-                  timestamp: new Date().toISOString(),
-                });
-              }
-            } catch (err) {
-              logger.warn(`[${requestId}] Failed to insert content analysis results`, { error: err.message, requestId });
-            }
-          })(),
-          (async () => {
-            try {
-              if (aiResult.data) {
-                await supabase.insert('ai_analysis_results', {
-                  site_audit_id: siteAuditId,
-                  publisher_id: publisherId,
-                  llm_response: aiResult.data.llmResponse,
-                  interpretation: aiResult.data.interpretation,
-                  risk_categorization: aiResult.data.interpretation?.PRIMARY_CATEGORY || null,
-                  risk_level: aiResult.data.interpretation?.RISK_LEVEL || null,
-                  timestamp: aiResult.data.timestamp || new Date().toISOString(),
-                  metadata: aiResult.data.metadata,
-                });
-              }
-            } catch (err) {
-              logger.warn(`[${requestId}] Failed to insert AI analysis results`, { error: err.message, requestId });
-            }
-          })(),
-        ]);
+          }
+        }
+
+        // Trigger Cross-Module Comparison
+        try {
+          logger.info(`[${requestId}] Starting cross-module comparison`, { requestId, siteAuditId });
+          const comparisonResult = await crossModuleAnalyzer.runComparison(siteAuditId, publisherId);
+
+          if (comparisonResult.success) {
+            logger.info(`[${requestId}] Cross-module comparison completed`, {
+              requestId,
+              comparisonId: comparisonResult.comparisonId,
+              alerts: comparisonResult.analysisResult?.alerts?.length || 0
+            });
+          } else {
+            logger.warn(`[${requestId}] Cross-module comparison failed`, {
+              requestId,
+              error: comparisonResult.error
+            });
+          }
+        } catch (comparisonError) {
+          logger.error(`[${requestId}] Error triggering cross-module comparison`, comparisonError, {
+            requestId,
+            siteAuditId
+          });
+        }
       } catch (updateErr) {
         logger.error(`[${requestId}] Failed to update site audit with final results`, updateErr, {
           jobId,
@@ -481,7 +493,7 @@ class BatchSiteProcessor {
       logger.error(
         `[${requestId}] Failed to process site ${siteAudit.site_name}`,
         error,
-        { jobId, publisherId, siteName: siteAudit.site_name, requestId }
+        { jobId, publisherId, siteName: siteAudit.site_name, requestId, errorSource: 'site_audit_processing' }
       );
 
       try {
@@ -529,7 +541,7 @@ class BatchSiteProcessor {
         logger.error(
           `[${requestId}] Failed to update site audit status after error`,
           updateError,
-          { jobId, siteName: siteAudit.site_name, requestId }
+          { jobId, siteName: siteAudit.site_name, requestId, errorSource: 'failure_status_update' }
         );
       }
     }
@@ -654,320 +666,6 @@ async function executeWithRetry(
 
   return { success: false, error: lastError?.message || 'Unknown error' };
 }
-
-async function executeAuditPipeline(job, requestId) {
-  const pipelineResults = {
-    jobId: job.id,
-    publisherId: job.publisher_id,
-    requestId,
-    startTime: new Date().toISOString(),
-    modules: {},
-    error: null,
-    status: 'running',
-  };
-
-  const processId = uuidv4();
-  activeProcesses.add(processId);
-
-  try {
-    await supabase.update('audit_queue', job.id, {
-      status: 'running',
-      started_at: new Date().toISOString(),
-    });
-
-    logger.info(`[${requestId}] Starting audit pipeline for publisher ${job.publisher_id}`, {
-      publisherId: job.publisher_id,
-      siteCount: job.sites.length,
-      requestId,
-    });
-
-    const publisherContext = await executeWithRetry(
-      'PublisherContextFetch',
-      async () => gamFetcher.fetchExistingPublishersData({ start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(), end: new Date().toISOString() }),
-      [],
-      requestId
-    );
-
-    if (!publisherContext.success) {
-      throw new Error(`Failed to fetch publisher context: ${publisherContext.error}`);
-    }
-
-    const crawlerResult = await executeWithRetry(
-      'Crawler',
-      async () => crawler.crawlMultipleSites(job.sites),
-      [],
-      requestId
-    );
-
-    pipelineResults.modules.crawler = {
-      success: crawlerResult.success,
-      data: crawlerResult.data,
-      error: crawlerResult.error,
-    };
-
-    if (!crawlerResult.success) {
-      logger.warn(`[${requestId}] Crawler failed, continuing with other modules`, {
-        requestId,
-      });
-    }
-
-    const analysisPromises = [];
-
-    analysisPromises.push(
-      executeWithRetry(
-        'ContentAnalyzer',
-        async () => contentAnalyzer.analyzeContent(crawlerResult.data?.content || []),
-        [],
-        requestId
-      ).then(result => ({ name: 'contentAnalyzer', ...result }))
-    );
-
-    analysisPromises.push(
-      executeWithRetry(
-        'AdAnalyzer',
-        async () => adAnalyzer.analyzeAds(crawlerResult.data?.ads || []),
-        [],
-        requestId
-      ).then(result => ({ name: 'adAnalyzer', ...result }))
-    );
-
-    analysisPromises.push(
-      executeWithRetry(
-        'PolicyChecker',
-        async () => policyChecker.checkPolicies(crawlerResult.data?.content || []),
-        [],
-        requestId
-      ).then(result => ({ name: 'policyChecker', ...result }))
-    );
-
-    analysisPromises.push(
-      executeWithRetry(
-        'TechnicalChecker',
-        async () => technicalChecker.checkTechnical(job.sites[0]?.url),
-        [],
-        requestId
-      ).then(result => ({ name: 'technicalChecker', ...result }))
-    );
-
-    const analysisResults = await Promise.all(analysisPromises);
-
-    analysisResults.forEach(result => {
-      pipelineResults.modules[result.name] = {
-        success: result.success,
-        data: result.data,
-        error: result.error,
-      };
-    });
-
-    const scorerInput = {
-      crawlerData: crawlerResult.data,
-      contentAnalysis: pipelineResults.modules.contentAnalyzer.data,
-      adAnalysis: pipelineResults.modules.adAnalyzer.data,
-      policyCheck: pipelineResults.modules.policyChecker.data,
-      technicalCheck: pipelineResults.modules.technicalChecker.data,
-    };
-
-    const scorerResult = await executeWithRetry(
-      'Scorer',
-      async () => scorer.computeRiskScore(scorerInput),
-      [],
-      requestId
-    );
-
-    pipelineResults.modules.scorer = {
-      success: scorerResult.success,
-      data: scorerResult.data,
-      error: scorerResult.error,
-    };
-
-    const aiInput = {
-      riskScore: scorerResult.data?.riskScore,
-      findings: scorerResult.data?.findings,
-      recommendations: scorerResult.data?.recommendations,
-    };
-
-    const aiResult = await executeWithRetry(
-      'AIAssistance',
-      async () => aiAssistance.generateReport(aiInput),
-      [],
-      requestId
-    );
-
-    pipelineResults.modules.aiAssistance = {
-      success: aiResult.success,
-      data: aiResult.data,
-      error: aiResult.error,
-    };
-
-    pipelineResults.status = 'completed';
-    pipelineResults.endTime = new Date().toISOString();
-
-    const auditResult = {
-      publisher_id: job.publisher_id,
-      audit_type: 'full_site_audit',
-      crawler_data: pipelineResults.modules.crawler.data,
-      content_analysis: pipelineResults.modules.contentAnalyzer.data,
-      ad_analysis: pipelineResults.modules.adAnalyzer.data,
-      policy_check: pipelineResults.modules.policyChecker.data,
-      technical_check: pipelineResults.modules.technicalChecker.data,
-      risk_score: pipelineResults.modules.scorer.data?.riskScore || 0,
-      ai_report: pipelineResults.modules.aiAssistance.data,
-      audit_timestamp: new Date().toISOString(),
-      raw_results: pipelineResults.modules,
-    };
-
-    await supabase.insert('audit_results', auditResult);
-
-    await supabase.update('audit_queue', job.id, {
-      status: 'completed',
-      completed_at: new Date().toISOString(),
-      error_message: null,
-    });
-
-    await supabase.update('publishers', job.publisher_id, {
-      last_audit_at: new Date().toISOString(),
-    });
-
-    logger.info(`[${requestId}] Audit pipeline completed successfully`, {
-      publisherId: job.publisher_id,
-      riskScore: pipelineResults.modules.scorer.data?.riskScore,
-      requestId,
-    });
-
-    return pipelineResults;
-  } catch (error) {
-    logger.error(
-      `[${requestId}] Audit pipeline failed`,
-      error,
-      { publisherId: job.publisher_id, requestId }
-    );
-
-    pipelineResults.status = 'failed';
-    pipelineResults.error = error.message;
-    pipelineResults.endTime = new Date().toISOString();
-
-    await supabase.update('audit_queue', job.id, {
-      status: 'failed',
-      completed_at: new Date().toISOString(),
-      error_message: error.message,
-    });
-
-    await supabase.insert('audit_failures', {
-      publisher_id: job.publisher_id,
-      module: 'full_pipeline',
-      error_message: error.message,
-      error_stack: error.stack,
-      failure_timestamp: new Date().toISOString(),
-      request_id: requestId,
-    });
-
-    return pipelineResults;
-  } finally {
-    activeProcesses.delete(processId);
-    jobQueue.removeJob(job.id);
-    logger.info(`[${requestId}] Audit pipeline cleanup completed`, {
-      jobId: job.id,
-      requestId,
-    });
-  }
-}
-
-app.post('/audit', validateWorkerSecret, async (req, res) => {
-  const requestId = uuidv4();
-  const { publisher_id, sites, priority = 'normal' } = req.body;
-
-  try {
-    if (!publisher_id || !sites || !Array.isArray(sites) || sites.length === 0) {
-      logger.warn(`[${requestId}] Invalid audit request parameters`, {
-        hasPublisherId: !!publisher_id,
-        hasSites: !!sites,
-        isSitesArray: Array.isArray(sites),
-        requestId,
-      });
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required fields: publisher_id, sites (non-empty array)',
-        requestId,
-      });
-    }
-
-    if (jobQueue.isAtCapacity()) {
-      logger.warn(`[${requestId}] Job queue at capacity`, {
-        activeJobs: jobQueue.getActiveJobCount(),
-        maxConcurrent: MAX_CONCURRENT_JOBS,
-        requestId,
-      });
-      return res.status(503).json({
-        success: false,
-        error: `Job queue at capacity (${MAX_CONCURRENT_JOBS} concurrent jobs). Please retry later.`,
-        requestId,
-      });
-    }
-
-    const jobId = uuidv4();
-
-    const job = {
-      id: jobId,
-      publisher_id,
-      sites,
-      priority,
-      status: 'pending',
-      queued_at: new Date().toISOString(),
-    };
-
-    await supabase.insert('audit_queue', job);
-    jobQueue.addJob(jobId);
-
-    logger.info(`[${requestId}] Audit job queued successfully`, {
-      jobId,
-      publisherId: publisher_id,
-      siteCount: sites.length,
-      requestId,
-    });
-
-    res.status(202).json({
-      success: true,
-      jobId,
-      requestId,
-      message: 'Audit job queued for processing',
-      siteCount: sites.length,
-    });
-
-    const processId = uuidv4();
-    activeProcesses.add(processId);
-
-    executeAuditPipeline(job, requestId)
-      .then(result => {
-        jobQueue.storeResult(jobId, result);
-        logger.info(`[${requestId}] Pipeline execution completed`, {
-          jobId,
-          status: result.status,
-          requestId,
-        });
-      })
-      .catch(err => {
-        logger.error(`[${requestId}] Pipeline execution failed`, err, {
-          jobId,
-          requestId,
-        });
-      })
-      .finally(() => {
-        activeProcesses.delete(processId);
-        jobQueue.removeJob(jobId);
-      });
-  } catch (error) {
-    logger.error(`[${requestId}] Failed to queue audit job`, error, {
-      publisherId: req.body?.publisher_id,
-      requestId,
-    });
-
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to queue audit job',
-      requestId,
-    });
-  }
-});
 
 app.post('/audit-batch-sites', validateWorkerSecret, async (req, res) => {
   const requestId = uuidv4();
@@ -1145,6 +843,15 @@ async function gracefulShutdown(signal) {
     });
   }
 
+  if (crawler) {
+    try {
+      await crawler.close();
+      logger.info('Crawler closed');
+    } catch (err) {
+      logger.error('Error closing crawler', err);
+    }
+  }
+
   const shutdownTimeout = setTimeout(() => {
     logger.warn('Graceful shutdown timeout exceeded, forcing exit');
     process.exit(1);
@@ -1178,6 +885,15 @@ async function start() {
   const errors = validateConfig();
   if (errors.length > 0) {
     logger.error('Configuration validation failed', new Error(errors.join(', ')));
+    process.exit(1);
+  }
+
+  try {
+    logger.info('Initializing crawler...');
+    await crawler.initialize();
+    logger.info('Crawler initialized successfully');
+  } catch (err) {
+    logger.error('Failed to initialize crawler', err);
     process.exit(1);
   }
 

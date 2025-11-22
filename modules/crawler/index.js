@@ -7,6 +7,7 @@ const { setupMutationObservers } = require('./observers');
 const { extractAdElements, extractIframes } = require('./extractors');
 const { uploadToStorage } = require('./storage');
 const { generateUserAgent } = require('./user-agent-rotation');
+const crawlerDB = require('./db');
 
 class Crawler {
   constructor() {
@@ -65,6 +66,8 @@ class Crawler {
       viewport = this.viewports[0],
       captureScreenshots = true,
       uploadResults = true,
+      persistToDatabase = true,
+      siteAuditId = null,
     } = options;
 
     let page = null;
@@ -146,12 +149,44 @@ class Crawler {
         crawlData.uploadedPaths = uploadedPaths;
       }
 
+      if (persistToDatabase) {
+        try {
+          const dbResult = await crawlerDB.saveCrawlData(
+            publisher.id,
+            siteAuditId,
+            {
+              url: publisher.site_url,
+              viewport: viewport.name,
+              viewportWidth: viewport.width,
+              viewportHeight: viewport.height,
+              userAgent: this.getRandomUserAgent(),
+              sessionDuration,
+              har,
+              domSnapshot,
+              metrics,
+              adElements,
+              screenshotPath: crawlData.screenshotPath,
+            }
+          );
+
+          if (dbResult.success) {
+            crawlData.sessionId = dbResult.sessionId;
+            logger.info('Crawl data persisted to database', { sessionId: dbResult.sessionId });
+          } else {
+            logger.warn('Failed to persist crawl data to database', { error: dbResult.error });
+          }
+        } catch (dbError) {
+          logger.warn('Error persisting crawl data to database', dbError);
+        }
+      }
+
       await context.close();
 
       logger.info(`Crawl completed for publisher: ${publisher.site_name}`, {
         adCount: adElements.length,
         iframeCount: iframes.length,
         mutations: mutationLog.length,
+        sessionId: crawlData.sessionId,
       });
 
       return crawlData;
@@ -160,32 +195,44 @@ class Crawler {
       throw error;
     } finally {
       if (page) {
-        await page.close().catch(() => {});
+        await page.close().catch(() => { });
       }
     }
   }
 
   async crawlPublisherSubdirectories(publisher, options = {}) {
     const results = [];
-    let directoriesToCrawl = publisher.subdirectories || [];
+    let directoriesToCrawl = [];
 
+    // First, crawl the main page
     const mainCrawlResult = await this.crawlPublisher(publisher, options);
     results.push(mainCrawlResult);
 
-    if (directoriesToCrawl.length === 0) {
-      const page = await this.browser.newPage();
-      try {
-        await this.navigateToPage(page, publisher.site_url);
-        const discoveredDirs = await this.discoverDirectories(page, publisher.site_url);
-        directoriesToCrawl = discoveredDirs;
-        logger.info(`Auto-discovered ${discoveredDirs.length} directories for ${publisher.site_name}`);
-      } catch (error) {
-        logger.warn(`Failed to auto-discover directories: ${error.message}`);
-      } finally {
-        await page.close().catch(() => {});
-      }
+    // ALWAYS auto-discover directories from the homepage
+    const page = await this.browser.newPage();
+    try {
+      await this.navigateToPage(page, publisher.site_url);
+      const discoveredDirs = await this.discoverDirectories(page, publisher.site_url);
+
+      // Merge discovered directories with any specified ones
+      const specifiedDirs = publisher.subdirectories || [];
+      const allDirs = new Set([...specifiedDirs, ...discoveredDirs]);
+      directoriesToCrawl = Array.from(allDirs);
+
+      logger.info(`Found ${directoriesToCrawl.length} total directories for ${publisher.site_name}`, {
+        discovered: discoveredDirs.length,
+        specified: specifiedDirs.length,
+        directories: directoriesToCrawl
+      });
+    } catch (error) {
+      logger.warn(`Failed to auto-discover directories: ${error.message}`);
+      // Fallback to specified directories if discovery fails
+      directoriesToCrawl = publisher.subdirectories || [];
+    } finally {
+      await page.close().catch(() => { });
     }
 
+    // Crawl all discovered and specified directories
     for (const subdirectory of directoriesToCrawl) {
       try {
         const subdirPublisher = {
@@ -211,16 +258,17 @@ class Crawler {
   async navigateToPage(page, url) {
     try {
       await page.goto(url, {
-        waitUntil: 'networkidle',
+        waitUntil: 'domcontentloaded', // Faster than networkidle
         timeout: 60000,
       });
 
-      await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {
+      try {
+        await page.waitForLoadState('networkidle', { timeout: 10000 });
+      } catch (e) {
         logger.warn(`Network idle timeout for ${url}, proceeding with available content`);
-      });
+      }
     } catch (error) {
       logger.warn(`Navigation timeout for ${url}, continuing with partial load`, error);
-      await page.waitForTimeout(3000);
     }
   }
 
@@ -229,7 +277,9 @@ class Crawler {
       const timestamp = new Date().getTime();
       const filename = `screenshot-${publisherId}-${timestamp}.png`;
       const path = `/tmp/${filename}`;
-      await page.screenshot({ path, fullPage: true });
+      await page.screenshot({ path, fullPage: true, timeout: 5000 }).catch(() => {
+        return page.screenshot({ path, fullPage: false }); // Fallback to viewport
+      });
       return filename;
     } catch (error) {
       logger.error('Failed to capture screenshot', error);
@@ -238,42 +288,40 @@ class Crawler {
   }
 
   async discoverDirectories(page, baseUrl) {
-    const discoveredDirs = new Set();
     try {
       const baseUrlObj = new URL(baseUrl);
-      const baseDomain = `${baseUrlObj.protocol}//${baseUrlObj.host}`;
 
-      const links = await page.locator('a[href]').all();
+      // Use evaluate for performance - extracting thousands of links via Locators is slow
+      const discoveredDirs = await page.evaluate((baseUrl) => {
+        const baseUrlObj = new URL(baseUrl);
+        const discovered = new Set();
+        const links = document.querySelectorAll('a[href]');
 
-      for (const link of links) {
-        try {
-          const href = await link.getAttribute('href');
-          if (!href) continue;
+        for (const link of links) {
+          try {
+            const href = link.href;
+            if (!href) continue;
 
-          const absoluteUrl = new URL(href, baseUrl).href;
-          const absoluteUrlObj = new URL(absoluteUrl);
+            const absoluteUrl = new URL(href, baseUrl);
 
-          if (absoluteUrlObj.hostname === baseUrlObj.hostname) {
-            const pathname = absoluteUrlObj.pathname;
-            const segments = pathname.split('/').filter(s => s.length > 0);
+            if (absoluteUrl.hostname === baseUrlObj.hostname) {
+              const pathname = absoluteUrl.pathname;
+              const segments = pathname.split('/').filter(s => s.length > 0);
 
-            if (segments.length > 0) {
-              const firstSegment = '/' + segments[0];
-
-              if (firstSegment !== '/' && !firstSegment.includes('.')) {
-                discoveredDirs.add(firstSegment);
+              if (segments.length > 0) {
+                const firstSegment = '/' + segments[0];
+                if (firstSegment !== '/' && !firstSegment.includes('.')) {
+                  discovered.add(firstSegment);
+                }
               }
             }
-          }
-        } catch (error) {
-          continue;
+          } catch (e) { continue; }
         }
-      }
+        return Array.from(discovered);
+      }, baseUrl);
 
-      const dirsArray = Array.from(discoveredDirs);
-      logger.info(`Discovered ${dirsArray.length} directories on ${baseUrl}: ${dirsArray.join(', ')}`);
-
-      return dirsArray;
+      logger.info(`Discovered ${discoveredDirs.length} directories on ${baseUrl}`);
+      return discoveredDirs;
     } catch (error) {
       logger.warn(`Error discovering directories: ${error.message}`);
       return [];
@@ -314,6 +362,23 @@ class Crawler {
       content: results.filter(r => !r.error),
       ads: results.filter(r => r.adElements).flatMap(r => r.adElements || []),
     };
+  }
+
+  async extractPageMetrics(page) {
+    return extractMetrics(page);
+  }
+
+  async extractPageAdElements(page) {
+    return extractAdElements(page);
+  }
+
+  async extractPageIframes(page) {
+    return extractIframes(page);
+  }
+
+  async extractPageContent(page) {
+    // Basic text extraction for content analyzer
+    return await page.evaluate(() => document.body.innerText);
   }
 }
 

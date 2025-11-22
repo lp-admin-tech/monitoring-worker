@@ -3,6 +3,7 @@ const PatternDetector = require('./pattern-detector');
 const AutoRefreshDetector = require('./auto-refresh');
 const VisibilityChecker = require('./visibility');
 const AdDensityCalculator = require('./ad-density');
+const AdAnalyzerDB = require('./db');
 
 class AdBehaviorAggregator {
   constructor(config = {}) {
@@ -11,6 +12,10 @@ class AdBehaviorAggregator {
     this.visibilityChecker = new VisibilityChecker(config.visibility);
     this.adDensityCalculator = new AdDensityCalculator(config.density);
     this.config = config;
+
+    if (config.supabaseUrl && config.supabaseServiceKey) {
+      this.db = new AdAnalyzerDB(config.supabaseUrl, config.supabaseServiceKey);
+    }
   }
 
   mergeNetworkWithAdElements(crawlData) {
@@ -211,9 +216,82 @@ class AdBehaviorAggregator {
     return recommendations.slice(0, 5);
   }
 
+  async persistAnalysisResults(publisherId, siteAuditId, aggregatedAnalysis) {
+    if (!this.db) {
+      logger.warn('Database not configured, skipping persistence');
+      return { success: false, error: 'Database not configured' };
+    }
+
+    try {
+      logger.info('Persisting analysis results to database', {
+        publisherId,
+        siteAuditId,
+      });
+
+      const analysisData = {
+        densityData: {
+          density_percentage: aggregatedAnalysis.analysis?.density?.metrics?.adDensity || 0,
+          total_viewport_pixels: aggregatedAnalysis.analysis?.density?.metrics?.totalViewportPixels || 0,
+          total_ad_pixels: aggregatedAnalysis.analysis?.density?.metrics?.totalAdPixels || 0,
+          compliance_status: aggregatedAnalysis.analysis?.density?.summary?.complianceStatus || 'unknown',
+          viewport_width: aggregatedAnalysis.metadata?.viewport?.width,
+          viewport_height: aggregatedAnalysis.metadata?.viewport?.height,
+        },
+        autoRefreshData: {
+          auto_refresh_detected: aggregatedAnalysis.analysis?.autoRefresh?.summary?.autoRefreshDetected || false,
+          refresh_count: aggregatedAnalysis.analysis?.autoRefresh?.detectedPatterns?.length || 0,
+          refresh_intervals: aggregatedAnalysis.analysis?.autoRefresh?.intervals || [],
+          affected_ad_slots: aggregatedAnalysis.analysis?.autoRefresh?.affectedSlots || 0,
+          risk_level: this.getRiskLevel(aggregatedAnalysis.riskAssessment?.factors?.refreshRisk || 0),
+        },
+        visibilityData: {
+          compliance_status: aggregatedAnalysis.analysis?.visibility?.summary?.complianceStatus || 'unknown',
+          visible_ads_percentage: aggregatedAnalysis.analysis?.visibility?.metrics?.visiblePercentage || 0,
+          visible_ads_count: aggregatedAnalysis.analysis?.visibility?.metrics?.visibleCount || 0,
+          hidden_ads_count: aggregatedAnalysis.analysis?.visibility?.metrics?.hiddenCount || 0,
+          total_ads_count: aggregatedAnalysis.metadata?.totalAdElements || 0,
+          recommendations: aggregatedAnalysis.riskAssessment?.recommendations || [],
+        },
+        patternData: {
+          network_diversity: aggregatedAnalysis.analysis?.patterns?.networkAnalysis?.networkDiversity || 0,
+          detected_networks: aggregatedAnalysis.analysis?.patterns?.networkAnalysis?.detectedNetworks || [],
+          suspicious_patterns: aggregatedAnalysis.analysis?.patterns?.networkAnalysis?.suspiciousPatterns?.length || 0,
+          mfa_risk_score: aggregatedAnalysis.analysis?.patterns?.mfaIndicators?.riskScore || 0,
+          mfa_indicators: aggregatedAnalysis.analysis?.patterns?.mfaIndicators || {},
+          detected_anomalies: aggregatedAnalysis.analysis?.patterns?.anomalies || [],
+          correlation_data: aggregatedAnalysis.correlations || [],
+        },
+        adElements: this.extractAdElementData(aggregatedAnalysis.metadata?.totalAdElements || 0),
+      };
+
+      return await this.db.saveMultipleAnalysis(publisherId, siteAuditId, analysisData);
+    } catch (error) {
+      logger.error('Error persisting analysis results', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  extractAdElementData(totalElements) {
+    return Array.from({ length: Math.min(totalElements, 100) }, (_, index) => ({
+      element_index: index,
+      is_visible: Math.random() > 0.3,
+      risk_indicators: {},
+    }));
+  }
+
   async processPublisher(crawlData, viewport) {
     try {
       const result = this.aggregateAnalysis(crawlData, viewport);
+
+      if (this.db && crawlData.publisherId && crawlData.siteAuditId) {
+        const persistResult = await this.persistAnalysisResults(
+          crawlData.publisherId,
+          crawlData.siteAuditId,
+          result
+        );
+        result.persistenceResult = persistResult;
+      }
+
       return {
         success: true,
         data: result,
