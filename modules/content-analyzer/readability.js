@@ -22,6 +22,11 @@ class ReadabilityScorer {
           wordCount: 0,
           sentenceCount: 0,
           readabilityLevel: 'unknown',
+          humanAuthorship: {
+            likelyHuman: true,
+            confidence: 100,
+            indicators: {}
+          }
         };
       }
 
@@ -38,6 +43,11 @@ class ReadabilityScorer {
           wordCount: 0,
           sentenceCount: 0,
           readabilityLevel: 'unknown',
+          humanAuthorship: {
+            likelyHuman: true,
+            confidence: 100,
+            indicators: {}
+          }
         };
       }
 
@@ -67,6 +77,11 @@ class ReadabilityScorer {
         wordCount: 0,
         sentenceCount: 0,
         readabilityLevel: 'unknown',
+        humanAuthorship: {
+          likelyHuman: true,
+          confidence: 100,
+          indicators: {}
+        },
         error: error.message,
       };
     }
