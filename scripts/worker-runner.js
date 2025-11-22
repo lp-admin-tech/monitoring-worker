@@ -360,7 +360,11 @@ class BatchSiteProcessor {
           interpretation: aiResult.data.interpretation,
           timestamp: aiResult.data.timestamp,
           metadata: aiResult.data.metadata
-        } : null,
+        } : {
+          error: aiResult.error || 'Unknown error',
+          status: 'failed',
+          timestamp: new Date().toISOString()
+        },
         raw_results: modules,
         // Add directory detection results
         is_directory: aggregatedResults.isDirectory,

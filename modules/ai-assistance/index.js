@@ -246,38 +246,49 @@ class AIAssistanceModule {
   }
 
   async callAlibabaLLM(systemPrompt, userPrompt) {
-    const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-        'X-DashScope-Async': 'enable'
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        parameters: {
-          temperature: 0.3,
-          top_p: 0.9,
-          max_tokens: 2048
-        }
-      })
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
 
-    if (!response.ok) {
-      throw new Error(`Alibaba LLM API error: ${response.status} ${response.statusText}`);
+    try {
+      const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+          'X-DashScope-Async': 'enable'
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          parameters: {
+            temperature: 0.3,
+            top_p: 0.9,
+            max_tokens: 2048
+          }
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+
+      if (!response.ok) {
+        throw new Error(`Alibaba LLM API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      if (data.code && data.code !== 'Success') {
+        throw new Error(`Alibaba LLM returned error: ${data.message}`);
+      }
+
+      return data.output?.text || '';
+    } catch (error) {
+      clearTimeout(timeout);
+      throw error;
     }
-
-    const data = await response.json();
-
-    if (data.code && data.code !== 'Success') {
-      throw new Error(`Alibaba LLM returned error: ${data.message}`);
-    }
-
-    return data.output?.text || '';
   }
 
   async callOpenRouterLLM(systemPrompt, userPrompt) {
@@ -292,41 +303,51 @@ class AIAssistanceModule {
 
   async performOpenRouterCall(model, apiKey, systemPrompt, userPrompt) {
     const makeRequest = async () => {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-          'HTTP-Referer': 'https://compliance-monitor.local',
-          'X-Title': 'Compliance AI Assistant'
-        },
-        body: JSON.stringify({
-          model: model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          temperature: 0.3,
-          top_p: 0.9,
-          max_tokens: 2048
-        })
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const error = new Error(`OpenRouter API error: ${response.status} ${response.statusText}`);
-        error.status = response.status;
-        error.data = errorData;
+      try {
+        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'HTTP-Referer': 'https://compliance-monitor.local',
+            'X-Title': 'Compliance AI Assistant'
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt }
+            ],
+            temperature: 0.3,
+            top_p: 0.9,
+            max_tokens: 2048
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          const error = new Error(`OpenRouter API error: ${response.status} ${response.statusText}`);
+          error.status = response.status;
+          error.data = errorData;
+          throw error;
+        }
+
+        const data = await response.json();
+
+        if (data.error) {
+          throw new Error(`OpenRouter returned error: ${JSON.stringify(data.error)}`);
+        }
+
+        return data.choices?.[0]?.message?.content || '';
+      } catch (error) {
+        clearTimeout(timeout);
         throw error;
       }
-
-      const data = await response.json();
-
-      if (data.error) {
-        throw new Error(`OpenRouter returned error: ${JSON.stringify(data.error)}`);
-      }
-
-      return data.choices?.[0]?.message?.content || '';
     };
 
     const result = await this.rateLimiter.executeWithRetry(makeRequest, 3);

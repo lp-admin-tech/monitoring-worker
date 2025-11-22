@@ -78,6 +78,38 @@ class ModuleDataPersistence {
               }
             }
 
+            if (modules.adAnalyzer.data?.patternData) {
+              try {
+                const patternResult = await this.adAnalyzerDb.savePatternDetection(
+                  publisherId,
+                  siteAuditId,
+                  modules.adAnalyzer.data.patternData
+                );
+                saveResults.pattern = patternResult;
+              } catch (err) {
+                this.logger.warn(`[${requestId}] Failed to save pattern detection`, {
+                  error: err.message,
+                  requestId,
+                });
+              }
+            }
+
+            if (modules.adAnalyzer.data?.adElements && Array.isArray(modules.adAnalyzer.data.adElements)) {
+              try {
+                const elementsResult = await this.adAnalyzerDb.saveBatchAdElements(
+                  publisherId,
+                  siteAuditId,
+                  modules.adAnalyzer.data.adElements
+                );
+                saveResults.elements = elementsResult;
+              } catch (err) {
+                this.logger.warn(`[${requestId}] Failed to save batch ad elements`, {
+                  error: err.message,
+                  requestId,
+                });
+              }
+            }
+
             return {
               success: true,
               data: saveResults,

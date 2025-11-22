@@ -215,7 +215,9 @@ class DirectoryAuditOrchestrator {
                 adElements,
                 iframes,
                 content: [textContent], // Some modules expect array of content
-                viewport: 'desktop'
+                viewport: 'desktop',
+                publisherId,
+                siteAuditId
             };
 
             // Run all modules in parallel for speed
