@@ -67,8 +67,8 @@ class RateLimiter {
 class OpenRouterRateLimiter extends RateLimiter {
   constructor(options = {}) {
     super({
-      maxRequestsPerMinute: 10,
-      maxConcurrent: 2,
+      maxRequestsPerMinute: parseInt(process.env.AI_RATE_LIMIT_RPM || '60', 10),
+      maxConcurrent: parseInt(process.env.AI_RATE_LIMIT_CONCURRENT || '10', 10),
     });
     this.maxRetries = options.maxRetries || 3;
     this.initialBackoffMs = options.initialBackoffMs || 2000;

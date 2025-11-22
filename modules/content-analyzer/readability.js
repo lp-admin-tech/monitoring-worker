@@ -202,7 +202,7 @@ class ReadabilityScorer {
       readabilityScore: allMetrics.fleschReadingEase,
       gradeLevel: allMetrics.fleschKincaidGrade,
       readabilityLevel: allMetrics.readabilityLevel,
-      humanAuthorshipLikelihood: allMetrics.humanAuthorship.likelyHuman,
+      humanAuthorshipLikelihood: allMetrics.humanAuthorship?.likelyHuman ?? false,
     };
   }
 }
