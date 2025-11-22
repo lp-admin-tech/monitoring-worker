@@ -111,6 +111,7 @@ class AdBehaviorAggregator {
         visibilityReport,
         densityReport
       ),
+      adElements: merged.adElements || [],
     };
 
     logger.info('Ad behavior aggregation completed', {
@@ -261,7 +262,7 @@ class AdBehaviorAggregator {
           detected_anomalies: aggregatedAnalysis.analysis?.patterns?.anomalies || [],
           correlation_data: aggregatedAnalysis.correlations || [],
         },
-        adElements: this.extractAdElementData(aggregatedAnalysis.metadata?.totalAdElements || 0),
+        adElements: aggregatedAnalysis.adElements || [],
       };
 
       return await this.db.saveMultipleAnalysis(publisherId, siteAuditId, analysisData);
@@ -269,14 +270,6 @@ class AdBehaviorAggregator {
       logger.error('Error persisting analysis results', error);
       return { success: false, error: error.message };
     }
-  }
-
-  extractAdElementData(totalElements) {
-    return Array.from({ length: Math.min(totalElements, 100) }, (_, index) => ({
-      element_index: index,
-      is_visible: Math.random() > 0.3,
-      risk_indicators: {},
-    }));
   }
 
   async processPublisher(crawlData, viewport) {

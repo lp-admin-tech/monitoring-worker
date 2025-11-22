@@ -41,21 +41,21 @@ class PolicyCheckerDB {
       };
 
       const { data, error } = await supabase
-        .from('policy_checker_results')
+        .from('policy_compliance_results')
         .insert(complianceData)
         .select();
 
       const duration = Date.now() - startTime;
 
       if (error) {
-        await this.logDbOperation('INSERT', 'policy_checker_results', 'failure', duration, 1, error, {
+        await this.logDbOperation('INSERT', 'policy_compliance_results', 'failure', duration, 1, error, {
           publisherId,
           complianceLevel: policyCheckResults.complianceLevel,
         });
         throw new Error(`Failed to save compliance result: ${error.message}`);
       }
 
-      await this.logDbOperation('INSERT', 'policy_checker_results', 'success', duration, 1, null, {
+      await this.logDbOperation('INSERT', 'policy_compliance_results', 'success', duration, 1, null, {
         publisherId,
         complianceLevel: policyCheckResults.complianceLevel,
         resultId: data?.[0]?.id,
@@ -92,7 +92,7 @@ class PolicyCheckerDB {
       }
 
       const violationRecords = violations.map(violation => ({
-        report_id: complianceResultId || null,
+        compliance_result_id: complianceResultId || null,
         policy_id: violation.policy || 'unknown',
         policy_name: violation.policyName || violation.policy,
         policy_type: violation.type || 'compliance_violation',
@@ -160,7 +160,7 @@ class PolicyCheckerDB {
 
       for (const violation of violations) {
         keywordMatches.push({
-          report_id: complianceResultId || null,
+          compliance_result_id: complianceResultId || null,
           policy_id: `keyword_${violation.category}`,
           policy_name: `Restricted Keyword: ${violation.category}`,
           policy_type: 'restricted_keyword',
@@ -236,7 +236,7 @@ class PolicyCheckerDB {
       }
 
       const categoryData = {
-        report_id: complianceResultId || null,
+        compliance_result_id: complianceResultId || null,
         policy_id: `category_${categoryResults.analysis?.riskLevel || 'unknown'}`,
         policy_name: `Content Category: ${categoryResults.analysis?.riskLevel || 'Unknown'}`,
         policy_type: 'content_category',
@@ -382,7 +382,7 @@ class PolicyCheckerDB {
       const { data, error } = await supabase
         .from('policy_violations')
         .select('severity, policy_type, category, created_at')
-        .eq('report_id', publisherId)
+        .eq('compliance_result_id', publisherId)
         .order('created_at', { ascending: false })
         .limit(limit);
 
@@ -481,7 +481,7 @@ class PolicyCheckerDB {
       }
 
       const { data, error } = await supabase
-        .from('policy_checker_results')
+        .from('policy_compliance_results')
         .select('*')
         .eq('publisher_id', publisherId)
         .order('timestamp', { ascending: false })
@@ -491,11 +491,11 @@ class PolicyCheckerDB {
       const duration = Date.now() - startTime;
 
       if (error) {
-        await this.logDbOperation('SELECT', 'policy_checker_results', 'failure', duration, 0, error, { publisherId });
+        await this.logDbOperation('SELECT', 'policy_compliance_results', 'failure', duration, 0, error, { publisherId });
         throw new Error(`Failed to query compliance status: ${error.message}`);
       }
 
-      await this.logDbOperation('SELECT', 'policy_checker_results', 'success', duration, data ? 1 : 0, null, {
+      await this.logDbOperation('SELECT', 'policy_compliance_results', 'success', duration, data ? 1 : 0, null, {
         publisherId,
         found: !!data,
       });
