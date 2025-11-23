@@ -213,11 +213,17 @@ class AIAssistanceModule {
           provider: this.provider
         });
 
+        let response = '';
         if (this.provider === 'alibaba') {
-          return await this.callAlibabaLLM(systemPrompt, userPrompt);
+          response = await this.callAlibabaLLM(systemPrompt, userPrompt);
         } else {
-          return await this.callOpenRouterLLM(systemPrompt, userPrompt);
+          response = await this.callOpenRouterLLM(systemPrompt, userPrompt);
         }
+
+        if (response && response.trim().length > 0) {
+          return response;
+        }
+        logger.warn('Primary LLM returned empty response, attempting backup');
       } catch (error) {
         primaryError = error;
         logger.warn('Primary LLM failed, attempting backup', { error: error.message });
@@ -232,7 +238,11 @@ class AIAssistanceModule {
 
     if (openRouterKey) {
       try {
-        return await this.callBackupLLM(systemPrompt, userPrompt, openRouterKey);
+        const response = await this.callBackupLLM(systemPrompt, userPrompt, openRouterKey);
+        if (response && response.trim().length > 0) {
+          return response;
+        }
+        logger.warn('Backup LLM returned empty response');
       } catch (error) {
         logger.warn('Backup LLM failed', { error: error.message });
       }
