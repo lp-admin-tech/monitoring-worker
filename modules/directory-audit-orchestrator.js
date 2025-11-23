@@ -29,20 +29,10 @@ class DirectoryAuditOrchestrator {
                 url: publisher.site_url
             });
 
-            // Create new browser context and page
-            context = await this.crawler.browser.newContext({
-                userAgent: this.crawler.getRandomUserAgent(),
-                viewport: this.crawler.viewports[0],
-                extraHTTPHeaders: {
-                    'Accept-Language': 'en-US,en;q=0.9',
-                },
-            });
-            page = await context.newPage();
-
             const auditResults = {
                 publisherId: publisher.id,
                 siteAuditId,
-                mainSite: null,
+                mainSite: { desktop: null, mobile: null },
                 directories: [],
                 directoryDetection: null,
                 summary: {
@@ -55,144 +45,119 @@ class DirectoryAuditOrchestrator {
 
             const startTime = Date.now();
 
-            // Navigate to main site first
-            await page.goto(publisher.site_url, {
-                waitUntil: 'networkidle',
-                timeout: 60000
-            }).catch(() => {
-                logger.warn(`Navigation timeout for ${publisher.site_url}, continuing with partial load`);
+            // 1. Directory Discovery (Use Desktop)
+            context = await this.crawler.browser.newContext({
+                userAgent: this.crawler.getRandomUserAgent(),
+                viewport: this.crawler.viewports[0], // Use desktop for discovery
+                extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' },
             });
+            page = await context.newPage();
 
-            // 1. Detect if it's a directory website
+            await page.goto(publisher.site_url, { waitUntil: 'networkidle', timeout: 60000 }).catch(() => { });
+
             logger.info('Detecting directory website', { publisherId: publisher.id });
             const detection = await directoryDetector.detectDirectory(page);
             auditResults.directoryDetection = detection;
 
-            // 2. Extract directory data if it's a directory
-            let directoryData = null;
-            if (detection.isDirectory) {
-                logger.info('Directory detected, extracting data', {
-                    type: detection.directoryType,
-                    confidence: detection.confidence
-                });
-                directoryData = await directoryDetector.extractDirectoryData(page);
-            }
-
-            // 3. Run full audit on main site
-            logger.info('Running audit on main site', { url: publisher.site_url });
-            const mainAudit = await this.runFullAudit(
-                publisher.site_url,
-                publisher.id,
-                siteAuditId,
-                page,
-                'main'
-            );
-            auditResults.mainSite = mainAudit;
-
-            if (mainAudit.success) {
-                auditResults.summary.successfulAudits++;
-            } else {
-                auditResults.summary.failedAudits++;
-            }
-
-            // 4. Discover all directories
             logger.info('Discovering directories', { url: publisher.site_url });
             const discoveredDirs = await this.discoverDirectories(page, publisher.site_url);
             const specifiedDirs = publisher.subdirectories || [];
             const allDirs = new Set([...specifiedDirs, ...discoveredDirs]);
             const directoriesToAudit = Array.from(allDirs);
-
             auditResults.summary.totalDirectories = directoriesToAudit.length;
 
-            logger.info(`Found ${directoriesToAudit.length} directories to audit`, {
-                discovered: discoveredDirs.length,
-                specified: specifiedDirs.length,
-                directories: directoriesToAudit
-            });
+            await page.close();
+            await context.close();
 
-            // 5. Run full audit on each directory
-            for (const directory of directoriesToAudit) {
-                try {
-                    let baseUrl = publisher.site_url;
-                    if (!baseUrl.startsWith('http')) {
-                        baseUrl = 'https://' + baseUrl;
-                    }
-                    const directoryUrl = `${baseUrl}${directory}`.replace(/(?<!:)\/+/g, '/'); // Replace multiple slashes but not after protocol
-                    const directoryUrl2 = directoryUrl;
+            // Helper to run audit for a specific URL on all viewports
+            const auditUrlOnAllViewports = async (url, locationName) => {
+                const results = {};
 
-                    logger.info(`Running audit on directory: ${directory}`, {
-                        url: directoryUrl2
+                for (const viewport of this.crawler.viewports) {
+                    const viewportName = viewport.name || 'desktop';
+                    logger.info(`Running audit for ${locationName} on ${viewportName}`, { url });
+
+                    const vpContext = await this.crawler.browser.newContext({
+                        userAgent: viewport.isMobile
+                            ? this.crawler.userAgents.find(ua => ua.platform === 'mobile')?.agent
+                            : this.crawler.getRandomUserAgent(),
+                        viewport: viewport,
+                        isMobile: viewport.isMobile,
+                        hasTouch: viewport.isMobile,
+                        extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' },
                     });
+                    const vpPage = await vpContext.newPage();
 
-                    // Navigate to directory
-                    await page.goto(directoryUrl2, {
-                        waitUntil: 'networkidle',
-                        timeout: 60000
-                    }).catch(() => {
-                        logger.warn(`Navigation timeout for ${directoryUrl2}, continuing with partial load`);
-                    });
+                    try {
+                        await vpPage.goto(url, { waitUntil: 'networkidle', timeout: 60000 }).catch(() => { });
 
-                    // Run full audit
-                    const directoryAudit = await this.runFullAudit(
-                        directoryUrl2,
-                        publisher.id,
-                        siteAuditId,
-                        page,
-                        directory
-                    );
+                        const auditResult = await this.runFullAudit(
+                            url,
+                            publisher.id,
+                            siteAuditId,
+                            vpPage,
+                            locationName,
+                            viewport
+                        );
 
-                    auditResults.directories.push({
-                        directory,
-                        url: directoryUrl2,
-                        ...directoryAudit
-                    });
+                        results[viewportName] = auditResult;
 
-                    if (directoryAudit.success) {
-                        auditResults.summary.successfulAudits++;
-                    } else {
+                        if (auditResult.success) auditResults.summary.successfulAudits++;
+                        else auditResults.summary.failedAudits++;
+
+                    } catch (err) {
+                        logger.error(`Failed audit for ${url} on ${viewportName}`, err);
+                        results[viewportName] = { success: false, error: err.message };
                         auditResults.summary.failedAudits++;
+                    } finally {
+                        await vpPage.close();
+                        await vpContext.close();
                     }
-
-                } catch (error) {
-                    logger.error(`Failed to audit directory: ${directory}`, error);
-                    auditResults.directories.push({
-                        directory,
-                        success: false,
-                        error: error.message
-                    });
-                    auditResults.summary.failedAudits++;
                 }
+                return results;
+            };
+
+            // 2. Audit Main Site (Desktop & Mobile)
+            auditResults.mainSite = await auditUrlOnAllViewports(publisher.site_url, 'main');
+
+            // 3. Audit Directories (Desktop & Mobile)
+            for (const directory of directoriesToAudit) {
+                let baseUrl = publisher.site_url;
+                if (!baseUrl.startsWith('http')) baseUrl = 'https://' + baseUrl;
+                const directoryUrl = `${baseUrl}${directory}`.replace(/(?<!:)\/+/g, '/');
+
+                const dirResults = await auditUrlOnAllViewports(directoryUrl, directory);
+
+                auditResults.directories.push({
+                    directory,
+                    url: directoryUrl,
+                    ...dirResults
+                });
             }
 
             auditResults.summary.totalDuration = Date.now() - startTime;
 
-            logger.info('Directory-aware audit completed', {
-                publisherId: publisher.id,
-                totalDirectories: auditResults.summary.totalDirectories,
-                successful: auditResults.summary.successfulAudits,
-                failed: auditResults.summary.failedAudits,
-                duration: auditResults.summary.totalDuration
-            });
+            // Flatten results for backward compatibility if needed, or just return the rich structure
+            // The caller (worker-runner.js) expects specific structure, so we might need to adapt there too.
+            // For now, we return the rich structure and will update worker-runner if needed.
 
             return auditResults;
 
         } catch (error) {
             logger.error('Directory-aware audit failed', error);
             throw error;
-        } finally {
-            if (page) await page.close().catch(() => { });
-            if (context) await context.close().catch(() => { });
         }
     }
 
     /**
      * Run all analysis modules on a single URL
      */
-    async runFullAudit(url, publisherId, siteAuditId, page, location = 'main') {
+    async runFullAudit(url, publisherId, siteAuditId, page, location = 'main', viewport = { width: 1920, height: 1080, name: 'desktop' }) {
         const auditStartTime = Date.now();
         const results = {
             url,
             location,
+            viewport: viewport.name,
             success: false,
             modules: {},
             errors: [],
@@ -200,7 +165,7 @@ class DirectoryAuditOrchestrator {
         };
 
         try {
-            logger.info(`Running full audit for ${location}`, { url });
+            logger.info(`Running full audit for ${location} on ${viewport.name}`, { url });
 
             // Extract data needed for modules
             const textContent = await this.crawler.extractPageContent(page);
@@ -215,7 +180,7 @@ class DirectoryAuditOrchestrator {
                 adElements,
                 iframes,
                 content: [textContent], // Some modules expect array of content
-                viewport: 'desktop',
+                viewport: viewport.name,
                 publisherId,
                 siteAuditId
             };
@@ -236,7 +201,7 @@ class DirectoryAuditOrchestrator {
             if (this.adAnalyzer) {
                 modulePromises.push(
                     this.runModule('adAnalyzer', async () => {
-                        return await this.adAnalyzer.processPublisher(crawlData, { width: 1920, height: 1080 });
+                        return await this.adAnalyzer.processPublisher(crawlData, viewport);
                     })
                 );
             }
@@ -401,8 +366,17 @@ class DirectoryAuditOrchestrator {
             locationBreakdown: []
         };
 
-        // Aggregate scores from all locations
-        const allAudits = [auditResults.mainSite, ...auditResults.directories];
+        // Flatten all audits (Main Desktop, Main Mobile, Dir 1 Desktop, Dir 1 Mobile, etc.)
+        const allAudits = [];
+
+        if (auditResults.mainSite.desktop) allAudits.push({ ...auditResults.mainSite.desktop, location: 'main', viewport: 'desktop' });
+        if (auditResults.mainSite.mobile) allAudits.push({ ...auditResults.mainSite.mobile, location: 'main', viewport: 'mobile' });
+
+        auditResults.directories.forEach(dir => {
+            if (dir.desktop) allAudits.push({ ...dir.desktop, location: dir.directory, viewport: 'desktop' });
+            if (dir.mobile) allAudits.push({ ...dir.mobile, location: dir.directory, viewport: 'mobile' });
+        });
+
         const successfulAudits = allAudits.filter(a => a.success);
 
         if (successfulAudits.length > 0) {
@@ -446,8 +420,9 @@ class DirectoryAuditOrchestrator {
 
         // Location breakdown
         aggregated.locationBreakdown = allAudits.map(audit => ({
-            location: audit.location || audit.directory || 'main',
+            location: audit.location,
             url: audit.url,
+            viewport: audit.viewport,
             success: audit.success,
             modulesRun: Object.keys(audit.modules || {}).length
         }));

@@ -19,6 +19,7 @@ class Crawler {
     ];
     this.viewports = [
       { width: 1920, height: 1080, name: 'desktop' },
+      { width: 390, height: 844, name: 'mobile', isMobile: true },
     ];
     this.commonDirectories = [
       '/news',

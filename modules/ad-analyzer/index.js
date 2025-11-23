@@ -4,6 +4,7 @@ const AutoRefreshDetector = require('./auto-refresh');
 const VisibilityChecker = require('./visibility');
 const AdDensityCalculator = require('./ad-density');
 const AdAnalyzerDB = require('./db');
+const VideoAnalyzer = require('./video-analyzer');
 
 class AdBehaviorAggregator {
   constructor(config = {}) {
@@ -11,6 +12,7 @@ class AdBehaviorAggregator {
     this.autoRefreshDetector = new AutoRefreshDetector(config.refresh);
     this.visibilityChecker = new VisibilityChecker(config.visibility);
     this.adDensityCalculator = new AdDensityCalculator(config.density);
+    this.videoAnalyzer = new VideoAnalyzer(config.video);
     this.config = config;
 
     if (config.supabaseUrl && config.supabaseServiceKey) {
@@ -89,6 +91,7 @@ class AdBehaviorAggregator {
     const refreshReport = this.autoRefreshDetector.generateReport(crawlData);
     const visibilityReport = this.visibilityChecker.generateReport(crawlData, viewport);
     const densityReport = this.adDensityCalculator.generateReport(crawlData, viewport);
+    const videoReport = this.videoAnalyzer.analyze(crawlData);
 
     const aggregated = {
       timestamp,
@@ -103,13 +106,15 @@ class AdBehaviorAggregator {
         autoRefresh: refreshReport,
         visibility: visibilityReport,
         density: densityReport,
+        video: videoReport,
       },
       correlations: merged.correlations,
       riskAssessment: this.calculateRiskScore(
         patternReport,
         refreshReport,
         visibilityReport,
-        densityReport
+        densityReport,
+        videoReport
       ),
       adElements: merged.adElements || [],
     };
@@ -122,7 +127,7 @@ class AdBehaviorAggregator {
     return aggregated;
   }
 
-  calculateRiskScore(patternReport, refreshReport, visibilityReport, densityReport) {
+  calculateRiskScore(patternReport, refreshReport, visibilityReport, densityReport, videoReport) {
     let totalRisk = 0;
     const factors = {};
 
@@ -132,29 +137,46 @@ class AdBehaviorAggregator {
         1
       );
       factors.patternRisk = patternRisk;
-      totalRisk += patternRisk * 0.25;
+      totalRisk += patternRisk * 0.20;
     }
 
     if (refreshReport.summary) {
-      const refreshRisk = refreshReport.summary.autoRefreshDetected ? 0.3 : 0;
+      let refreshRisk = refreshReport.summary.autoRefreshDetected ? 0.2 : 0;
+      if (refreshReport.summary.criticalRefreshCount > 0) {
+        refreshRisk = 1.0; // Critical MFA indicator
+      } else if (refreshReport.summary.warningRefreshCount > 0) {
+        refreshRisk = 0.6;
+      }
       factors.refreshRisk = refreshRisk;
-      totalRisk += refreshRisk * 0.25;
+      totalRisk += refreshRisk * 0.20;
     }
 
     if (visibilityReport.summary) {
       const visibilityRisk =
         visibilityReport.summary.complianceStatus === 'non_compliant' ? 0.4 : 0.1;
       factors.visibilityRisk = visibilityRisk;
-      totalRisk += visibilityRisk * 0.25;
+      totalRisk += visibilityRisk * 0.20;
     }
 
     if (densityReport.summary) {
-      const densityRisk =
+      let densityRisk =
         densityReport.summary.complianceStatus === 'non_compliant'
           ? densityReport.metrics.adDensity
           : 0;
+
+      // Ad Stacking is a critical fraud/MFA indicator
+      if (densityReport.problems && densityReport.problems.some(p => p.message.includes('ad stacking'))) {
+        densityRisk = 1.0;
+      }
+
       factors.densityRisk = densityRisk;
-      totalRisk += densityRisk * 0.25;
+      totalRisk += densityRisk * 0.20;
+    }
+
+    if (videoReport && videoReport.summary) {
+      const videoRisk = videoReport.summary.riskScore || 0;
+      factors.videoRisk = videoRisk;
+      totalRisk += videoRisk * 0.20;
     }
 
     return {
@@ -165,7 +187,8 @@ class AdBehaviorAggregator {
         patternReport,
         refreshReport,
         visibilityReport,
-        densityReport
+        densityReport,
+        videoReport
       ),
     };
   }
@@ -178,7 +201,7 @@ class AdBehaviorAggregator {
     return 'minimal';
   }
 
-  getRecommendations(patternReport, refreshReport, visibilityReport, densityReport) {
+  getRecommendations(patternReport, refreshReport, visibilityReport, densityReport, videoReport) {
     const recommendations = [];
 
     if (
@@ -190,7 +213,11 @@ class AdBehaviorAggregator {
       );
     }
 
-    if (refreshReport.summary?.autoRefreshDetected) {
+    if (refreshReport.summary?.criticalRefreshCount > 0) {
+      recommendations.push(
+        'CRITICAL: Disable rapid auto-refresh (< 30s) immediately to avoid MFA classification'
+      );
+    } else if (refreshReport.summary?.autoRefreshDetected) {
       recommendations.push(
         'Investigate auto-refresh behavior - may indicate invalid traffic'
       );
@@ -208,10 +235,20 @@ class AdBehaviorAggregator {
       );
     }
 
+    if (densityReport.problems && densityReport.problems.some(p => p.message.includes('ad stacking'))) {
+      recommendations.push(
+        'CRITICAL: Remove overlapping ad slots (Ad Stacking) - this is considered fraud'
+      );
+    }
+
     if (densityReport.summary?.mfaIndicator) {
       recommendations.push(
         'Audit tiny ad placements - may indicate MFA tactics'
       );
+    }
+
+    if (videoReport && videoReport.recommendations) {
+      recommendations.push(...videoReport.recommendations);
     }
 
     return recommendations.slice(0, 5);
@@ -261,6 +298,13 @@ class AdBehaviorAggregator {
           mfa_indicators: aggregatedAnalysis.analysis?.patterns?.mfaIndicators || {},
           detected_anomalies: aggregatedAnalysis.analysis?.patterns?.anomalies || [],
           correlation_data: aggregatedAnalysis.correlations || [],
+        },
+        videoData: {
+          video_player_count: aggregatedAnalysis.analysis?.video?.metrics?.videoPlayerCount || 0,
+          autoplay_count: aggregatedAnalysis.analysis?.video?.metrics?.autoplayCount || 0,
+          video_stuffing_detected: aggregatedAnalysis.analysis?.video?.summary?.videoStuffingDetected || false,
+          risk_score: aggregatedAnalysis.analysis?.video?.summary?.riskScore || 0,
+          video_players_data: aggregatedAnalysis.analysis?.video?.metrics?.videoPlayers || [],
         },
         adElements: aggregatedAnalysis.adElements || [],
       };

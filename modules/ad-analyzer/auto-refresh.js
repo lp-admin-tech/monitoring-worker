@@ -215,12 +215,15 @@ class AutoRefreshDetector {
           averageRefreshRate:
             refreshPatterns.length > 0
               ? (
-                  refreshPatterns.reduce((sum, p) => sum + (p.refreshRate || 0), 0) /
-                  refreshPatterns.length
-                ).toFixed(2)
+                refreshPatterns.reduce((sum, p) => sum + (p.refreshRate || 0), 0) /
+                refreshPatterns.length
+              ).toFixed(2)
               : 0,
           criticalRefreshCount: refreshPatterns.filter(
-            p => p.averageInterval < 5000
+            p => p.averageInterval < 30000 // Industry standard: < 30s is critical MFA
+          ).length,
+          warningRefreshCount: refreshPatterns.filter(
+            p => p.averageInterval >= 30000 && p.averageInterval < 60000
           ).length,
         },
       };

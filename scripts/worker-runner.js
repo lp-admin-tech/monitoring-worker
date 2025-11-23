@@ -4,10 +4,10 @@ const { envConfig, validateConfig } = require('../modules/env-config');
 const logger = require('../modules/logger');
 const supabase = require('../modules/supabase-client');
 const gamFetcher = require('../modules/gam-fetcher');
+const QueueManager = require('../core/queue/queue-manager');
 
 let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker, technicalCheckerDb, contentAnalyzerDb, adAnalyzerDb, policyCheckerDb, aiAssistanceDb, crawlerDb, moduleDataOrchestrator, directoryAuditOrchestrator, crossModuleAnalyzer;
 let server = null;
-const activeProcesses = new Set();
 
 try {
   const supabaseUrl = process.env.SUPABASE_URL;
@@ -78,485 +78,295 @@ app.use(express.json());
 
 const WORKER_SECRET = process.env.WORKER_SECRET;
 const BATCH_CONCURRENCY_LIMIT = parseInt(process.env.BATCH_CONCURRENCY_LIMIT || '3');
-const MAX_CONCURRENT_JOBS = parseInt(process.env.MAX_CONCURRENT_JOBS || '3');
 const MODULE_TIMEOUT = parseInt(process.env.MODULE_TIMEOUT || '30000');
 const RETRY_ENABLED = process.env.RETRY_ENABLED !== 'false';
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 2000, 4000];
 
-class JobQueue {
-  constructor() {
-    this.activeJobs = new Map();
-    this.jobResults = new Map();
-  }
+// --- JOB PROCESSOR FUNCTION ---
+// This function contains the logic that was previously in BatchSiteProcessor.executeSiteAudit
+// It is now called by the BullMQ worker for each job.
+async function processAuditJob(job) {
+  const { siteAudit, jobId, publisherId, requestId } = job.data;
+  const siteStartTime = Date.now();
 
-  isAtCapacity() {
-    return this.activeJobs.size >= MAX_CONCURRENT_JOBS;
-  }
+  logger.info(`[${requestId}] Processing job ${job.id} for site ${siteAudit.site_name}`, {
+    jobId,
+    publisherId,
+    siteName: siteAudit.site_name,
+    requestId
+  });
 
-  addJob(jobId) {
-    this.activeJobs.set(jobId, { startTime: Date.now(), status: 'running' });
-  }
+  try {
+    const siteAuditRecord = {
+      audit_queue_id: jobId,
+      publisher_id: publisherId,
+      site_name: siteAudit.site_name,
+      status: 'processing',
+      started_at: new Date().toISOString(),
+    };
 
-  removeJob(jobId) {
-    this.activeJobs.delete(jobId);
-  }
-
-  storeResult(jobId, result) {
-    this.jobResults.set(jobId, result);
-    setTimeout(() => this.jobResults.delete(jobId), 3600000);
-  }
-
-  getResult(jobId) {
-    return this.jobResults.get(jobId);
-  }
-
-  getActiveJobCount() {
-    return this.activeJobs.size;
-  }
-}
-
-const jobQueue = new JobQueue();
-
-class BatchSiteProcessor {
-  constructor(concurrencyLimit = 3) {
-    this.concurrencyLimit = concurrencyLimit;
-    this.activeProcesses = new Map();
-    this.processQueue = [];
-  }
-
-  async processBatch(sites, jobId, publisherId, requestId) {
-    const deduplicatedSites = [...new Set(sites.map(s => typeof s === 'string' ? s : s.site_name))];
-
-    logger.info(`[${requestId}] Processing batch of ${deduplicatedSites.length} unique sites`, {
-      jobId,
-      publisherId,
-      siteCount: deduplicatedSites.length,
-      requestId,
-    });
-
-    const siteAudits = [];
-    for (const siteName of deduplicatedSites) {
-      siteAudits.push({
-        site_name: siteName,
-        status: 'pending',
-      });
-    }
-
-    for (const audit of siteAudits) {
-      await this.queueSiteAudit(audit, jobId, publisherId, requestId);
-    }
-
-    return siteAudits.length;
-  }
-
-  async queueSiteAudit(siteAudit, jobId, publisherId, requestId) {
-    return new Promise((resolve) => {
-      this.processQueue.push({ siteAudit, jobId, publisherId, requestId, resolve });
-      this.processNextSite();
-    });
-  }
-
-  processNextSite() {
-    if (this.processQueue.length === 0 || this.activeProcesses.size >= this.concurrencyLimit) {
-      return;
-    }
-
-    const { siteAudit, jobId, publisherId, requestId, resolve } = this.processQueue.shift();
-    const processId = uuidv4();
-
-    this.activeProcesses.set(processId, true);
-
-    this.executeSiteAudit(siteAudit, jobId, publisherId, requestId)
-      .then(() => resolve())
-      .finally(() => {
-        this.activeProcesses.delete(processId);
-        this.processNextSite();
-      });
-  }
-
-  async executeSiteAudit(siteAudit, jobId, publisherId, requestId) {
-    const siteStartTime = Date.now();
-
+    let siteAuditId;
     try {
-      const siteAuditRecord = {
-        audit_queue_id: jobId,
-        publisher_id: publisherId,
-        site_name: siteAudit.site_name,
-        status: 'processing',
-        started_at: new Date().toISOString(),
-      };
-
-      let siteAuditId;
-      try {
-        const result = await supabase.insert('site_audits', siteAuditRecord);
-        siteAuditId = result[0]?.id;
-        logger.info(`[${requestId}] Successfully created site audit record`, {
-          jobId,
-          publisherId,
-          siteName: siteAudit.site_name,
-          siteAuditId,
-          requestId,
-        });
-      } catch (insertErr) {
-        logger.error(`[${requestId}] Failed to create site audit record`, insertErr, {
-          jobId,
-          publisherId,
-          siteName: siteAudit.site_name,
-          record: siteAuditRecord,
-          requestId,
-        });
-        throw insertErr;
-      }
-
-      logger.info(`[${requestId}] Started processing site ${siteAudit.site_name}`, {
+      const result = await supabase.insert('site_audits', siteAuditRecord);
+      siteAuditId = result[0]?.id;
+      logger.info(`[${requestId}] Successfully created site audit record`, {
         jobId,
         publisherId,
         siteName: siteAudit.site_name,
         siteAuditId,
         requestId,
       });
-
-      // Use DirectoryAuditOrchestrator to run the audit
-      // This runs all modules on the main site AND all discovered subdirectories
-      const orchestratorResult = await directoryAuditOrchestrator.runDirectoryAwareAudit(
-        {
-          id: publisherId,
-          site_url: siteAudit.site_name,
-          subdirectories: []
-        },
-        siteAuditId
-      );
-
-      // Extract main site results for backward compatibility and scoring
-      const mainSiteModules = orchestratorResult.mainSite.modules;
-      const mainSiteCrawlData = orchestratorResult.mainSite.crawlData;
-
-      // Map to expected 'modules' structure for existing logic
-      const modules = {
-        crawler: { success: true, data: mainSiteCrawlData },
-        contentAnalyzer: { name: 'contentAnalyzer', ...mainSiteModules.contentAnalyzer },
-        adAnalyzer: { name: 'adAnalyzer', ...mainSiteModules.adAnalyzer },
-        policyChecker: { name: 'policyChecker', ...mainSiteModules.policyChecker },
-        technicalChecker: { name: 'technicalChecker', ...mainSiteModules.technicalChecker },
-      };
-
-      // Aggregate results for AI/Scorer context
-      const aggregatedResults = directoryAuditOrchestrator.aggregateResults(orchestratorResult);
-
-      let scorerInput = {
-        crawlerData: modules.crawler.data,
-        contentAnalysis: modules.contentAnalyzer.data,
-        adAnalysis: modules.adAnalyzer.data,
-        policyCheck: modules.policyChecker.data,
-        technicalCheck: modules.technicalChecker.data,
-        // Add directory context for scorer if it can handle it, or just use it for AI
-        directoryContext: aggregatedResults
-      };
-
-      if (publisherId) {
-        try {
-          logger.info(`[${requestId}] Enriching audit data with GAM metrics`, { publisherId, requestId });
-          scorerInput = await scorer.enrichAuditDataWithGAM(scorerInput, publisherId);
-          logger.info(`[${requestId}] GAM enrichment completed`, {
-            hasCTR: !!scorerInput.ctr,
-            hasECPM: !!scorerInput.ecpm,
-            hasFillRate: !!scorerInput.fillRate,
-            requestId
-          });
-        } catch (gamError) {
-          logger.warn(`[${requestId}] GAM enrichment failed, continuing without GAM data`, {
-            error: gamError.message,
-            requestId
-          });
-        }
-      }
-
-      const scorerResult = await executeWithRetry(
-        'Scorer',
-        async () => {
-          const result = await scorer.calculateComprehensiveScore(scorerInput, { id: publisherId });
-          return { data: result, error: null };
-        },
-        {},
-        requestId
-      );
-
-      modules.scorer = scorerResult;
-
-      if (scorerResult.data) {
-        logger.detailedModuleLog('Scorer', scorerResult, {
-          requestId,
-          siteAuditId,
-          siteName: siteAudit.site_name,
-        });
-      }
-
-      const aiInput = {
-        riskScore: scorerResult.data?.riskScore,
-        findings: scorerResult.data?.findings,
-        recommendations: scorerResult.data?.recommendations,
-        directoryContext: aggregatedResults // Pass directory info to AI
-      };
-
-      const aiResult = await executeWithRetry(
-        'AIAssistance',
-        async () => {
-          try {
-            // We pass aggregated directory info to the AI report generator
-            // Note: generateComprehensiveReport might need update to handle this extra arg, 
-            // or we append it to findings/recommendations before passing
-
-            const result = await aiAssistance.generateComprehensiveReport(
-              { domain: siteAudit.site_name },
-              { ...scorerResult.data, directoryContext: aggregatedResults }, // Inject directory context into scorer data for AI
-              modules.policyChecker.data?.issues || [],
-              siteAuditId,
-              publisherId
-            );
-            return { data: result, error: null };
-          } catch (err) {
-            logger.warn(`[${requestId}] AI Assistance failed, using fallback`, { error: err.message, requestId });
-            return { data: null, error: err.message };
-          }
-        },
-        {},
-        requestId
-      );
-
-      modules.aiAssistance = aiResult;
-
-      if (aiResult.data) {
-        logger.detailedModuleLog('AIAssistance', aiResult, {
-          requestId,
-          siteAuditId,
-          siteName: siteAudit.site_name,
-        });
-      }
-
-      const scorerData = modules.scorer.data || {};
-
-      const completedAudit = {
-        status: 'completed',
-        crawler_data: modules.crawler.data,
-        content_analysis: modules.contentAnalyzer.data,
-        ad_analysis: modules.adAnalyzer.data,
-        policy_check: modules.policyChecker.data,
-        technical_check: modules.technicalChecker.data,
-        risk_score: Number(scorerData.riskScore) || 0,
-        score_breakdown: scorerData.scores?.componentScores || null,
-        mfa_probability: scorerData.mfaProbability || null,
-        risk_level: scorerData.explanation?.riskLevel || null,
-        methodology: scorerData.methodology || null,
-        primary_causes: scorerData.explanation?.primaryReasons || null,
-        contributing_factors: scorerData.explanation?.contributingFactors || null,
-        recommendations: scorerData.explanation?.recommendations || null,
-        trend_data: scorerData.trend || null,
-        explanation_details: scorerData.explanation || null,
-        confidence_score: scorerData.explanation?.confidenceScore || null,
-        explanation_timestamp: scorerData.timestamp || null,
-        ai_report: aiResult.data ? {
-          llmResponse: aiResult.data.llmResponse,
-          interpretation: aiResult.data.interpretation,
-          timestamp: aiResult.data.timestamp,
-          metadata: aiResult.data.metadata
-        } : {
-          error: aiResult.error || 'Unknown error',
-          status: 'failed',
-          timestamp: new Date().toISOString()
-        },
-        raw_results: modules,
-        // Add directory detection results
-        is_directory: aggregatedResults.isDirectory,
-        directory_type: aggregatedResults.directoryType,
-        directory_confidence: aggregatedResults.directoryConfidence,
-        directory_data: {
-          detection: orchestratorResult.directoryDetection,
-          summary: orchestratorResult.summary,
-          directories: orchestratorResult.directories.map(d => ({
-            directory: d.directory,
-            url: d.url,
-            success: d.success,
-            modules: d.modules, // Store full module data, not just keys
-            error: d.error
-          })),
-          aggregatedScores: aggregatedResults.aggregatedScores
-        },
-        completed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-
-      try {
-        await supabase.update('site_audits', siteAuditId, completedAudit);
-        logger.info(`[${requestId}] Successfully updated site audit with final results`, {
-          jobId,
-          publisherId,
-          siteName: siteAudit.site_name,
-          siteAuditId,
-          status: completedAudit.status,
-          riskScore: completedAudit.risk_score,
-          isDirectory: completedAudit.is_directory,
-          requestId,
-        });
-
-        const persistenceResults = await moduleDataOrchestrator.saveAllModuleResults(
-          siteAuditId,
-          publisherId,
-          modules,
-          requestId
-        );
-
-        logger.info(`[${requestId}] Module data persistence results`, {
-          jobId,
-          publisherId,
-          siteName: siteAudit.site_name,
-          siteAuditId,
-          successfulModules: persistenceResults.summary.successfulModules,
-          failedModules: persistenceResults.summary.failedModules,
-          totalDuration: persistenceResults.summary.totalDuration,
-          requestId,
-        });
-
-        if (persistenceResults.partialFailures.length > 0) {
-          logger.warn(`[${requestId}] Partial failures during module data persistence`, {
-            jobId,
-            publisherId,
-            siteName: siteAudit.site_name,
-            siteAuditId,
-            failures: persistenceResults.partialFailures,
-            requestId,
-          });
-        }
-
-        // Persist results for all discovered directories
-        if (orchestratorResult.directories && orchestratorResult.directories.length > 0) {
-          logger.info(`[${requestId}] Persisting data for ${orchestratorResult.directories.length} directories`, { requestId });
-
-          for (const dirResult of orchestratorResult.directories) {
-            if (dirResult.success && dirResult.modules) {
-              try {
-                await moduleDataOrchestrator.saveAllModuleResults(
-                  siteAuditId,
-                  publisherId,
-                  dirResult.modules,
-                  requestId,
-                  dirResult.url // Pass directory URL for specific persistence
-                );
-              } catch (dirPersistErr) {
-                logger.error(`[${requestId}] Failed to persist directory data for ${dirResult.url}`, dirPersistErr, {
-                  requestId,
-                  directory: dirResult.url
-                });
-              }
-            }
-          }
-        }
-
-        // Trigger Cross-Module Comparison
-        try {
-          logger.info(`[${requestId}] Starting cross-module comparison`, { requestId, siteAuditId });
-          const comparisonResult = await crossModuleAnalyzer.runComparison(siteAuditId, publisherId);
-
-          if (comparisonResult.success) {
-            logger.info(`[${requestId}] Cross-module comparison completed`, {
-              requestId,
-              comparisonId: comparisonResult.comparisonId,
-              alerts: comparisonResult.analysisResult?.alerts?.length || 0
-            });
-          } else {
-            logger.warn(`[${requestId}] Cross-module comparison failed`, {
-              requestId,
-              error: comparisonResult.error
-            });
-          }
-        } catch (comparisonError) {
-          logger.error(`[${requestId}] Error triggering cross-module comparison`, comparisonError, {
-            requestId,
-            siteAuditId
-          });
-        }
-      } catch (updateErr) {
-        logger.error(`[${requestId}] Failed to update site audit with final results`, updateErr, {
-          jobId,
-          publisherId,
-          siteName: siteAudit.site_name,
-          siteAuditId,
-          requestId,
-        });
-        throw updateErr;
-      }
-
-      logger.auditSummary(siteAudit.site_name, modules);
-      logger.findingsReport(modules);
-
-      logger.success(`Audit completed for ${siteAudit.site_name}`, {
+    } catch (insertErr) {
+      logger.error(`[${requestId}] Failed to create site audit record`, insertErr, {
         jobId,
         publisherId,
         siteName: siteAudit.site_name,
-        riskScore: modules.scorer.data?.riskScore,
-        duration: `${Date.now() - siteStartTime}ms`,
+        record: siteAuditRecord,
         requestId,
       });
-    } catch (error) {
-      logger.error(
-        `[${requestId}] Failed to process site ${siteAudit.site_name}`,
-        error,
-        { jobId, publisherId, siteName: siteAudit.site_name, requestId, errorSource: 'site_audit_processing' }
+      throw insertErr;
+    }
+
+    logger.info(`[${requestId}] Started processing site ${siteAudit.site_name}`, {
+      jobId,
+      publisherId,
+      siteName: siteAudit.site_name,
+      siteAuditId,
+      requestId,
+    });
+
+    // Use DirectoryAuditOrchestrator to run the audit
+    const orchestratorResult = await directoryAuditOrchestrator.runDirectoryAwareAudit(
+      {
+        id: publisherId,
+        site_url: siteAudit.site_name,
+        subdirectories: []
+      },
+      siteAuditId
+    );
+
+    // Extract main site results
+    const mainSiteResult = orchestratorResult.mainSite.desktop || orchestratorResult.mainSite.mobile;
+    const mainSiteModules = mainSiteResult.modules;
+    const mainSiteCrawlData = mainSiteResult.crawlData;
+
+    // Map to expected 'modules' structure
+    const modules = {
+      crawler: { success: true, data: mainSiteCrawlData },
+      contentAnalyzer: { name: 'contentAnalyzer', ...mainSiteModules.contentAnalyzer },
+      adAnalyzer: { name: 'adAnalyzer', ...mainSiteModules.adAnalyzer },
+      policyChecker: { name: 'policyChecker', ...mainSiteModules.policyChecker },
+      technicalChecker: { name: 'technicalChecker', ...mainSiteModules.technicalChecker },
+    };
+
+    // Aggregate results
+    const aggregatedResults = directoryAuditOrchestrator.aggregateResults(orchestratorResult);
+
+    let scorerInput = {
+      crawlerData: modules.crawler.data,
+      contentAnalysis: modules.contentAnalyzer.data,
+      adAnalysis: modules.adAnalyzer.data,
+      policyCheck: modules.policyChecker.data,
+      technicalCheck: modules.technicalChecker.data,
+      directoryContext: aggregatedResults
+    };
+
+    if (publisherId) {
+      try {
+        logger.info(`[${requestId}] Enriching audit data with GAM metrics`, { publisherId, requestId });
+        scorerInput = await scorer.enrichAuditDataWithGAM(scorerInput, publisherId);
+      } catch (gamError) {
+        logger.warn(`[${requestId}] GAM enrichment failed, continuing without GAM data`, {
+          error: gamError.message,
+          requestId
+        });
+      }
+    }
+
+    const scorerResult = await executeWithRetry(
+      'Scorer',
+      async () => {
+        const result = await scorer.calculateComprehensiveScore(scorerInput, { id: publisherId });
+        return { data: result, error: null };
+      },
+      {},
+      requestId
+    );
+
+    modules.scorer = scorerResult;
+
+    const aiInput = {
+      riskScore: scorerResult.data?.riskScore,
+      findings: scorerResult.data?.findings,
+      recommendations: scorerResult.data?.recommendations,
+      directoryContext: aggregatedResults
+    };
+
+    const aiResult = await executeWithRetry(
+      'AIAssistance',
+      async () => {
+        try {
+          const result = await aiAssistance.generateComprehensiveReport(
+            { domain: siteAudit.site_name },
+            { ...scorerResult.data, directoryContext: aggregatedResults },
+            modules.policyChecker.data?.issues || [],
+            siteAuditId,
+            publisherId
+          );
+          return { data: result, error: null };
+        } catch (err) {
+          logger.warn(`[${requestId}] AI Assistance failed, using fallback`, { error: err.message, requestId });
+          return { data: null, error: err.message };
+        }
+      },
+      {},
+      requestId
+    );
+
+    modules.aiAssistance = aiResult;
+
+    const scorerData = modules.scorer.data || {};
+
+    const completedAudit = {
+      status: 'completed',
+      crawler_data: modules.crawler.data,
+      content_analysis: modules.contentAnalyzer.data,
+      ad_analysis: modules.adAnalyzer.data,
+      policy_check: modules.policyChecker.data,
+      technical_check: modules.technicalChecker.data,
+      risk_score: Number(scorerData.riskScore) || 0,
+      score_breakdown: scorerData.scores?.componentScores || null,
+      mfa_probability: scorerData.mfaProbability || null,
+      risk_level: scorerData.explanation?.riskLevel || null,
+      methodology: scorerData.methodology || null,
+      primary_causes: scorerData.explanation?.primaryReasons || null,
+      contributing_factors: scorerData.explanation?.contributingFactors || null,
+      recommendations: scorerData.explanation?.recommendations || null,
+      trend_data: scorerData.trend || null,
+      explanation_details: scorerData.explanation || null,
+      confidence_score: scorerData.explanation?.confidenceScore || null,
+      explanation_timestamp: scorerData.timestamp || null,
+      ai_report: aiResult.data ? {
+        llmResponse: aiResult.data.llmResponse,
+        interpretation: aiResult.data.interpretation,
+        timestamp: aiResult.data.timestamp,
+        metadata: aiResult.data.metadata
+      } : {
+        error: aiResult.error || 'Unknown error',
+        status: 'failed',
+        timestamp: new Date().toISOString()
+      },
+      raw_results: modules,
+      is_directory: aggregatedResults.isDirectory,
+      directory_type: aggregatedResults.directoryType,
+      directory_confidence: aggregatedResults.directoryConfidence,
+      directory_data: {
+        detection: orchestratorResult.directoryDetection,
+        summary: orchestratorResult.summary,
+        directories: orchestratorResult.directories.map(d => ({
+          directory: d.directory,
+          url: d.url,
+          success: d.success,
+          modules: d.modules,
+          error: d.error
+        })),
+        aggregatedScores: aggregatedResults.aggregatedScores
+      },
+      completed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    try {
+      await supabase.update('site_audits', siteAuditId, completedAudit);
+
+      const persistenceResults = await moduleDataOrchestrator.saveAllModuleResults(
+        siteAuditId,
+        publisherId,
+        modules,
+        requestId
       );
 
+      // Persist results for all discovered directories
+      if (orchestratorResult.directories && orchestratorResult.directories.length > 0) {
+        for (const dirResult of orchestratorResult.directories) {
+          if (dirResult.success && dirResult.modules) {
+            try {
+              await moduleDataOrchestrator.saveAllModuleResults(
+                siteAuditId,
+                publisherId,
+                dirResult.modules,
+                requestId,
+                dirResult.url
+              );
+            } catch (dirPersistErr) {
+              logger.error(`[${requestId}] Failed to persist directory data for ${dirResult.url}`, dirPersistErr, { requestId });
+            }
+          }
+        }
+      }
+
+      // Trigger Cross-Module Comparison
       try {
-        const failedAudit = {
+        await crossModuleAnalyzer.runComparison(siteAuditId, publisherId);
+      } catch (comparisonError) {
+        logger.error(`[${requestId}] Error triggering cross-module comparison`, comparisonError, { requestId });
+      }
+
+    } catch (updateErr) {
+      logger.error(`[${requestId}] Failed to update site audit with final results`, updateErr, { requestId });
+      throw updateErr;
+    }
+
+    logger.auditSummary(siteAudit.site_name, modules);
+    logger.findingsReport(modules);
+
+    logger.success(`Audit completed for ${siteAudit.site_name}`, {
+      jobId,
+      publisherId,
+      siteName: siteAudit.site_name,
+      riskScore: modules.scorer.data?.riskScore,
+      duration: `${Date.now() - siteStartTime}ms`,
+      requestId,
+    });
+
+    return completedAudit;
+
+  } catch (error) {
+    logger.error(
+      `[${requestId}] Failed to process site ${siteAudit.site_name}`,
+      error,
+      { jobId, publisherId, siteName: siteAudit.site_name, requestId, errorSource: 'site_audit_processing' }
+    );
+
+    // Update failure status in DB
+    try {
+      const existingSite = await supabase.query('site_audits', {
+        audit_queue_id: jobId,
+        site_name: siteAudit.site_name,
+      });
+
+      if (existingSite && existingSite.length > 0) {
+        await supabase.update('site_audits', existingSite[0].id, {
           status: 'failed',
           error_message: error.message,
           error_stack: error.stack,
           completed_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
-        };
-
-        logger.info(`[${requestId}] Querying for existing site audit to update failure status`, {
-          jobId,
-          siteName: siteAudit.site_name,
-          requestId,
         });
-
-        const existingSite = await supabase.query('site_audits', {
-          audit_queue_id: jobId,
-          site_name: siteAudit.site_name,
-        });
-
-        if (existingSite && existingSite.length > 0) {
-          logger.info(`[${requestId}] Found existing site audit, updating with failure status`, {
-            jobId,
-            siteName: siteAudit.site_name,
-            siteAuditId: existingSite[0].id,
-            requestId,
-          });
-          await supabase.update('site_audits', existingSite[0].id, failedAudit);
-          logger.info(`[${requestId}] Successfully updated site audit with failure status`, {
-            jobId,
-            siteName: siteAudit.site_name,
-            siteAuditId: existingSite[0].id,
-            requestId,
-          });
-        } else {
-          logger.warn(`[${requestId}] No existing site audit found to update`, {
-            jobId,
-            siteName: siteAudit.site_name,
-            requestId,
-          });
-        }
-      } catch (updateError) {
-        logger.error(
-          `[${requestId}] Failed to update site audit status after error`,
-          updateError,
-          { jobId, siteName: siteAudit.site_name, requestId, errorSource: 'failure_status_update' }
-        );
       }
+    } catch (updateError) {
+      logger.error(`[${requestId}] Failed to update site audit status after error`, updateError);
     }
+
+    throw error; // Rethrow to let BullMQ know the job failed
   }
 }
 
-const batchProcessor = new BatchSiteProcessor(BATCH_CONCURRENCY_LIMIT);
+// Initialize Queue Manager
+const auditQueue = new QueueManager('audit-queue', processAuditJob, {
+  concurrency: BATCH_CONCURRENCY_LIMIT
+});
 
 function validateWorkerSecret(req, res, next) {
   if (!WORKER_SECRET) {
@@ -709,23 +519,48 @@ app.post('/audit-batch-sites', validateWorkerSecret, async (req, res) => {
       });
     }
 
+    const deduplicatedSites = [...new Set(site_names.map(s => typeof s === 'string' ? s : s.site_name))];
     const jobId = uuidv4();
+
+    // Create a parent job record in Supabase
     const job = {
       id: jobId,
       publisher_id,
       sites: site_names,
       priority,
-      status: 'pending',
+      status: 'queued',
       queued_at: new Date().toISOString(),
     };
 
     await supabase.insert('audit_queue', job);
-    jobQueue.addJob(jobId);
+
+    // Add individual site jobs to BullMQ
+    for (const siteName of deduplicatedSites) {
+      const siteAudit = { site_name: siteName, status: 'pending' };
+
+      await auditQueue.add(
+        `audit-${siteName}`,
+        {
+          siteAudit,
+          jobId,
+          publisherId: publisher_id,
+          requestId
+        },
+        {
+          priority: priority === 'high' ? 1 : 2,
+          attempts: 3,
+          backoff: {
+            type: 'exponential',
+            delay: 2000
+          }
+        }
+      );
+    }
 
     logger.info(`[${requestId}] Batch audit job queued successfully`, {
       jobId,
       publisherId: publisher_id,
-      siteCount: site_names.length,
+      siteCount: deduplicatedSites.length,
       requestId,
     });
 
@@ -734,60 +569,10 @@ app.post('/audit-batch-sites', validateWorkerSecret, async (req, res) => {
       jobId,
       requestId,
       message: 'Batch audit job queued for processing',
-      siteCount: site_names.length,
-      estimatedProcessingTime: `${site_names.length * 10}s`,
+      siteCount: deduplicatedSites.length,
+      estimatedProcessingTime: `${deduplicatedSites.length * 10}s`,
     });
 
-    const processId = uuidv4();
-    activeProcesses.add(processId);
-
-    (async () => {
-      try {
-        await supabase.update('audit_queue', jobId, {
-          status: 'running',
-          started_at: new Date().toISOString(),
-        });
-
-        const siteCount = await batchProcessor.processBatch(site_names, jobId, publisher_id, requestId);
-
-        logger.info(`[${requestId}] Batch processing completed successfully`, {
-          jobId,
-          publisherId: publisher_id,
-          sitesProcessed: siteCount,
-          requestId,
-        });
-
-        await supabase.update('audit_queue', jobId, {
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          error_message: null,
-        });
-      } catch (error) {
-        logger.error(`[${requestId}] Batch processing failed`, error, {
-          jobId,
-          publisherId: publisher_id,
-          requestId,
-        });
-
-        await supabase.update('audit_queue', jobId, {
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error_message: error.message,
-        });
-
-        await supabase.insert('audit_failures', {
-          publisher_id,
-          module: 'batch_processor',
-          error_message: error.message,
-          error_stack: error.stack,
-          failure_timestamp: new Date().toISOString(),
-          request_id: requestId,
-        });
-      } finally {
-        activeProcesses.delete(processId);
-        jobQueue.removeJob(jobId);
-      }
-    })();
   } catch (error) {
     logger.error(`[${requestId}] Failed to queue batch audit job`, error, {
       publisherId: req.body?.publisher_id,
@@ -807,15 +592,22 @@ app.get('/job/:jobId', async (req, res) => {
   const requestId = uuidv4();
 
   try {
-    const result = jobQueue.getResult(jobId);
+    // With BullMQ, job results are not stored in a simple in-memory cache like the old JobQueue.
+    // To get job status, you would query BullMQ directly or check the database.
+    // For now, this endpoint will just return a placeholder or indicate it's not supported.
+    // A proper implementation would involve querying BullMQ for job status or fetching from the DB.
+    const job = await auditQueue.getJob(jobId);
 
-    if (!result) {
+    if (!job) {
       return res.status(404).json({
         success: false,
-        error: 'Job result not found in cache',
+        error: 'Job not found in queue system',
         requestId,
       });
     }
+
+    const status = await job.getState();
+    const result = job.returnvalue; // This might be null if job is not completed
 
     res.json({
       success: true,

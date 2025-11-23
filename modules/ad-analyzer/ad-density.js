@@ -102,7 +102,7 @@ class AdDensityCalculator {
       const pixels = Math.max(
         0,
         (ad.boundingBox.right - ad.boundingBox.left) *
-          (ad.boundingBox.bottom - ad.boundingBox.top)
+        (ad.boundingBox.bottom - ad.boundingBox.top)
       );
 
       if (adMidpoint < foldLine) {
@@ -140,7 +140,7 @@ class AdDensityCalculator {
       const pixels = Math.max(
         0,
         (ad.boundingBox.right - ad.boundingBox.left) *
-          (ad.boundingBox.bottom - ad.boundingBox.top)
+        (ad.boundingBox.bottom - ad.boundingBox.top)
       );
       totalAdPixels += pixels;
 
@@ -160,10 +160,48 @@ class AdDensityCalculator {
     return cumulative;
   }
 
-  identifyDensityProblems(density, categorized) {
+  detectAdStacking(adElements) {
+    const stackedAds = [];
+    const adsWithBox = adElements.filter(a => a.boundingBox);
+
+    for (let i = 0; i < adsWithBox.length; i++) {
+      for (let j = i + 1; j < adsWithBox.length; j++) {
+        const ad1 = adsWithBox[i];
+        const ad2 = adsWithBox[j];
+
+        const x_overlap = Math.max(0, Math.min(ad1.boundingBox.right, ad2.boundingBox.right) - Math.max(ad1.boundingBox.left, ad2.boundingBox.left));
+        const y_overlap = Math.max(0, Math.min(ad1.boundingBox.bottom, ad2.boundingBox.bottom) - Math.max(ad1.boundingBox.top, ad2.boundingBox.top));
+        const overlapArea = x_overlap * y_overlap;
+
+        if (overlapArea > 0) {
+          const area1 = (ad1.boundingBox.right - ad1.boundingBox.left) * (ad1.boundingBox.bottom - ad1.boundingBox.top);
+          const area2 = (ad2.boundingBox.right - ad2.boundingBox.left) * (ad2.boundingBox.bottom - ad2.boundingBox.top);
+
+          // If overlap is significant (> 50% of smaller ad), flag it
+          const minArea = Math.min(area1, area2);
+          if (overlapArea / minArea > 0.5) {
+            stackedAds.push({
+              ad1: ad1.id || 'unknown',
+              ad2: ad2.id || 'unknown',
+              overlapPercentage: (overlapArea / minArea * 100).toFixed(1)
+            });
+          }
+        }
+      }
+    }
+    return stackedAds;
+  }
+
+  identifyDensityProblems(density, categorized, stickyDensity = 0, stackedAds = []) {
     const problems = [];
 
-    if (density > this.thresholds.warning) {
+    if (density > 0.3) {
+      problems.push({
+        severity: 'critical',
+        message: `Ad density of ${(density * 100).toFixed(1)}% exceeds MFA threshold (30%)`,
+        recommendation: 'Drastically reduce ad coverage to avoid MFA classification',
+      });
+    } else if (density > this.thresholds.warning) {
       problems.push({
         severity: 'critical',
         message: `Ad density of ${(density * 100).toFixed(1)}% exceeds critical threshold (${(this.thresholds.warning * 100).toFixed(1)}%)`,
@@ -174,6 +212,22 @@ class AdDensityCalculator {
         severity: 'high',
         message: `Ad density of ${(density * 100).toFixed(1)}% exceeds acceptable threshold (${(this.thresholds.acceptable * 100).toFixed(1)}%)`,
         recommendation: 'Consider repositioning or sizing ads',
+      });
+    }
+
+    if (stickyDensity > 0.3) {
+      problems.push({
+        severity: 'critical',
+        message: `Sticky ad density of ${(stickyDensity * 100).toFixed(1)}% exceeds MFA threshold (30%)`,
+        recommendation: 'Remove intrusive sticky ads that cover >30% of the screen',
+      });
+    }
+
+    if (stackedAds.length > 0) {
+      problems.push({
+        severity: 'critical',
+        message: `Detected ${stackedAds.length} instances of ad stacking (overlapping ads)`,
+        recommendation: 'Remove overlapping ad slots to prevent ad stacking/pixel stuffing fraud',
       });
     }
 
@@ -218,7 +272,15 @@ class AdDensityCalculator {
       const categorized = this.categorizeAdsBySize(adElements);
       const distribution = this.analyzeDistribution(adElements, viewport);
       const cumulative = this.calculateCumulativeDensity(adElements, viewport);
-      const problems = this.identifyDensityProblems(density, categorized);
+
+      // Sticky Ad Analysis
+      const stickyAds = adElements.filter(ad => ad.visibility?.isSticky);
+      const stickyAdPixels = this.calculateAdPixels(stickyAds);
+      const stickyDensity = this.calculateDensityRatio(stickyAdPixels, viewportPixels);
+
+      const stackedAds = this.detectAdStacking(adElements);
+
+      const problems = this.identifyDensityProblems(density, categorized, stickyDensity, stackedAds);
 
       return {
         timestamp: new Date().toISOString(),
@@ -228,6 +290,8 @@ class AdDensityCalculator {
           viewportPixels,
           adDensity: parseFloat(density.toFixed(4)),
           densityPercentage: parseFloat((density * 100).toFixed(2)),
+          stickyAdDensity: parseFloat(stickyDensity.toFixed(4)),
+          stickyAdCount: stickyAds.length,
           benchmark,
         },
         sizeDistribution: {
@@ -264,14 +328,16 @@ class AdDensityCalculator {
         problems,
         summary: {
           riskLevel:
-            density > this.thresholds.warning
+            density > 0.3 // Industry standard MFA threshold
               ? 'critical'
-              : density > this.thresholds.acceptable
-                ? 'high'
-                : 'normal',
+              : density > this.thresholds.warning
+                ? 'critical'
+                : density > this.thresholds.acceptable
+                  ? 'high'
+                  : 'normal',
           complianceStatus:
             density <= this.thresholds.acceptable ? 'compliant' : 'non_compliant',
-          mfaIndicator: categorized.tiny.length > 20,
+          mfaIndicator: density > 0.3 || stickyDensity > 0.3 || categorized.tiny.length > 20,
         },
       };
     } catch (error) {

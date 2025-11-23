@@ -62,6 +62,9 @@ async function extractAdElements(page) {
                   display: style.display,
                   visibility: style.visibility,
                   opacity: style.opacity,
+                  position: style.position,
+                  zIndex: style.zIndex,
+                  isSticky: style.position === 'fixed' || style.position === 'sticky',
                 },
                 html: el.outerHTML.substring(0, 500),
                 isShadow: !!root.host

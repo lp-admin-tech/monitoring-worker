@@ -245,6 +245,15 @@ class AdAnalyzerDB {
         results.pattern = patternResult;
       }
 
+      if (analysisResults.videoData) {
+        const videoResult = await this.saveVideoDetection(
+          publisherId,
+          siteAuditId,
+          analysisResults.videoData
+        );
+        results.video = videoResult;
+      }
+
       if (analysisResults.adElements && Array.isArray(analysisResults.adElements)) {
         const elementResult = await this.saveBatchAdElements(
           publisherId,
@@ -261,6 +270,41 @@ class AdAnalyzerDB {
       };
     } catch (error) {
       this.logger.error('Error saving multiple analysis results', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async saveVideoDetection(publisherId, siteAuditId, videoData) {
+    try {
+      this.logger.info('Saving video detection', {
+        publisherId,
+        siteAuditId,
+        videoCount: videoData.video_player_count,
+      });
+
+      const record = {
+        publisher_id: publisherId,
+        site_audit_id: siteAuditId,
+        video_player_count: videoData.video_player_count || 0,
+        autoplay_count: videoData.autoplay_count || 0,
+        video_stuffing_detected: videoData.video_stuffing_detected || false,
+        risk_score: videoData.risk_score || 0,
+        video_players_data: videoData.video_players_data || [],
+      };
+
+      const { data, error } = await this.supabase
+        .from('video_detection_history')
+        .insert(record)
+        .select();
+
+      if (error) {
+        throw new Error(`Video detection insert failed: ${error.message}`);
+      }
+
+      this.logger.info('Video detection saved successfully', { id: data[0]?.id });
+      return { success: true, data: data[0] };
+    } catch (error) {
+      this.logger.error('Error saving video detection', error);
       return { success: false, error: error.message };
     }
   }
