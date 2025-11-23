@@ -529,7 +529,7 @@ app.post('/audit-batch-sites', validateWorkerSecret, async (req, res) => {
       publisher_id,
       sites: site_names,
       priority,
-      status: 'queued',
+      status: 'pending',
       queued_at: new Date().toISOString(),
     };
 
