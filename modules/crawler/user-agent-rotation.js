@@ -1,3 +1,4 @@
+const userAgents = [
   {
     agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     type: 'chrome-windows',
@@ -42,7 +43,8 @@
     agent: 'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
     type: 'chrome-android-pixel',
     platform: 'mobile',
-  },
+  }
+];
 
 function generateUserAgent(options = {}) {
   const { platform = null, type = null } = options;
