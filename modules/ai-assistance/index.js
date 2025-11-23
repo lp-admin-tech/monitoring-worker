@@ -276,7 +276,7 @@ class AIAssistanceModule {
           parameters: {
             temperature: 0.3,
             top_p: 0.9,
-            max_tokens: 2048
+            max_tokens: 8192
           }
         }),
         signal: controller.signal
@@ -333,7 +333,7 @@ class AIAssistanceModule {
             ],
             temperature: 0.3,
             top_p: 0.9,
-            max_tokens: 2048
+            max_tokens: 8192
           }),
           signal: controller.signal
         });
