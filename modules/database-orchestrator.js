@@ -10,6 +10,7 @@ class ModuleDataPersistence {
     this.technicalCheckerDb = handlers.technicalCheckerDb;
     this.aiAssistanceDb = handlers.aiAssistanceDb;
     this.crawlerDb = handlers.crawlerDb;
+    this.scorerDb = handlers.scorerDb;
     this.logger = handlers.logger || logger;
   }
 
@@ -264,6 +265,28 @@ class ModuleDataPersistence {
               publisherId,
               siteAuditId,
               modules.crawler.data
+            );
+            return {
+              success: true,
+              data: result,
+              duration: Date.now() - startTime,
+            };
+          },
+          requestId
+        )
+      );
+    }
+
+    if (modules.scorer?.data && this.scorerDb) {
+      savePromises.push(
+        this.safeModuleSave(
+          'scorer',
+          async () => {
+            const startTime = Date.now();
+            const result = await this.scorerDb.saveFullScoreData(
+              publisherId,
+              siteAuditId,
+              modules.scorer.data
             );
             return {
               success: true,

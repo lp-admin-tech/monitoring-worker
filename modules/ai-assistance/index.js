@@ -208,6 +208,11 @@ class AIAssistanceModule {
     // 1. Try Primary Model (if configured)
     if (this.apiKey) {
       try {
+        // Add delay to avoid rate limits on free tier
+        const delayMs = parseInt(process.env.AI_REQUEST_DELAY_MS || '5000', 10);
+        logger.debug('Waiting before LLM call to avoid rate limits', { delayMs });
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+
         logger.debug('Calling Primary LLM', {
           model: this.model,
           provider: this.provider

@@ -56,6 +56,7 @@ try {
     technicalCheckerDb,
     aiAssistanceDb,
     crawlerDb,
+    scorerDb,
     logger
   });
 

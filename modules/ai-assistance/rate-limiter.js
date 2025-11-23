@@ -71,8 +71,8 @@ class OpenRouterRateLimiter extends RateLimiter {
       maxConcurrent: parseInt(process.env.AI_RATE_LIMIT_CONCURRENT || '50', 10),
     });
     this.maxRetries = options.maxRetries || 3;
-    this.initialBackoffMs = options.initialBackoffMs || 2000;
-    this.backoffMultiplier = options.backoffMultiplier || 2;
+    this.initialBackoffMs = options.initialBackoffMs || 10000; // Increased to 10 seconds
+    this.backoffMultiplier = options.backoffMultiplier || 3; // Increased to 3x
   }
 
   calculateBackoffDelay(attempt) {
