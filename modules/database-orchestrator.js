@@ -156,7 +156,8 @@ class ModuleDataPersistence {
             const result = await this.policyCheckerDb.savePolicyComplianceResult(
               modules.policyChecker.data,
               publisherId,
-              siteAuditId
+              siteAuditId,
+              pageUrl
             );
 
             const saveResults = { compliance: result };

@@ -11,7 +11,7 @@ if (!supabaseUrl || !supabaseServiceKey) {
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 class PolicyCheckerDB {
-  async savePolicyComplianceResult(policyCheckResults, publisherId, siteAuditId) {
+  async savePolicyComplianceResult(policyCheckResults, publisherId, siteAuditId, domain = 'unknown') {
     const startTime = Date.now();
     try {
       if (!policyCheckResults || !publisherId) {
@@ -21,6 +21,7 @@ class PolicyCheckerDB {
       const complianceData = {
         site_audit_id: siteAuditId || null,
         publisher_id: publisherId,
+        domain: domain || 'unknown',
         detected_jurisdiction: policyCheckResults.jurisdiction?.primaryJurisdiction || 'Unknown',
         compliance_level: policyCheckResults.complianceLevel,
         total_policies_checked: policyCheckResults.summary?.totalPolicies || 0,
