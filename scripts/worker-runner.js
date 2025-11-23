@@ -8,6 +8,7 @@ const QueueManager = require('../core/queue/queue-manager');
 
 let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker, technicalCheckerDb, contentAnalyzerDb, adAnalyzerDb, policyCheckerDb, aiAssistanceDb, crawlerDb, moduleDataOrchestrator, directoryAuditOrchestrator, crossModuleAnalyzer;
 let server = null;
+const activeProcesses = new Set();
 
 try {
   const supabaseUrl = process.env.SUPABASE_URL;
@@ -628,8 +629,8 @@ app.get('/job/:jobId', async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
-    activeJobs: jobQueue.getActiveJobCount(),
-    maxConcurrent: MAX_CONCURRENT_JOBS,
+    activeJobs: auditQueue.getActiveJobCount(),
+    maxConcurrent: BATCH_CONCURRENCY_LIMIT,
     timestamp: new Date().toISOString(),
   });
 });
@@ -660,7 +661,7 @@ async function gracefulShutdown(signal) {
   try {
     await new Promise(resolve => {
       const checkInterval = setInterval(() => {
-        if (activeProcesses.size === 0 && jobQueue.getActiveJobCount() === 0) {
+        if (activeProcesses.size === 0 && auditQueue.getActiveJobCount() === 0) {
           clearInterval(checkInterval);
           clearTimeout(shutdownTimeout);
           logger.info('All processes completed, shutting down');
@@ -668,7 +669,7 @@ async function gracefulShutdown(signal) {
         }
       }, 500);
 
-      if (activeProcesses.size === 0 && jobQueue.getActiveJobCount() === 0) {
+      if (activeProcesses.size === 0 && auditQueue.getActiveJobCount() === 0) {
         clearInterval(checkInterval);
         clearTimeout(shutdownTimeout);
         resolve();
@@ -702,7 +703,7 @@ async function start() {
   server = app.listen(PORT, () => {
     logger.info(`Worker runner started successfully on port ${PORT}`, {
       port: PORT,
-      maxConcurrentJobs: MAX_CONCURRENT_JOBS,
+      maxConcurrentJobs: BATCH_CONCURRENCY_LIMIT,
       moduleTimeout: MODULE_TIMEOUT,
       retryEnabled: RETRY_ENABLED,
       nodeEnv: process.env.NODE_ENV || 'production',
@@ -732,4 +733,4 @@ start().catch(err => {
   process.exit(1);
 });
 
-module.exports = { app, jobQueue };
+module.exports = { app, auditQueue };

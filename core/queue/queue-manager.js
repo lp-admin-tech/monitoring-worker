@@ -59,6 +59,15 @@ class QueueManager {
         this.isProcessing = false;
         logger.info(`[Queue:${this.queueName}] In-Memory Queue closed`);
     }
+
+    getActiveJobCount() {
+        return this.isProcessing ? 1 : 0;
+    }
+
+    async getJob(jobId) {
+        // In-memory queue doesn't persist completed jobs, so we only check pending
+        return this.queue.find(j => j.id === jobId) || null;
+    }
 }
 
 module.exports = QueueManager;
