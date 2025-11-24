@@ -230,6 +230,32 @@ async function processAuditJob(job) {
 
     const scorerData = modules.scorer.data || {};
 
+    // DEBUG: Log scorer data structure to diagnose NULL fields
+    logger.info('[DEBUG] Scorer Data Structure:', {
+      hasRiskScore: !!scorerData.riskScore,
+      hasMfaProbability: !!scorerData.mfaProbability,
+      hasExplanation: !!scorerData.explanation,
+      hasExplanationRiskLevel: !!scorerData.explanation?.riskLevel,
+      riskScoreValue: scorerData.riskScore,
+      mfaProbabilityValue: scorerData.mfaProbability,
+      riskLevelValue: scorerData.explanation?.riskLevel
+    });
+
+    // Debug AI Result Structure
+    console.log('[DEBUG] AI Result Structure:', {
+      hasData: !!aiResult.data,
+      hasError: !!aiResult.error,
+      dataKeys: aiResult.data ? Object.keys(aiResult.data) : [],
+      hasLlmResponse: !!aiResult.data?.llmResponse,
+      hasInterpretation: !!aiResult.data?.interpretation,
+      interpretationType: aiResult.data?.interpretation ? typeof aiResult.data.interpretation : 'undefined',
+      llmResponseLength: aiResult.data?.llmResponse?.length || 0,
+      interpretationPreview: aiResult.data?.interpretation ?
+        (typeof aiResult.data.interpretation === 'string' ?
+          aiResult.data.interpretation.substring(0, 100) :
+          JSON.stringify(aiResult.data.interpretation).substring(0, 100)) : null
+    });
+
     const completedAudit = {
       status: 'completed',
       crawler_data: modules.crawler.data,
@@ -278,6 +304,13 @@ async function processAuditJob(job) {
       completed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
+
+    // DEBUG: Log what's being saved
+    logger.info('[DEBUG] Saving to database:', {
+      risk_score: completedAudit.risk_score,
+      mfa_probability: completedAudit.mfa_probability,
+      risk_level: completedAudit.risk_level
+    });
 
     try {
       await supabase.update('site_audits', siteAuditId, completedAudit);

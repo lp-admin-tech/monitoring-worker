@@ -346,68 +346,40 @@ class TrendAnalyzer {
         return { driftDetected: false, severity: 'none', patterns: [], reason: 'no_publisher_id' };
       }
 
-      const { data: recentTrends, error } = await client
-        .from('publisher_risk_trends')
-        .select('*')
+      // Query site_audits instead of publisher_risk_trends (which was dropped)
+      const { data: recentAudits, error } = await client
+        .from('site_audits')
+        .select('id, mfa_probability, risk_score, created_at, updated_at')
         .eq('publisher_id', publisherId)
-        .order('recorded_at', { ascending: false })
+        .eq('status', 'completed')
+        .order('updated_at', { ascending: false })
         .limit(20);
 
       if (error) {
-        logger.error('Error fetching recent trends', error);
+        logger.error('Error fetching recent audits for drift detection', error);
         return { driftDetected: false, severity: 'none', patterns: [] };
       }
 
-      if (!recentTrends || recentTrends.length < 5) {
+      if (!recentAudits || recentAudits.length < 5) {
         return { driftDetected: false, severity: 'none', patterns: [], reason: 'insufficient_history' };
       }
 
       const patterns = [];
       const driftIndicators = [];
 
-      const riskScores = recentTrends.map(t => t.mfa_probability || 0);
+      // Analyze MFA probability trends
+      const riskScores = recentAudits.map(t => t.mfa_probability || t.risk_score || 0);
       const riskStats = this.calculateTrendStatistics(riskScores.slice(0, -1), riskScores[riskScores.length - 1]);
 
       if (riskStats.stdDev > 0.3) {
         driftIndicators.push('high_risk_volatility');
       }
 
-      const ctrTrend = recentTrends.map(t => t.ctr_vs_benchmark || 0);
-      const ctrChange = Math.abs(ctrTrend[0] - ctrTrend[ctrTrend.length - 1]);
-      if (ctrChange > 0.4) {
-        driftIndicators.push('significant_ctr_drift');
-        patterns.push({
-          type: 'ctr_drift',
-          magnitude: ctrChange,
-          direction: ctrTrend[0] > ctrTrend[ctrTrend.length - 1] ? 'decreasing' : 'increasing'
-        });
-      }
+      // Note: Since we don't have benchmark comparison data in site_audits,
+      // we'll skip CTR/eCPM drift detection for now
+      // This can be added back if we store GAM metrics in site_audits
 
-      const ecpmTrend = recentTrends.map(t => t.ecpm_vs_benchmark || 0);
-      const ecpmChange = Math.abs(ecpmTrend[0] - ecpmTrend[ecpmTrend.length - 1]);
-      if (ecpmChange > 0.4) {
-        driftIndicators.push('significant_ecpm_drift');
-        patterns.push({
-          type: 'ecpm_drift',
-          magnitude: ecpmChange,
-          direction: ecpmTrend[0] > ecpmTrend[ecpmTrend.length - 1] ? 'decreasing' : 'increasing'
-        });
-      }
-
-      const fillRateTrend = recentTrends.map(t => t.fill_rate_change || 0);
-      const fillRateChange = Math.abs(fillRateTrend[0] - fillRateTrend[fillRateTrend.length - 1]);
-      if (fillRateChange > 0.3) {
-        driftIndicators.push('fill_rate_anomaly');
-        patterns.push({
-          type: 'fill_rate_anomaly',
-          magnitude: fillRateChange
-        });
-      }
-
-      const anomalyCount = recentTrends.filter(t => t.is_anomaly).length;
-      if (anomalyCount > recentTrends.length * 0.4) {
-        driftIndicators.push('anomaly_cluster');
-      }
+      const anomalyCount = 0; // Can't detect anomalies without is_anomaly flag
 
       const driftDetected = driftIndicators.length > 0;
       const severity = driftIndicators.length >= 3 ? 'critical' : driftIndicators.length >= 2 ? 'high' : 'medium';
@@ -417,11 +389,12 @@ class TrendAnalyzer {
         severity: driftDetected ? severity : 'none',
         indicators: driftIndicators,
         patterns,
-        dataPoints: recentTrends.length,
+        dataPoints: recentAudits.length,
         timeRange: {
-          start: recentTrends[recentTrends.length - 1].recorded_at,
-          end: recentTrends[0].recorded_at
-        }
+          start: recentAudits[recentAudits.length - 1].updated_at,
+          end: recentAudits[0].updated_at
+        },
+        note: 'Using site_audits for drift detection - some metrics unavailable without dedicated trend table'
       };
     } catch (error) {
       logger.error('Error detecting pattern drift', error);

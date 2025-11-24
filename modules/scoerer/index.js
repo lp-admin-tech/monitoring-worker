@@ -143,7 +143,7 @@ class ScoringEngine {
       });
 
       const method = options.method || 'bayesian';
-      const riskScores = this.riskEngine.aggregateRiskScores(componentRisks, {method});
+      const riskScores = this.riskEngine.aggregateRiskScores(componentRisks, { method });
       riskScores.riskScore = riskScores.overallRiskScore;
 
       const historicalScores = auditData?.historicalScores || [];
@@ -267,7 +267,14 @@ class ScoringEngine {
     return this.explanationGenerator.generateHumanReadableRiskJustification(explanation);
   }
 
+  // DEPRECATED: This method tried to save to mfa_risk_scores table which was dropped
+  // All risk score data is now saved directly to site_audits table by worker-runner.js
+  // Keeping this commented for reference but it should not be called
   async saveRiskScore(riskScoreData) {
+    logger.warn('saveRiskScore called but mfa_risk_scores table no longer exists - data saved to site_audits instead');
+    return null;
+
+    /* ORIGINAL CODE - DO NOT USE
     try {
       if (!this.supabase) {
         logger.warn('No Supabase client available for saving risk score');
@@ -302,9 +309,17 @@ class ScoringEngine {
       logger.error('Error in saveRiskScore', error);
       return null;
     }
+    */
   }
 
+  // DEPRECATED: This method tried to save to publisher_risk_trends table which was dropped
+  // Trend data can be calculated from site_audits historical records
+  // Keeping this commented for reference but it should not be called
   async saveTrendData(trendData) {
+    logger.warn('saveTrendData called but publisher_risk_trends table no longer exists - use site_audits for historical analysis');
+    return null;
+
+    /* ORIGINAL CODE - DO NOT USE
     try {
       if (!this.supabase) {
         logger.warn('No Supabase client available for saving trend data');
@@ -344,6 +359,7 @@ class ScoringEngine {
       logger.error('Error in saveTrendData', error);
       return null;
     }
+    */
   }
 
   mapScoreToRiskLevel(score) {
