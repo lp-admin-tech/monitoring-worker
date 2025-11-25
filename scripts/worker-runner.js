@@ -99,6 +99,30 @@ async function processAuditJob(job) {
   });
 
   try {
+    // Ensure parent audit_queue record exists (handling migration/compatibility)
+    // The jobId comes from audit_job_queue, but site_audits references audit_queue
+    try {
+      const { data: existingJob } = await supabase.supabaseClient
+        .from('audit_queue')
+        .select('id')
+        .eq('id', jobId)
+        .single();
+
+      if (!existingJob) {
+        logger.info(`[${requestId}] Creating missing parent audit_queue record for ${jobId}`);
+        await supabase.supabaseClient.from('audit_queue').insert({
+          id: jobId,
+          publisher_id: publisherId,
+          sites: [siteAudit.site_name],
+          status: 'processing',
+          queued_at: new Date().toISOString()
+        });
+      }
+    } catch (checkErr) {
+      logger.warn(`[${requestId}] Error checking/creating parent audit_queue record`, checkErr);
+      // Continue anyway, as the foreign key might be removed or we might be lucky
+    }
+
     const siteAuditRecord = {
       audit_queue_id: jobId,
       publisher_id: publisherId,
@@ -109,7 +133,14 @@ async function processAuditJob(job) {
 
     let siteAuditId;
     try {
-      const result = await supabase.insert('site_audits', siteAuditRecord);
+      // Use supabase.supabaseClient for raw access to avoid wrapper issues
+      const { data: result, error: insertError } = await supabase.supabaseClient
+        .from('site_audits')
+        .insert(siteAuditRecord)
+        .select();
+
+      if (insertError) throw insertError;
+
       siteAuditId = result[0]?.id;
       logger.info(`[${requestId}] Successfully created site audit record`, {
         jobId,
