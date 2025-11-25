@@ -101,22 +101,30 @@ async function processAuditJob(job) {
   try {
     // Ensure parent audit_queue record exists (handling migration/compatibility)
     // The jobId comes from audit_job_queue, but site_audits references audit_queue
+    // Ensure parent audit_queue record exists (handling migration/compatibility)
+    // The jobId comes from audit_job_queue, but site_audits references audit_queue
     try {
-      const { data: existingJob } = await supabase.supabaseClient
+      const { data: existingJob, error: fetchError } = await supabase.supabaseClient
         .from('audit_queue')
         .select('id')
         .eq('id', jobId)
-        .single();
+        .maybeSingle(); // Use maybeSingle to avoid throwing on not found
+
+      if (fetchError) throw fetchError;
 
       if (!existingJob) {
         logger.info(`[${requestId}] Creating missing parent audit_queue record for ${jobId}`);
-        await supabase.supabaseClient.from('audit_queue').insert({
+        const { error: insertError } = await supabase.supabaseClient.from('audit_queue').insert({
           id: jobId,
           publisher_id: publisherId,
           sites: [siteAudit.site_name],
           status: 'processing',
           queued_at: new Date().toISOString()
         });
+
+        if (insertError) {
+          logger.warn(`[${requestId}] Failed to create parent audit_queue record: ${insertError.message}`);
+        }
       }
     } catch (checkErr) {
       logger.warn(`[${requestId}] Error checking/creating parent audit_queue record`, checkErr);
