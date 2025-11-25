@@ -118,7 +118,7 @@ async function processAuditJob(job) {
           id: jobId,
           publisher_id: publisherId,
           sites: [siteAudit.site_name],
-          status: 'processing',
+          status: 'running', // 'processing' is not allowed by check constraint, use 'running'
           queued_at: new Date().toISOString()
         });
 
