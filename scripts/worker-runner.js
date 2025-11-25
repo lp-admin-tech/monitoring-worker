@@ -830,7 +830,10 @@ setInterval(pollAuditJobQueue, 10000);
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 let lastActivityTime = Date.now();
 
-function updateActivity() {
+// Log startup version to verify deployment
+logger.info('🚀 Site Monitoring Worker v2.1 - Starting up (FK Fix + Auto-Wake)');
+
+async function updateActivity() {
   lastActivityTime = Date.now();
 }
 
@@ -838,8 +841,15 @@ function updateActivity() {
 setInterval(() => {
   const idleTime = Date.now() - lastActivityTime;
   if (idleTime > IDLE_TIMEOUT_MS) {
-    logger.info(`No activity for ${Math.round(idleTime / 60000)} minutes. Shutting down to save resources.`);
-    process.exit(0);
+    logger.info(`No activity for ${Math.round(idleTime / 60000)} minutes. Idle state.`);
+    // On Render with Scale to Zero, we don't need to exit manually.
+    // Render will automatically spin down the service if there are no HTTP requests.
+    // However, since we are processing background jobs, we want to ensure we don't exit while working.
+    // The activity update logic ensures we are "active" while processing.
+    // If we are truly idle (no jobs, no HTTP), we just wait.
+    // If the user wants to force a shutdown to save costs on non-Scale-to-Zero plans,
+    // they can uncomment the line below, but it causes "Instance failed" logs on Render.
+    // process.exit(0); 
   }
 }, 60000);
 
