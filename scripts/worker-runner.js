@@ -718,7 +718,8 @@ async function gracefulShutdown(signal) {
 async function pollAuditJobQueue() {
   try {
     // 1. Fetch pending jobs
-    const { data: jobs, error } = await supabase
+    // Use supabase.supabaseClient to access the raw Supabase client
+    const { data: jobs, error } = await supabase.supabaseClient
       .from('audit_job_queue')
       .select('*')
       .eq('status', 'pending')
@@ -741,7 +742,7 @@ async function pollAuditJobQueue() {
       const requestId = uuidv4();
 
       // 2. Mark as processing
-      await supabase
+      await supabase.supabaseClient
         .from('audit_job_queue')
         .update({ status: 'processing', started_at: new Date().toISOString() })
         .eq('id', id);
@@ -771,7 +772,7 @@ async function pollAuditJobQueue() {
         }
 
         // 4. Mark job as completed (handed off)
-        await supabase
+        await supabase.supabaseClient
           .from('audit_job_queue')
           .update({ status: 'completed', completed_at: new Date().toISOString() })
           .eq('id', id);
@@ -780,7 +781,7 @@ async function pollAuditJobQueue() {
 
       } catch (err) {
         logger.error(`[${requestId}] Failed to process batch job ${id}`, err);
-        await supabase
+        await supabase.supabaseClient
           .from('audit_job_queue')
           .update({ status: 'failed', last_error: err.message })
           .eq('id', id);
