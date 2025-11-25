@@ -56,7 +56,6 @@ try {
     technicalCheckerDb,
     aiAssistanceDb,
     crawlerDb,
-    scorerDb,
     logger
   });
 
@@ -715,6 +714,110 @@ async function gracefulShutdown(signal) {
 
   process.exit(0);
 }
+
+async function pollAuditJobQueue() {
+  try {
+    // 1. Fetch pending jobs
+    const { data: jobs, error } = await supabase
+      .from('audit_job_queue')
+      .select('*')
+      .eq('status', 'pending')
+      .limit(5);
+
+    if (error) {
+      // Ignore "relation does not exist" errors if table is missing/being restored
+      if (!error.message.includes('relation "audit_job_queue" does not exist')) {
+        logger.error('Error fetching pending audit jobs', error);
+      }
+      return;
+    }
+
+    if (!jobs || jobs.length === 0) return;
+
+    logger.info(`Found ${jobs.length} pending audit jobs in queue`);
+
+    for (const job of jobs) {
+      const { id, publisher_id, sites, triggered_by } = job;
+      const requestId = uuidv4();
+
+      // 2. Mark as processing
+      await supabase
+        .from('audit_job_queue')
+        .update({ status: 'processing', started_at: new Date().toISOString() })
+        .eq('id', id);
+
+      try {
+        // 3. Queue individual sites
+        const siteList = Array.isArray(sites) ? sites : [];
+
+        logger.info(`[${requestId}] Processing batch job ${id} with ${siteList.length} sites`);
+
+        for (const site of siteList) {
+          const siteName = typeof site === 'string' ? site : site.site_name || site.url;
+          if (!siteName) continue;
+
+          const siteAudit = { site_name: siteName, status: 'pending' };
+
+          // Add to internal in-memory queue
+          await auditQueue.add(
+            `audit-${siteName}`,
+            {
+              siteAudit,
+              jobId: id,
+              publisherId: publisher_id,
+              requestId
+            }
+          );
+        }
+
+        // 4. Mark job as completed (handed off)
+        await supabase
+          .from('audit_job_queue')
+          .update({ status: 'completed', completed_at: new Date().toISOString() })
+          .eq('id', id);
+
+        logger.info(`[${requestId}] Batch job ${id} successfully queued to internal worker`);
+
+      } catch (err) {
+        logger.error(`[${requestId}] Failed to process batch job ${id}`, err);
+        await supabase
+          .from('audit_job_queue')
+          .update({ status: 'failed', last_error: err.message })
+          .eq('id', id);
+      }
+    }
+  } catch (err) {
+    logger.error('Unexpected error in audit queue poller', err);
+  }
+}
+
+// Start polling loop (every 10 seconds)
+setInterval(pollAuditJobQueue, 10000);
+
+// Auto-shutdown logic: exit if idle for 5 minutes
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+let lastActivityTime = Date.now();
+
+function updateActivity() {
+  lastActivityTime = Date.now();
+}
+
+// Check for idle timeout every minute
+setInterval(() => {
+  const idleTime = Date.now() - lastActivityTime;
+  if (idleTime > IDLE_TIMEOUT_MS) {
+    logger.info(`No activity for ${Math.round(idleTime / 60000)} minutes. Shutting down to save resources.`);
+    process.exit(0);
+  }
+}, 60000);
+
+// Update activity when jobs are processed
+const originalPollFunction = pollAuditJobQueue;
+pollAuditJobQueue = async function () {
+  const result = await originalPollFunction();
+  updateActivity();
+  return result;
+};
 
 async function start() {
   const errors = validateConfig();
