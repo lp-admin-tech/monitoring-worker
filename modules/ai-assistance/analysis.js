@@ -265,7 +265,7 @@ class AnalysisInterpreter {
   }
 
   extractMfaScoreReasoning(text) {
-    const section = this.extractSection(text, 'MFA Score Reasoning', 'MFA_SCORE_REASONING', '**MFA_SCORE_REASONING**', 'MFA Score Analysis');
+    const section = this.extractSection(text, 'MFA Score Reasoning', 'MFA_SCORE_REASONING', '\\*\\*MFA_SCORE_REASONING\\*\\*', 'MFA Score Analysis');
     if (!section) return null;
 
     // Parse lines like "Score Name: Value — Cause"

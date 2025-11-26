@@ -14,7 +14,7 @@ try {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
 
-  console.log('Worker Runner v2.1 - Double-wrap fix & Debug logs applied');
+  console.log('Worker Runner v2.2 - Regex Fix Applied');
 
   const ContentAnalyzerClass = require('../modules/content-analyzer');
   const AdAnalyzerClass = require('../modules/ad-analyzer');
