@@ -14,6 +14,8 @@ try {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
 
+  console.log('Worker Runner v2.1 - Double-wrap fix & Debug logs applied');
+
   const ContentAnalyzerClass = require('../modules/content-analyzer');
   const AdAnalyzerClass = require('../modules/ad-analyzer');
   const policyCheckerModule = require('../modules/policy-checker');
@@ -380,15 +382,15 @@ async function processAuditJob(job) {
       updated_at: new Date().toISOString(),
     };
 
-    // DEBUG: Log what's being saved
-    logger.info('[DEBUG] Saving to database:', {
+    // DEBUG: Log what's being saved (using console.log to bypass verbosity filters)
+    console.log('[DEBUG] Saving to database:', JSON.stringify({
       risk_score: completedAudit.risk_score,
       mfa_probability: completedAudit.mfa_probability,
       risk_level: completedAudit.risk_level,
       ai_report_keys: completedAudit.ai_report ? Object.keys(completedAudit.ai_report) : [],
       ai_report_interpretation_keys: completedAudit.ai_report?.interpretation ? Object.keys(completedAudit.ai_report.interpretation) : [],
       ai_report_parsed_findings: !!completedAudit.ai_report?.interpretation?.parsedFindings
-    });
+    }, null, 2));
 
     try {
       await supabase.update('site_audits', siteAuditId, completedAudit);
