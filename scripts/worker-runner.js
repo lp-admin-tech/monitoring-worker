@@ -350,13 +350,13 @@ async function processAuditJob(job) {
       explanation_details: scorerData.explanation || null,
       confidence_score: scorerData.explanation?.confidenceScore || null,
       explanation_timestamp: scorerData.timestamp || null,
-      ai_report: aiResult.data ? {
-        llmResponse: aiResult.data.llmResponse,
+      ai_report: (aiResult.data && aiResult.data.interpretation) ? {
+        llmResponse: typeof aiResult.data.llmResponse === 'string' ? aiResult.data.llmResponse : '',
         interpretation: aiResult.data.interpretation,
-        timestamp: aiResult.data.timestamp,
-        metadata: aiResult.data.metadata
+        timestamp: aiResult.data.timestamp || new Date().toISOString(),
+        metadata: aiResult.data.metadata || {}
       } : {
-        error: aiResult.error || 'Unknown error',
+        error: aiResult.error || 'AI analysis failed or returned no data',
         status: 'failed',
         timestamp: new Date().toISOString()
       },
@@ -384,7 +384,10 @@ async function processAuditJob(job) {
     logger.info('[DEBUG] Saving to database:', {
       risk_score: completedAudit.risk_score,
       mfa_probability: completedAudit.mfa_probability,
-      risk_level: completedAudit.risk_level
+      risk_level: completedAudit.risk_level,
+      ai_report_keys: completedAudit.ai_report ? Object.keys(completedAudit.ai_report) : [],
+      ai_report_interpretation_keys: completedAudit.ai_report?.interpretation ? Object.keys(completedAudit.ai_report.interpretation) : [],
+      ai_report_parsed_findings: !!completedAudit.ai_report?.interpretation?.parsedFindings
     });
 
     try {
