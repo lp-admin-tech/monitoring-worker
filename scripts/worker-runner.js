@@ -265,7 +265,7 @@ async function processAuditJob(job) {
       'Scorer',
       async () => {
         const result = await scorer.calculateComprehensiveScore(scorerInput, { id: publisherId });
-        return { data: result, error: null };
+        return result;
       },
       {},
       requestId
@@ -291,10 +291,10 @@ async function processAuditJob(job) {
             siteAuditId,
             publisherId
           );
-          return { data: result, error: null };
+          return result;
         } catch (err) {
           logger.warn(`[${requestId}] AI Assistance failed, using fallback`, { error: err.message, requestId });
-          return { data: null, error: err.message };
+          throw err; // Let executeWithRetry handle the error
         }
       },
       {},
