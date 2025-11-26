@@ -317,14 +317,14 @@ async function processAuditJob(job) {
     });
 
     // Debug AI Result Structure
-    console.log('[DEBUG] AI Result Structure:', {
+    logger.info('[DEBUG] AI Result Structure:', {
       hasData: !!aiResult.data,
       hasError: !!aiResult.error,
       dataKeys: aiResult.data ? Object.keys(aiResult.data) : [],
       hasLlmResponse: !!aiResult.data?.llmResponse,
-      hasInterpretation: !!aiResult.data?.interpretation,
-      interpretationType: aiResult.data?.interpretation ? typeof aiResult.data.interpretation : 'undefined',
       llmResponseLength: aiResult.data?.llmResponse?.length || 0,
+      hasInterpretation: !!aiResult.data?.interpretation,
+      interpretationKeys: aiResult.data?.interpretation ? Object.keys(aiResult.data.interpretation) : [],
       interpretationPreview: aiResult.data?.interpretation ?
         (typeof aiResult.data.interpretation === 'string' ?
           aiResult.data.interpretation.substring(0, 100) :

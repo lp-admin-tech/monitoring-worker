@@ -170,7 +170,8 @@ class AIAssistanceModule {
       const llmResponse = await this.callLLM(promptData.systemPrompt, promptData.userPrompt);
 
       logger.info('LLM response received', {
-        responseLength: llmResponse?.length
+        responseLength: llmResponse?.length,
+        preview: llmResponse ? llmResponse.substring(0, 100) : 'EMPTY'
       });
 
       const interpretation = this.analysisInterpreter.interpretLLMResponse(
@@ -180,7 +181,9 @@ class AIAssistanceModule {
       );
 
       logger.info('Response interpreted', {
-        category: interpretation.categorization.primaryCategory
+        category: interpretation.categorization.primaryCategory,
+        hasParsedFindings: !!interpretation.parsedFindings,
+        hasMfaScoreReasoning: !!interpretation.parsedFindings?.mfaScoreReasoning
       });
 
       const result = {
@@ -192,6 +195,14 @@ class AIAssistanceModule {
           promptVersion: promptData.metadata
         }
       };
+
+      // DEBUG: Log the final result object before returning
+      logger.info('[DEBUG] AI Module Result:', {
+        hasLlmResponse: !!result.llmResponse,
+        llmResponseLength: result.llmResponse?.length,
+        hasInterpretation: !!result.interpretation,
+        interpretationKeys: result.interpretation ? Object.keys(result.interpretation) : []
+      });
 
       await this.persistAIResults(result, siteAuditId, publisherId);
 
