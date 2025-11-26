@@ -428,6 +428,26 @@ async function processAuditJob(job) {
       throw updateErr;
     }
 
+    // ✅ Update Publisher MFA Score
+    if (completedAudit.mfa_probability !== null) {
+      try {
+        const mfaScore = Math.round(completedAudit.mfa_probability * 100);
+        logger.info(`[${requestId}] Updating publisher ${publisherId} with MFA score: ${mfaScore}`);
+        
+        await supabase.supabaseClient
+          .from('publishers')
+          .update({ 
+            mfa_score: mfaScore,
+            last_audit_at: new Date().toISOString()
+          })
+          .eq('id', publisherId);
+          
+      } catch (pubUpdateErr) {
+        logger.error(`[${requestId}] Failed to update publisher MFA score`, pubUpdateErr, { requestId });
+        // Don't fail the job if just this update fails
+      }
+    }
+
     logger.auditSummary(siteAudit.site_name, modules);
     logger.findingsReport(modules);
 

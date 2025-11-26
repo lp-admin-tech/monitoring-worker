@@ -304,20 +304,12 @@ class Crawler {
       }
 
       // Use evaluate for performance - extracting thousands of links via Locators is slow
-      const discoveredDirs = await page.evaluate((baseUrl) => {
+      const discoveredDirs = await page.evaluate(() => {
         try {
-          // Validate baseUrl before using it
-          if (!baseUrl || typeof baseUrl !== 'string') {
-            return [];
-          }
+          const baseUrl = window.location.href;
+          const rootHostname = window.location.hostname;
 
-          // Try to construct URL, return empty array if invalid
-          let baseUrlObj;
-          try {
-            baseUrlObj = new URL(baseUrl);
-          } catch (e) {
-            return [];
-          }
+          if (!baseUrl || !rootHostname) return [];
 
           const discovered = new Set();
           const links = document.querySelectorAll('a[href]');
@@ -329,7 +321,7 @@ class Crawler {
 
               const absoluteUrl = new URL(href, baseUrl);
 
-              if (absoluteUrl.hostname === baseUrlObj.hostname) {
+              if (absoluteUrl.hostname === rootHostname) {
                 const pathname = absoluteUrl.pathname;
                 const segments = pathname.split('/').filter(s => s.length > 0);
 
@@ -346,7 +338,7 @@ class Crawler {
         } catch (err) {
           return [];
         }
-      }, normalizedUrl);
+      });
 
       logger.info(`Discovered ${discoveredDirs.length} directories on ${normalizedUrl}`);
       return discoveredDirs;
