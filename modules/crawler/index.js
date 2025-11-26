@@ -105,9 +105,28 @@ class Crawler {
       timingMarks.endTime = Date.now();
 
       const metrics = await extractMetrics(page);
+      logger.info('Metrics extracted:', {
+        ttfb: metrics.coreLWP?.ttfb || 0,
+        fcp: metrics.coreLWP?.fcp || 0,
+        lcp: metrics.coreLWP?.lcp || 0,
+        cls: metrics.coreLWP?.cls || 0,
+        dcp: metrics.coreLWP?.dcp || 0,
+        jsWeight: metrics.jsWeight || 0,
+        resourceCount: metrics.resourceCount || 0
+      });
+
       const domSnapshot = await createDOMSnapshot(page);
+      logger.info('DOM snapshot created:', {
+        elementCount: domSnapshot.elementCount || 0,
+        iframeCount: domSnapshot.iframeCount || 0,
+        scriptCount: domSnapshot.scriptCount || 0
+      });
+
       const adElements = await extractAdElements(page);
+      logger.info('Ad elements extracted:', { count: adElements.length });
+
       const iframes = await extractIframes(page);
+      logger.info('Iframes extracted:', { count: iframes.length });
       const har = harRecorder.getHAR();
 
       const crawlData = {
@@ -401,12 +420,12 @@ class Crawler {
       // Wait for body to be available
       await page.waitForSelector('body', { timeout: 5000 }).catch(() => { });
 
-      return await page.evaluate(() => {
+      const content = await page.evaluate(() => {
         // Helper to clean text
         const cleanText = (text) => {
           return text
-            .replace(/\\s+/g, ' ')
-            .replace(/[\\n\\r]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .replace(/[\n\r]+/g, ' ')
             .trim();
         };
 
@@ -427,7 +446,7 @@ class Crawler {
           if (element) {
             const text = cleanText(element.innerText);
             if (text.length > 100) { // Threshold for meaningful content
-              return text;
+              return { source: selector, text };
             }
           }
         }
@@ -435,23 +454,27 @@ class Crawler {
         // 2. Fallback to body innerText
         const bodyText = cleanText(document.body.innerText);
         if (bodyText.length > 50) {
-          return bodyText;
+          return { source: 'body.innerText', text: bodyText };
         }
 
         // 3. Fallback to textContent (includes hidden text, but better than nothing)
         const bodyContent = cleanText(document.body.textContent);
         if (bodyContent.length > 50) {
-          return bodyContent;
+          return { source: 'body.textContent', text: bodyContent };
         }
 
         // 4. Last resort: meta description
         const metaDesc = document.querySelector('meta[name="description"]');
         if (metaDesc && metaDesc.content) {
-          return metaDesc.content;
+          return { source: 'meta[name="description"]', text: metaDesc.content };
         }
 
-        return "No content extracted";
+        return { source: 'none', text: "No content extracted" };
       });
+
+      logger.info(`Extracted content from ${content.source}, length: ${content.text.length}`);
+      return content.text;
+
     } catch (error) {
       logger.warn('Error extracting page content', error);
       return "Error extracting content";

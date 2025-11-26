@@ -238,6 +238,34 @@ async function processAuditJob(job) {
     // Aggregate results
     const aggregatedResults = directoryAuditOrchestrator.aggregateResults(orchestratorResult);
 
+    // DEBUG: Log content analysis data
+    logger.info('[DEBUG] Content Analysis Data:', {
+      hasData: !!modules.contentAnalyzer.data,
+      textLength: modules.contentAnalyzer.data?.textLength || 0,
+      entropyScore: modules.contentAnalyzer.data?.entropy?.entropyScore || 0,
+      readabilityScore: modules.contentAnalyzer.data?.readability?.readabilityScore || 0,
+      aiLikelihood: modules.contentAnalyzer.data?.ai?.aiLikelihood || false,
+      clickbaitScore: modules.contentAnalyzer.data?.clickbait?.clickbaitScore || 0
+    });
+
+    // DEBUG: Log ad analysis data
+    logger.info('[DEBUG] Ad Analysis Data:', {
+      hasData: !!modules.adAnalyzer.data,
+      totalAds: modules.adAnalyzer.data?.summary?.totalAds || 0,
+      adDensity: modules.adAnalyzer.data?.summary?.adDensity || 0,
+      videoPlayerCount: modules.adAnalyzer.data?.summary?.videoPlayerCount || 0,
+      suspiciousPatterns: modules.adAnalyzer.data?.summary?.suspiciousPatterns || 0
+    });
+
+    // DEBUG: Log technical check data
+    logger.info('[DEBUG] Technical Check Data:', {
+      hasData: !!modules.technicalChecker.data,
+      pageLoadTime: modules.technicalChecker.data?.performance?.pageLoadTime || 0,
+      ttfb: modules.technicalChecker.data?.performance?.metrics?.TTFB || 0,
+      lcp: modules.technicalChecker.data?.performance?.metrics?.LCP || 0,
+      cls: modules.technicalChecker.data?.performance?.metrics?.CLS || 0
+    });
+
     let scorerInput = {
       crawlerData: modules.crawler.data,
       contentAnalysis: modules.contentAnalyzer.data,
