@@ -433,15 +433,15 @@ async function processAuditJob(job) {
       try {
         const mfaScore = Math.round(completedAudit.mfa_probability * 100);
         logger.info(`[${requestId}] Updating publisher ${publisherId} with MFA score: ${mfaScore}`);
-        
+
         await supabase.supabaseClient
           .from('publishers')
-          .update({ 
+          .update({
             mfa_score: mfaScore,
             last_audit_at: new Date().toISOString()
           })
           .eq('id', publisherId);
-          
+
       } catch (pubUpdateErr) {
         logger.error(`[${requestId}] Failed to update publisher MFA score`, pubUpdateErr, { requestId });
         // Don't fail the job if just this update fails
@@ -876,7 +876,24 @@ async function pollAuditJobQueue() {
         logger.info(`[${requestId}] Processing batch job ${id} with ${siteList.length} sites`);
 
         for (const site of siteList) {
-          const siteName = typeof site === 'string' ? site : site.site_name || site.url;
+          let siteName = null;
+
+          if (typeof site === 'string') {
+            // Check if it's a JSON string
+            if (site.trim().startsWith('{')) {
+              try {
+                const parsed = JSON.parse(site);
+                siteName = parsed.site_name || parsed.url || parsed.name;
+              } catch (e) {
+                siteName = site; // Fallback to raw string if parse fails
+              }
+            } else {
+              siteName = site;
+            }
+          } else if (typeof site === 'object' && site !== null) {
+            siteName = site.site_name || site.url || site.name;
+          }
+
           if (!siteName) continue;
 
           const siteAudit = { site_name: siteName, status: 'pending' };
