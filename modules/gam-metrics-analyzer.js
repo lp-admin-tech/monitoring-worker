@@ -5,20 +5,24 @@ class GAMMetricsAnalyzer {
     this.supabase = supabaseClient;
   }
 
-  async fetchPublisherGAMData(publisherId, dateRange = null) {
+  async fetchPublisherGAMData(publisherId, dateRange = null, dataSource = 'dimensional') {
     try {
       if (!this.supabase) {
         logger.warn('No Supabase client available for fetching GAM data');
         return null;
       }
 
-      logger.info('Fetching GAM data for publisher', {
+      // Determine which table to query based on data source
+      const tableName = dataSource === 'historical' ? 'report_historical' : 'reports_dimensional';
+
+      logger.info(`Fetching GAM data for publisher from ${tableName}`, {
         publisherId,
+        dataSource,
         dateRange
       });
 
       let query = this.supabase
-        .from('reports_dimensional')
+        .from(tableName)
         .select('*')
         .eq('publisher_id', publisherId)
         .order('date', { ascending: false })
@@ -35,11 +39,11 @@ class GAMMetricsAnalyzer {
       const { data, error } = await query;
 
       if (error) {
-        logger.error('Error fetching GAM data', error, { publisherId });
+        logger.error(`Error fetching GAM data from ${tableName}`, error, { publisherId });
         return null;
       }
 
-      logger.info('GAM data fetched successfully', {
+      logger.info(`GAM data fetched successfully from ${tableName}`, {
         publisherId,
         recordCount: data?.length || 0
       });
@@ -235,17 +239,18 @@ class GAMMetricsAnalyzer {
     };
   }
 
-  async enrichAuditDataWithGAM(auditData, publisherId) {
+  async enrichAuditDataWithGAM(auditData, publisherId, dataSource = 'dimensional') {
     try {
-      logger.info('Enriching audit data with GAM metrics', { publisherId });
+      logger.info('Enriching audit data with GAM metrics', { publisherId, dataSource });
 
       const gamData = await this.fetchPublisherGAMData(publisherId, {
         start: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
         end: new Date()
-      });
+      }, dataSource);
 
       if (!gamData || gamData.length === 0) {
-        logger.warn('No GAM data available for publisher', { publisherId });
+        const tableName = dataSource === 'historical' ? 'report_historical' : 'reports_dimensional';
+        logger.warn(`No GAM data available for publisher in ${tableName}`, { publisherId });
         return {
           ...auditData,
           gamMetrics: this.getDefaultGAMMetrics(),
@@ -274,6 +279,7 @@ class GAMMetricsAnalyzer {
 
       logger.info('Audit data enriched with GAM metrics', {
         publisherId,
+        dataSource,
         ctr: Math.round(currentMetrics.ctr * 10000) / 100,
         ecpm: Math.round(currentMetrics.ecpm * 100) / 100
       });

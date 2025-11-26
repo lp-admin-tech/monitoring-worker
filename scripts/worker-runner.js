@@ -87,15 +87,48 @@ const RETRY_DELAYS = [1000, 2000, 4000];
 // --- JOB PROCESSOR FUNCTION ---
 // This function contains the logic that was previously in BatchSiteProcessor.executeSiteAudit
 // It is now called by the BullMQ worker for each job.
+/**
+ * Check if GAM data is available for a publisher
+ * @param {string} publisherId - Publisher UUID
+ * @param {string} dataSource - 'historical' or 'dimensional'
+ * @returns {Promise<{hasData: boolean, count: number}>}
+ */
+async function checkGAMDataAvailable(publisherId, dataSource = 'dimensional') {
+  try {
+    const tableName = dataSource === 'historical' ? 'report_historical' : 'reports_dimensional';
+
+    const { count, error } = await supabase.supabaseClient
+      .from(tableName)
+      .select('*', { count: 'exact', head: true })
+      .eq('publisher_id', publisherId);
+
+    if (error) {
+      logger.error(`Error checking GAM data in ${tableName}:`, error);
+      return { hasData: false, count: 0 };
+    }
+
+    return { hasData: count > 0, count };
+  } catch (err) {
+    logger.error(`Exception checking GAM data:`, err);
+    return { hasData: false, count: 0 };
+  }
+}
+
 async function processAuditJob(job) {
-  const { siteAudit, jobId, publisherId, requestId } = job.data;
+  const { siteAudit, jobId, publisherId, requestId, triggeredBy } = job.data;
   const siteStartTime = Date.now();
+
+  // Determine which GAM data source to use
+  const isNewPublisher = triggeredBy === 'new_publisher_edge_function' || triggeredBy === 'bulk_upload';
+  const gamDataSource = isNewPublisher ? 'historical' : 'dimensional';
 
   logger.info(`[${requestId}] Processing job ${job.id} for site ${siteAudit.site_name}`, {
     jobId,
     publisherId,
     siteName: siteAudit.site_name,
-    requestId
+    requestId,
+    triggeredBy,
+    gamDataSource
   });
 
   try {
@@ -214,8 +247,12 @@ async function processAuditJob(job) {
 
     if (publisherId) {
       try {
-        logger.info(`[${requestId}] Enriching audit data with GAM metrics`, { publisherId, requestId });
-        scorerInput = await scorer.enrichAuditDataWithGAM(scorerInput, publisherId);
+        logger.info(`[${requestId}] Enriching audit data with GAM metrics from ${gamDataSource}`, {
+          publisherId,
+          requestId,
+          dataSource: gamDataSource
+        });
+        scorerInput = await scorer.enrichAuditDataWithGAM(scorerInput, publisherId, gamDataSource);
       } catch (gamError) {
         logger.warn(`[${requestId}] GAM enrichment failed, continuing without GAM data`, {
           error: gamError.message,
@@ -780,6 +817,32 @@ async function pollAuditJobQueue() {
       const { id, publisher_id, sites, triggered_by } = job;
       const requestId = uuidv4();
 
+      // Determine data source based on trigger type
+      const isNewPublisher = triggered_by === 'new_publisher_edge_function' || triggered_by === 'bulk_upload';
+      const gamDataSource = isNewPublisher ? 'historical' : 'dimensional';
+
+      // ✅ Validate GAM data is available in the correct table
+      const { hasData, count } = await checkGAMDataAvailable(publisher_id, gamDataSource);
+
+      if (!hasData) {
+        logger.warn(
+          `[${requestId}] Skipping job ${id} - No GAM data in ${gamDataSource} table for publisher ${publisher_id}. ` +
+          `Waiting for ${isNewPublisher ? 'historical' : 'daily'} data fetch.`
+        );
+
+        await supabase.supabaseClient
+          .from('audit_job_queue')
+          .update({
+            last_error: `Waiting for GAM ${gamDataSource} data`,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', id);
+
+        continue;
+      }
+
+      logger.info(`[${requestId}] GAM data check passed (${count} records in ${gamDataSource})`);
+
       // 2. Mark as processing
       await supabase.supabaseClient
         .from('audit_job_queue')
@@ -805,7 +868,8 @@ async function pollAuditJobQueue() {
               siteAudit,
               jobId: id,
               publisherId: publisher_id,
-              requestId
+              requestId,
+              triggeredBy: triggered_by // ✅ Pass triggeredBy to job data
             }
           );
         }

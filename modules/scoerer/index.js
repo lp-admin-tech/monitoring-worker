@@ -88,14 +88,15 @@ class ScoringEngine {
     return flattened;
   }
 
-  async enrichAuditDataWithGAM(auditData, publisherId) {
+  async enrichAuditDataWithGAM(auditData, publisherId, dataSource = 'dimensional') {
     try {
       if (!this.gamAnalyzer || !publisherId) {
         logger.warn('GAM enrichment skipped', { reason: !this.gamAnalyzer ? 'no analyzer' : 'no publisherId' });
         return auditData;
       }
 
-      return await this.gamAnalyzer.enrichAuditDataWithGAM(auditData, publisherId);
+      logger.info('[SCORER] Enriching with GAM metrics', { publisherId, dataSource });
+      return await this.gamAnalyzer.enrichAuditDataWithGAM(auditData, publisherId, dataSource);
     } catch (error) {
       logger.error('Error enriching audit data with GAM', error);
       return auditData;
