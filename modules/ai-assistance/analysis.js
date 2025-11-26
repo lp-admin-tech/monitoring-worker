@@ -46,7 +46,8 @@ class AnalysisInterpreter {
       primaryFindings: this.extractBulletPoints(llmResponse, 'Primary Findings'),
       contentQuality: this.extractSectionOrNull(llmResponse, 'Content Quality'),
       adBehavior: this.extractSectionOrNull(llmResponse, 'Ad Behavior'),
-      recommendations: this.extractBulletPoints(llmResponse, 'Recommended Actions')
+      recommendations: this.extractBulletPoints(llmResponse, 'Recommended Actions'),
+      mfaScoreReasoning: this.extractMfaScoreReasoning(llmResponse)
     };
 
     return findings;
@@ -261,6 +262,39 @@ class AnalysisInterpreter {
       .split(/[-"]\s+/)
       .filter(item => item.trim())
       .map(item => item.trim().split('\n')[0]);
+  }
+
+  extractMfaScoreReasoning(text) {
+    const section = this.extractSection(text, 'MFA Score Reasoning');
+    if (!section) return null;
+
+    // Parse lines like "Score Name: Value — Cause"
+    const lines = section.split('\n').filter(line => line.trim().length > 0);
+    const scores = [];
+    let suggestion = null;
+
+    lines.forEach(line => {
+      if (line.startsWith('Suggestion:')) {
+        suggestion = line.replace('Suggestion:', '').trim();
+      } else if (line.includes(':') && line.includes('—')) {
+        // Parse score line
+        // Example: "SEO Score: 78 — Missing meta descriptions"
+        const parts = line.split('—');
+        if (parts.length >= 2) {
+          const scorePart = parts[0].trim();
+          const cause = parts.slice(1).join('—').trim();
+
+          const scoreNameParts = scorePart.split(':');
+          if (scoreNameParts.length >= 2) {
+            const name = scoreNameParts[0].trim();
+            const value = scoreNameParts[1].trim();
+            scores.push({ name, value, cause });
+          }
+        }
+      }
+    });
+
+    return { scores, suggestion };
   }
 
   extractAssessmentSentence(llmResponse) {

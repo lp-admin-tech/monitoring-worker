@@ -153,8 +153,8 @@ ${this.formatComponentRisks(scorerOutput?.scores?.componentScores)}
     const violations = `## POLICY & COMPLIANCE VIOLATIONS
 
 ${policyViolations && policyViolations.length > 0
-  ? policyViolations.map((v, i) => `**Violation ${i + 1}:** ${v.category}\n- Type: ${v.type}\n- Severity: ${v.severity}\n- Evidence: ${v.evidence}`).join('\n\n')
-  : 'No explicit policy violations detected.'}
+        ? policyViolations.map((v, i) => `**Violation ${i + 1}:** ${v.category}\n- Type: ${v.type}\n- Severity: ${v.severity}\n- Evidence: ${v.evidence}`).join('\n\n')
+        : 'No explicit policy violations detected.'}
 
 ### Jurisdiction Checks
 - **Applicable Regulations:** ${this.listApplicableRegulations()}
@@ -166,7 +166,31 @@ ${policyViolations && policyViolations.length > 0
   buildAnalysisRequestSection() {
     return `## ANALYSIS REQUEST
 
-Analyze findings using TOON format. For each significant module/finding:
+Analyze findings using TOON format.
+
+## MFA SCORE REASONING
+Task: You are an expert web quality and ad policy auditor.
+For each score, output exactly one short sentence in this format:
+<Score Name>: <Score Value> — <Cause or Issue>
+
+Then provide a 1-line summary suggestion to improve it.
+
+Example Output:
+SEO Score: 78 — Missing meta descriptions and duplicate titles on several pages.
+Performance Score: 64 — High LCP and unoptimized images increase load time.
+Security Score: 90 — HTTPS enabled but missing Content-Security-Policy header.
+Policy Compliance Score: 65 — Too many sticky ads above the fold; violates ad density policy.
+Suggestion: Optimize images, fix meta tags, and reduce ad clutter.
+
+Important Rules:
+- Base reasoning on provided audit fields.
+- If score > 90, describe what it's doing well.
+- If score < 70, focus on critical reasons.
+- Keep total output under 120 words.
+- No long explanations.
+
+## MODULE ANALYSIS
+For each significant module/finding:
 
 For each module analysis:
 - interpret() - What does this metric mean for site quality?
