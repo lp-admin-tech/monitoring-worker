@@ -462,18 +462,31 @@ async function processAuditJob(job) {
     }
 
     // ✅ Update Publisher MFA Score
-    if (completedAudit.mfa_probability !== null) {
+    logger.info(`[${requestId}] Attempting to update publisher MFA score`, {
+      publisherId,
+      hasMfaProbability: completedAudit.mfa_probability !== null && completedAudit.mfa_probability !== undefined,
+      mfaProbabilityValue: completedAudit.mfa_probability,
+      riskScore: completedAudit.risk_score
+    });
+
+    if (publisherId && (completedAudit.mfa_probability !== null && completedAudit.mfa_probability !== undefined)) {
       try {
         const mfaScore = Math.round(completedAudit.mfa_probability * 100);
-        logger.info(`[${requestId}] Updating publisher ${publisherId} with MFA score: ${mfaScore}`);
+        logger.info(`[${requestId}] Updating publisher ${publisherId} with MFA score: ${mfaScore}%`);
 
-        await supabase.supabaseClient
+        const { error: pubUpdateError } = await supabase.supabaseClient
           .from('publishers')
           .update({
             mfa_score: mfaScore,
             last_audit_at: new Date().toISOString()
           })
           .eq('id', publisherId);
+
+        if (pubUpdateError) {
+          logger.error(`[${requestId}] Database error updating publisher MFA score:`, pubUpdateError);
+        } else {
+          logger.info(`[${requestId}] ✅ Successfully updated publisher ${publisherId} MFA score to ${mfaScore}%`);
+        }
 
       } catch (pubUpdateErr) {
         logger.error(`[${requestId}] Failed to update publisher MFA score`, pubUpdateErr, { requestId });
