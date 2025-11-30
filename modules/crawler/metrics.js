@@ -98,6 +98,28 @@ async function extractMetrics(page) {
           width: window.innerWidth,
           height: window.innerHeight,
         },
+        cms: (() => {
+          const generator = document.querySelector('meta[name="generator"]');
+          if (generator && generator.content) return generator.content;
+          if (document.querySelector('link[href*="wp-content"]')) return 'WordPress';
+          if (document.body.classList.contains('home-blog')) return 'WordPress';
+          return 'Unknown';
+        })(),
+        theme: (() => {
+          const themeLink = document.querySelector('link[href*="/themes/"]');
+          if (themeLink) {
+            const match = themeLink.href.match(/\/themes\/([^\/]+)\//);
+            if (match) return match[1];
+          }
+          return 'Unknown';
+        })(),
+        featureImage: (() => {
+          const ogImage = document.querySelector('meta[property="og:image"]');
+          if (ogImage) return ogImage.content;
+          const articleImg = document.querySelector('article img');
+          if (articleImg && articleImg.width > 300) return articleImg.src;
+          return null;
+        })(),
       };
     });
 

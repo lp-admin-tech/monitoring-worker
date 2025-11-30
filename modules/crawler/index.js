@@ -7,6 +7,7 @@ const { setupMutationObservers } = require('./observers');
 const { extractAdElements, extractIframes } = require('./extractors');
 const { uploadToStorage } = require('./storage');
 const { generateUserAgent } = require('./user-agent-rotation');
+const { validateUrl } = require('./url-validator');
 const crawlerDB = require('./db');
 
 class Crawler {
@@ -42,6 +43,14 @@ class Crawler {
       logger.info('Initializing Playwright browser');
       this.browser = await chromium.launch({
         headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--disable-gpu',
+          '--window-size=1920,1080',
+        ],
       });
       logger.info('Browser initialized successfully');
     } catch (error) {
@@ -78,15 +87,65 @@ class Crawler {
         url: publisher.site_url,
       });
 
-      const context = await this.browser.newContext({
+      const contextOptions = {
         userAgent: this.getRandomUserAgent(),
-        viewportSize: viewport,
+        viewportSize: {
+          width: viewport.width + Math.floor(Math.random() * 10),
+          height: viewport.height + Math.floor(Math.random() * 10),
+        },
         extraHTTPHeaders: {
           'Accept-Language': 'en-US,en;q=0.9',
+          'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+          'sec-ch-ua-mobile': viewport.isMobile ? '?1' : '?0',
+          'sec-ch-ua-platform': '"Windows"',
         },
-      });
+      };
+
+      // Add proxy if provided (Infrastructure for future use)
+      if (options.proxyUrl) {
+        contextOptions.proxy = {
+          server: options.proxyUrl,
+        };
+        logger.info(`Using proxy: ${options.proxyUrl}`);
+      }
+
+      const context = await this.browser.newContext(contextOptions);
 
       page = await context.newPage();
+
+      // 1. Stealth: Mask Bot Signals
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        // Mock Chrome
+        window.chrome = { runtime: {} };
+        // Mock Plugins
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+      });
+
+      // 2. Performance: Smart Resource Blocking
+      await page.route('**/*', (route) => {
+        const type = route.request().resourceType();
+        const url = route.request().url();
+
+        // Block heavy media and fonts
+        if (['media', 'font', 'other'].includes(type)) {
+          return route.abort();
+        }
+
+        // Smart Block Images: Block download but allow request to register in DOM
+        // (We need the <img> tags for feature image detection, but don't need the bytes)
+        if (type === 'image') {
+          return route.abort();
+        }
+
+        // Block Analytics & Trackers (Optional list)
+        if (url.includes('google-analytics') || url.includes('facebook.com/tr')) {
+          return route.abort();
+        }
+
+        route.continue();
+      });
 
       const harRecorder = setupNetworkLogging(page);
       const mutationLog = [];
@@ -96,11 +155,25 @@ class Crawler {
 
       timingMarks.startTime = Date.now();
 
+      // SECURITY: Validate URL to prevent SSRF attacks
+      const urlValidation = validateUrl(publisher.site_url);
+      if (!urlValidation.isValid) {
+        throw new Error(`SSRF Protection: ${urlValidation.error}`);
+      }
+      logger.info(`URL validated: ${urlValidation.hostname}`);
+
       await this.navigateToPage(page, publisher.site_url);
 
       timingMarks.navigationComplete = Date.now();
 
-      await new Promise(resolve => setTimeout(resolve, sessionDuration));
+      // Phase 2: Interaction & Access
+      await this.handleConsentBanners(page);
+      await this.simulateHumanBehavior(page);
+
+      // Wait remaining session duration if needed, or just a fixed buffer since we simulated behavior
+      // The sessionDuration was originally a big sleep. Now we've spent some time scrolling.
+      // Let's keep a small buffer to ensure everything settles.
+      await new Promise(resolve => setTimeout(resolve, 5000));
 
       timingMarks.endTime = Date.now();
 
@@ -276,19 +349,38 @@ class Crawler {
   }
 
   async navigateToPage(page, url) {
-    try {
-      await page.goto(url, {
-        waitUntil: 'domcontentloaded', // Faster than networkidle
-        timeout: 60000,
-      });
-
+    const navigate = async (waitUntil, timeout) => {
       try {
-        await page.waitForLoadState('networkidle', { timeout: 10000 });
+        await page.goto(url, { waitUntil, timeout });
+        return true;
+      } catch (e) {
+        return false;
+      }
+    };
+
+    try {
+      // Attempt 1: Standard load (90s timeout)
+      logger.info(`Navigating to ${url} (Attempt 1: domcontentloaded)`);
+      let success = await navigate('domcontentloaded', 90000);
+
+      // Attempt 2: Relaxed load if first failed
+      if (!success) {
+        logger.warn(`Initial navigation timed out for ${url}, retrying with 'commit' event`);
+        success = await navigate('commit', 60000);
+      }
+
+      if (!success) {
+        throw new Error('Navigation failed after retries');
+      }
+
+      // Wait for network idle if possible, but don't fail the crawl
+      try {
+        await page.waitForLoadState('networkidle', { timeout: 15000 });
       } catch (e) {
         logger.warn(`Network idle timeout for ${url}, proceeding with available content`);
       }
     } catch (error) {
-      logger.warn(`Navigation timeout for ${url}, continuing with partial load`, error);
+      logger.warn(`Navigation failed for ${url}, continuing with partial load`, error);
     }
   }
 
@@ -415,10 +507,89 @@ class Crawler {
     return extractIframes(page);
   }
 
+  async simulateHumanBehavior(page) {
+    try {
+      logger.info('Simulating human behavior (scrolling & mouse movements)');
+
+      // 1. Mouse movements (Bezier curves)
+      // Move mouse to random positions to simulate "reading"
+      for (let i = 0; i < 3; i++) {
+        const x = Math.floor(Math.random() * 500);
+        const y = Math.floor(Math.random() * 500);
+        await page.mouse.move(x, y, { steps: 10 });
+        await page.waitForTimeout(Math.random() * 500 + 200);
+      }
+
+      // 2. Smooth Scrolling (Trigger lazy loading)
+      await page.evaluate(async () => {
+        await new Promise((resolve) => {
+          let totalHeight = 0;
+          const distance = 100;
+          const timer = setInterval(() => {
+            const scrollHeight = document.body.scrollHeight;
+            window.scrollBy(0, distance);
+            totalHeight += distance;
+
+            // Stop if we've scrolled past the bottom or for too long
+            if (totalHeight >= scrollHeight || totalHeight > 5000) {
+              clearInterval(timer);
+              resolve();
+            }
+          }, 100); // Scroll every 100ms
+        });
+      });
+
+      // Wait a bit after scrolling for lazy items to load
+      await page.waitForTimeout(2000);
+
+    } catch (error) {
+      logger.warn('Error simulating human behavior', error);
+    }
+  }
+
+  async handleConsentBanners(page) {
+    try {
+      logger.info('Checking for consent banners (CMP)');
+
+      // Common selectors for "Accept/Agree" buttons
+      const consentSelectors = [
+        '#onetrust-accept-btn-handler',
+        '.fc-cta-consent',
+        '.cc-btn.cc-accept',
+        '[aria-label="Accept cookies"]',
+        'button:has-text("Accept All")',
+        'button:has-text("I Agree")',
+        'button:has-text("Accept Cookies")',
+        '.cmp-button',
+        '#accept-cookies',
+      ];
+
+      for (const selector of consentSelectors) {
+        try {
+          const button = await page.$(selector);
+          if (button && await button.isVisible()) {
+            logger.info(`Found consent banner with selector: ${selector}, clicking...`);
+            await button.click();
+            await page.waitForTimeout(1000); // Wait for dismissal animation
+            return; // Found and clicked one, usually enough
+          }
+        } catch (e) {
+          // Ignore errors for individual selectors
+        }
+      }
+    } catch (error) {
+      logger.warn('Error handling consent banners', error);
+    }
+  }
+
+
   async extractPageContent(page) {
     try {
       // Wait for body to be available
-      await page.waitForSelector('body', { timeout: 5000 }).catch(() => { });
+      // Wait for body to be available (increased timeout)
+      await page.waitForSelector('body', { timeout: 10000 }).catch(() => {
+        logger.warn('Body selector timeout, attempting to read documentElement');
+      });
 
       const content = await page.evaluate(() => {
         // Helper to clean text

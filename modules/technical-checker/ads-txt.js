@@ -166,7 +166,32 @@ function validateSellerIds(entries) {
   return results;
 }
 
-function calculateAdsTxtScore(validation) {
+function analyzeSupplyChain(entries) {
+  let directCount = 0;
+  let resellerCount = 0;
+
+  for (const entry of entries) {
+    if (entry.accountType && entry.accountType.toUpperCase() === 'DIRECT') {
+      directCount++;
+    } else if (entry.accountType && entry.accountType.toUpperCase() === 'RESELLER') {
+      resellerCount++;
+    }
+  }
+
+  const total = directCount + resellerCount;
+  const directRatio = total > 0 ? directCount / total : 0;
+
+  logger.info(`Supply Chain Analysis: Found ${directCount} DIRECT and ${resellerCount} RESELLER entries. Direct Ratio: ${(directRatio * 100).toFixed(1)}%`);
+
+  return {
+    directCount,
+    resellerCount,
+    directRatio,
+    isArbitrageRisk: total > 5 && directCount === 0, // High risk if many partners but ZERO direct relationships
+  };
+}
+
+function calculateAdsTxtScore(validation, supplyChain) {
   if (validation.valid.length === 0 && validation.unknown.length === 0) {
     return {
       score: 30,
@@ -180,12 +205,20 @@ function calculateAdsTxtScore(validation) {
 
   let score = 100;
 
+  // Penalty for invalid formatting
   if (validRatio < 0.5) score -= 40;
   else if (validRatio < 0.8) score -= 20;
 
   if (validation.invalid.length > 0) score -= 10;
-
   if (validation.valid.length === 0) score -= 15;
+
+  // Supply Chain Penalties (Phase 3)
+  if (supplyChain && supplyChain.isArbitrageRisk) {
+    score -= 30; // Heavy penalty for pure arbitrage sites
+    logger.info('Penalty applied: Site identified as Arbitrage (0 DIRECT entries)');
+  } else if (supplyChain && supplyChain.directRatio < 0.1) {
+    score -= 10; // Minor penalty for very low direct relationships
+  }
 
   return {
     score: Math.max(20, Math.round(score)),
@@ -193,6 +226,7 @@ function calculateAdsTxtScore(validation) {
     validCount: validation.valid.length,
     unknownCount: validation.unknown.length,
     invalidCount: validation.invalid.length,
+    supplyChain: supplyChain,
   };
 }
 
@@ -233,7 +267,8 @@ async function validateAdsTxt(domain) {
 
     const entries = parseAdsTxt(fetchResult.content);
     const validation = validateSellerIds(entries);
-    const scoreResult = calculateAdsTxtScore(validation);
+    const supplyChain = analyzeSupplyChain(entries); // Phase 3
+    const scoreResult = calculateAdsTxtScore(validation, supplyChain);
 
     return {
       found: true,
@@ -241,6 +276,7 @@ async function validateAdsTxt(domain) {
       statusCode: 200,
       entries: entries,
       validation: validation,
+      supplyChain: supplyChain, // Return this data
       score: scoreResult.score,
       quality: scoreResult.quality,
       summary: {
@@ -248,6 +284,8 @@ async function validateAdsTxt(domain) {
         validEntries: validation.valid.length,
         unknownEntries: validation.unknown.length,
         invalidEntries: validation.invalid.length,
+        directEntries: supplyChain.directCount,
+        resellerEntries: supplyChain.resellerCount,
       },
     };
   } catch (error) {
@@ -274,5 +312,6 @@ module.exports = {
   parseAdsTxt,
   validateSellerIds,
   calculateAdsTxtScore,
+  analyzeSupplyChain,
   KNOWN_NETWORKS,
 };

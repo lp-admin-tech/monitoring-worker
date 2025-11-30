@@ -39,9 +39,15 @@ class AdDensityCalculator {
     return viewport.width * viewport.height;
   }
 
-  calculateDensityRatio(adPixels, viewportPixels) {
+  calculateDensityRatio(adPixels, viewportPixels, isWeighted = false) {
     if (viewportPixels === 0) return 0;
-    return adPixels / viewportPixels;
+    const ratio = adPixels / viewportPixels;
+
+    if (isWeighted) {
+      logger.info(`Calculating Weighted Visual Density: Raw Ratio ${(ratio * 100).toFixed(1)}%`);
+    }
+
+    return ratio;
   }
 
   benchmarkDensity(density) {
@@ -195,6 +201,7 @@ class AdDensityCalculator {
   identifyDensityProblems(density, categorized, stickyDensity = 0, stackedAds = []) {
     const problems = [];
 
+    // Use weighted density for checks
     if (density > 0.3) {
       problems.push({
         severity: 'critical',
@@ -267,32 +274,56 @@ class AdDensityCalculator {
 
       const adPixels = this.calculateAdPixels(adElements);
       const viewportPixels = this.calculateViewportPixels(viewport);
-      const density = this.calculateDensityRatio(adPixels, viewportPixels);
-      const benchmark = this.benchmarkDensity(density);
+
+      // Phase 3: Weighted Visual Density
+      // Sticky ads are 1.5x more intrusive than static ads
+      const stickyAds = adElements.filter(ad => ad.visibility?.isSticky);
+      const stickyAdPixels = this.calculateAdPixels(stickyAds);
+      const staticAdPixels = adPixels - stickyAdPixels;
+      const weightedAdPixels = staticAdPixels + (stickyAdPixels * 1.5);
+
+      const density = this.calculateDensityRatio(adPixels, viewportPixels); // Standard
+      const weightedDensity = this.calculateDensityRatio(weightedAdPixels, viewportPixels, true); // Weighted
+
+      const benchmark = this.benchmarkDensity(weightedDensity); // Use weighted for benchmark
       const categorized = this.categorizeAdsBySize(adElements);
       const distribution = this.analyzeDistribution(adElements, viewport);
       const cumulative = this.calculateCumulativeDensity(adElements, viewport);
 
-      // Sticky Ad Analysis
-      const stickyAds = adElements.filter(ad => ad.visibility?.isSticky);
-      const stickyAdPixels = this.calculateAdPixels(stickyAds);
       const stickyDensity = this.calculateDensityRatio(stickyAdPixels, viewportPixels);
-
       const stackedAds = this.detectAdStacking(adElements);
 
-      const problems = this.identifyDensityProblems(density, categorized, stickyDensity, stackedAds);
+      // Phase 3: Ad Clutter Check (Above the Fold)
+      const adsAboveFold = distribution.aboveTheFold.ads.length;
+      const isCluttered = adsAboveFold > 5;
+      if (isCluttered) {
+        logger.warn(`Ad Clutter Detected: ${adsAboveFold} ads found in the initial viewport (Above the Fold).`);
+      }
+
+      const problems = this.identifyDensityProblems(weightedDensity, categorized, stickyDensity, stackedAds);
+
+      if (isCluttered) {
+        problems.push({
+          severity: 'high',
+          message: `Ad Clutter: ${adsAboveFold} ads detected above the fold.`,
+          recommendation: 'Reduce the number of ads in the initial viewport to improve user experience.',
+        });
+      }
 
       return {
         timestamp: new Date().toISOString(),
         metrics: {
           totalAds: adElements.length,
           adPixels,
+          weightedAdPixels, // New metric
           viewportPixels,
           adDensity: parseFloat(density.toFixed(4)),
-          densityPercentage: parseFloat((density * 100).toFixed(2)),
+          weightedDensity: parseFloat(weightedDensity.toFixed(4)), // New metric
+          densityPercentage: parseFloat((weightedDensity * 100).toFixed(2)), // Use weighted for display
           stickyAdDensity: parseFloat(stickyDensity.toFixed(4)),
           stickyAdCount: stickyAds.length,
           benchmark,
+          adsAboveFold: adsAboveFold, // New metric
         },
         sizeDistribution: {
           large: {

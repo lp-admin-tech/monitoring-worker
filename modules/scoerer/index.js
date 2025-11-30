@@ -32,11 +32,23 @@ class ScoringEngine {
     }
 
     if (auditData.adAnalysis) {
-      flattened.adDensity = auditData.adAnalysis.adDensity || auditData.adAnalysis.density?.percentage || 0;
+      // Phase 3: Prefer Weighted Visual Density
+      flattened.adDensity = auditData.adAnalysis.metrics?.weightedDensity || auditData.adAnalysis.adDensity || auditData.adAnalysis.density?.percentage || 0;
       flattened.autoRefreshRate = auditData.adAnalysis.autoRefreshRate || auditData.adAnalysis.autoRefresh?.rate || 0;
       flattened.viewportOcclusionPercent = auditData.adAnalysis.viewportOcclusion?.percent || auditData.adAnalysis.viewportOcclusionPercent || 0;
       flattened.suspiciousInteractionRatio = auditData.adAnalysis.suspiciousInteractionRatio || 0;
       flattened.scrollJackingDetected = auditData.adAnalysis.scrollJackingDetected || false;
+      flattened.visualDensity = auditData.adAnalysis.visualDensity || 0;
+    }
+
+    if (auditData.policyCheck) {
+      flattened.policyViolationCount = auditData.policyCheck.violations?.count || auditData.policyCheck.policyViolationCount || 0;
+      flattened.restrictedKeywordMatches = auditData.policyCheck.keywords?.count || auditData.policyCheck.restrictedKeywordMatches || 0;
+      flattened.jurisdictionViolations = auditData.policyCheck.jurisdictionViolations || 0;
+
+      // Phase 3: Brand Safety
+      const brandSafetyViolations = auditData.policyCheck.violations?.details?.brandSafety?.length || 0;
+      flattened.brandSafetyRisk = brandSafetyViolations > 0 ? 1 : 0;
     }
 
     if (auditData.technicalCheck) {
@@ -45,6 +57,16 @@ class ScoringEngine {
       flattened.sslValid = tech.components?.ssl?.valid !== false;
 
       flattened.brokenLinkRatio = tech.components?.brokenLinks?.brokenRatio || 0;
+
+      // Phase 3: Ads.txt Supply Chain Risk
+      const supplyChain = tech.components?.adsTxt?.supplyChain;
+      if (supplyChain) {
+        flattened.adsTxtArbitrageRisk = supplyChain.isArbitrageRisk ? 1 : 0;
+        flattened.adsTxtDirectRatio = supplyChain.directRatio || 0;
+      } else {
+        flattened.adsTxtArbitrageRisk = 0;
+        flattened.adsTxtDirectRatio = 1; // Assume good if unknown to avoid false positives
+      }
 
       if (tech.components?.domainIntel) {
         const domainData = tech.components.domainIntel.domainAge;
@@ -140,7 +162,12 @@ class ScoringEngine {
         impressionSpike: flattenedData.impressionSpike || 0,
         policyViolationCount: flattenedData.policyViolationCount || 0,
         restrictedKeywordMatches: flattenedData.restrictedKeywordMatches || 0,
-        jurisdictionViolations: flattenedData.jurisdictionViolations || 0
+        jurisdictionViolations: flattenedData.jurisdictionViolations || 0,
+
+        // Phase 3 Metrics
+        brandSafetyRisk: flattenedData.brandSafetyRisk || 0,
+        adsTxtArbitrageRisk: flattenedData.adsTxtArbitrageRisk || 0,
+        weightedVisualDensity: flattenedData.adDensity || 0, // Use the (potentially weighted) density from flat data
       });
 
       const method = options.method || 'bayesian';

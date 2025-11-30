@@ -138,11 +138,46 @@ const GOOGLE_BANNED_KEYWORDS = {
   ],
 };
 
+const BRAND_SAFETY_KEYWORDS = {
+  hate_speech: [
+    'hate group',
+    'white supremacy',
+    'neo-nazi',
+    'racial slur',
+    'ethnic cleansing',
+    'hate crime',
+  ],
+  terrorism: [
+    'bomb making',
+    'terrorist attack',
+    'isis',
+    'al-qaeda',
+    'extremist violence',
+    'recruitment',
+  ],
+  sensitive_social_issues: [
+    'abortion clinic',
+    'gun control',
+    'political extremism',
+    'controversial topic',
+  ],
+  violence: [
+    'murder',
+    'execution',
+    'torture',
+    'beheading',
+    'graphic violence',
+    'gore',
+    'suicide',
+  ],
+};
+
 const ALL_RESTRICTED_KEYWORDS = {
   ...MONETIZATION_ABUSE_KEYWORDS,
   ...PROHIBITED_CONTENT_KEYWORDS,
   ...REGULATORY_VIOLATION_KEYWORDS,
   ...GOOGLE_BANNED_KEYWORDS,
+  ...BRAND_SAFETY_KEYWORDS,
 };
 
 function findRestrictedKeywords(text, category = null) {
@@ -245,6 +280,20 @@ function scanForViolations(pageData) {
     }
   }
 
+  // Brand Safety Scan (GARM)
+  detailedReport.brandSafety = [];
+  for (const [categoryName, keywords] of Object.entries(BRAND_SAFETY_KEYWORDS)) {
+    const result = matchKeywordsInText(textToScan, keywords);
+    if (result.matches.length > 0) {
+      detailedReport.brandSafety.push({
+        subcategory: categoryName,
+        keywords: result.matches,
+        severity: 'high',
+      });
+      violations.push(...result.violations);
+    }
+  }
+
   detailedReport.total = violations.length;
   detailedReport.hasViolations = violations.length > 0;
   detailedReport.violations = violations;
@@ -293,6 +342,9 @@ function getKeywordSeverity(category) {
     'adult_content',
     'gambling',
     'drugs',
+    'hate_speech',
+    'terrorism',
+    'violence',
   ];
 
   return criticalCategories.includes(category) ? 'critical' : 'high';
@@ -313,6 +365,10 @@ function generateViolationMessage(category, keyword) {
     adult_content: `Adult content violation detected: "${keyword}"`,
     gambling: `Gambling content violation detected: "${keyword}"`,
     drugs: `Drug-related content violation detected: "${keyword}"`,
+    hate_speech: `Hate speech detected (GARM Brand Safety): "${keyword}"`,
+    terrorism: `Terrorism-related content detected (GARM Brand Safety): "${keyword}"`,
+    sensitive_social_issues: `Sensitive social issue detected (GARM Brand Safety): "${keyword}"`,
+    violence: `Graphic violence detected (GARM Brand Safety): "${keyword}"`,
   };
 
   return messages[category] || `Policy violation detected: "${keyword}"`;
@@ -363,5 +419,6 @@ module.exports = {
   PROHIBITED_CONTENT_KEYWORDS,
   REGULATORY_VIOLATION_KEYWORDS,
   GOOGLE_BANNED_KEYWORDS,
+  BRAND_SAFETY_KEYWORDS,
   ALL_RESTRICTED_KEYWORDS,
 };

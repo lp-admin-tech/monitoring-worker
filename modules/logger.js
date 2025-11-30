@@ -57,18 +57,63 @@ class Logger {
     return parts.length > 0 ? `[${parts.join(' | ')}]` : '';
   }
 
+  /**
+   * Sanitize sensitive data from logs
+   * Redacts: tokens, API keys, passwords, email addresses
+   */
+  sanitize(value) {
+    if (typeof value !== 'string') return value;
+
+    // Redact tokens in URLs
+    value = value.replace(/([?&]token=)[^&\s]+/gi, '$1REDACTED');
+    value = value.replace(/([?&]api_key=)[^&\s]+/gi, '$1REDACTED');
+    value = value.replace(/([?&]key=)[^&\s]+/gi, '$1REDACTED');
+
+    // Redact Bearer tokens
+    value = value.replace(/Bearer\s+[A-Za-z0-9\-_]+/gi, 'Bearer REDACTED');
+
+    // Redact API keys (common patterns)
+    value = value.replace(/\b[A-Za-z0-9]{32,}\b/g, (match) => {
+      // Only redact if it looks like a key (all uppercase/lowercase/numbers)
+      if (/^[A-Z0-9]+$/.test(match) || /^[a-z0-9]+$/.test(match)) {
+        return 'KEY_REDACTED';
+      }
+      return match;
+    });
+
+    // Truncate very long URLs
+    if (value.startsWith('http') && value.length > 200) {
+      return value.substring(0, 200) + '...[truncated]';
+    }
+
+    return value;
+  }
+
   formatMessage(message, data = {}) {
+    // Sanitize message
+    const sanitizedMessage = this.sanitize(message);
+
     if (this.verbosity === 'minimal' && data) {
       const filtered = {};
       for (const [key, value] of Object.entries(data)) {
         if (value !== 0 && value !== false && value !== null && value !== undefined) {
-          filtered[key] = value;
+          filtered[key] = typeof value === 'string' ? this.sanitize(value) : value;
         }
       }
-      if (Object.keys(filtered).length === 0) return message;
-      return `${message} ${JSON.stringify(filtered)}`;
+      if (Object.keys(filtered).length === 0) return sanitizedMessage;
+      return `${sanitizedMessage} ${JSON.stringify(filtered)}`;
     }
-    return data && Object.keys(data).length > 0 ? `${message} ${JSON.stringify(data)}` : message;
+
+    // Sanitize data values
+    if (data && Object.keys(data).length > 0) {
+      const sanitizedData = {};
+      for (const [key, value] of Object.entries(data)) {
+        sanitizedData[key] = typeof value === 'string' ? this.sanitize(value) : value;
+      }
+      return `${sanitizedMessage} ${JSON.stringify(sanitizedData)}`;
+    }
+
+    return sanitizedMessage;
   }
 
   async persistLog(entry) {
@@ -168,13 +213,13 @@ class Logger {
     if (!this.shouldLog(LogLevel.ERROR)) return;
 
     const contextStr = this.formatContext(context);
-    const errorMsg = error?.message || error?.toString() || 'Unknown error';
-    console.error(`${COLORS.ERROR}${contextStr} ✗ ${message}: ${errorMsg}${COLORS.RESET}`);
+    const errorMsg = this.sanitize(error?.message || error?.toString() || 'Unknown error');
+    console.error(`${COLORS.ERROR}${contextStr} ✗ ${this.sanitize(message)}: ${errorMsg}${COLORS.RESET}`);
 
     const entry = {
       timestamp: new Date().toISOString(),
       level: LogLevel.ERROR,
-      message,
+      message: this.sanitize(message),
       error: errorMsg,
       context,
       moduleName: context?.module || 'logger',

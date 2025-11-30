@@ -26,7 +26,7 @@ Output in clean, structured TOON format. Be balanced, evidence-based, and explai
 
   buildComprehensivePrompt(auditData, scorerOutput, policyViolations = []) {
     try {
-      logger.info('Building comprehensive LLM prompt', {
+      logger.info('Building comprehensive LLM prompt (TOON format)', {
         domain: auditData?.domain,
         scoreId: scorerOutput?.auditId
       });
@@ -37,15 +37,10 @@ Output in clean, structured TOON format. Be balanced, evidence-based, and explai
       sections.push(this.buildMetricsSection(auditData, scorerOutput));
       sections.push(this.buildRiskProbabilitySection(scorerOutput));
       sections.push(this.buildGamTrendsSection(scorerOutput));
-      sections.push(this.buildViolationsSection(policyViolations));
+      sections.push(this.buildViolationsSection(auditData, policyViolations));
       sections.push(this.buildAnalysisRequestSection());
 
       const prompt = sections.join('\n\n');
-
-      logger.debug('Prompt constructed successfully', {
-        sections: sections.length,
-        totalLength: prompt.length
-      });
 
       return {
         systemPrompt: this.systemRole,
@@ -53,7 +48,7 @@ Output in clean, structured TOON format. Be balanced, evidence-based, and explai
         metadata: {
           domain: auditData?.domain,
           timestamp: new Date().toISOString(),
-          sections: sections.length
+          format: 'TOON'
         }
       };
     } catch (error) {
@@ -63,178 +58,148 @@ Output in clean, structured TOON format. Be balanced, evidence-based, and explai
   }
 
   buildContextSection(auditData) {
-    const context = `## AUDIT CONTEXT
-
-**Domain Under Review:** ${auditData?.domain || 'Unknown'}
-**Audit ID:** ${auditData?.id || 'Unknown'}
-**Audit Timestamp:** ${auditData?.auditedAt || new Date().toISOString()}
-**Content Category:** ${auditData?.contentCategory || 'General'}
-**Primary Language:** ${auditData?.language || 'English'}
-
-**Site Summary:**
-- Approximate Monthly Traffic: ${this.formatNumber(auditData?.estimatedMonthlyTraffic)} sessions
-- Publisher Group: ${auditData?.publisherGroup || 'Unclassified'}
-- Domain Age: ${auditData?.domainAgeMonths || 'Unknown'} months
-- Previous Risk Assessments: ${auditData?.historicalScores?.length || 0} on record`;
-
-    return context;
+    return `audit_context(
+  domain("${auditData?.domain || 'Unknown'}")
+  audit_id("${auditData?.id || 'Unknown'}")
+  timestamp("${auditData?.auditedAt || new Date().toISOString()}")
+  content_category("${auditData?.contentCategory || 'General'}")
+  language("${auditData?.language || 'English'}")
+  monthly_traffic("${this.formatNumber(auditData?.estimatedMonthlyTraffic)}")
+  publisher_group("${auditData?.publisherGroup || 'Unclassified'}")
+  domain_age("${auditData?.domainAgeMonths || 'Unknown'} months")
+)`;
   }
 
   buildMetricsSection(auditData, scorerOutput) {
-    const metrics = `## BEHAVIORAL & TECHNICAL METRICS
-
-### Ad Behavior Analysis
-- **Ad Density:** ${auditData?.adDensity?.toFixed(1) || 0}% of viewport
-- **Auto-Refresh Rate:** ${auditData?.autoRefreshRate?.toFixed(1) || 0} per minute
-- **Viewport Occlusion:** ${auditData?.viewportOcclusionPercent?.toFixed(1) || 0}%
-- **Scroll Jacking Detected:** ${auditData?.scrollJackingDetected ? 'Yes - HIGH CONCERN' : 'No'}
-- **Aggressive Positioning:** ${auditData?.aggressivePositioning?.toFixed(1) || 0}% of ads
-
-### Content Quality Indicators
-- **Text Entropy Score:** ${auditData?.entropyScore?.toFixed(1) || 0}/100 (Higher = More Varied Content)
-- **AI-Generated Likelihood:** ${auditData?.aiLikelihood?.toFixed(1) || 0}%
-- **Clickbait Score:** ${auditData?.clickbaitScore?.toFixed(1) || 0}/100
-- **Readability Score:** ${auditData?.readabilityScore?.toFixed(1) || 0}/100 (Flesch Reading Ease)
-- **Content Freshness:** ${auditData?.freshnessScore?.toFixed(1) || 0}/100
-- **Content Similarity:** ${auditData?.similarityScore?.toFixed(1) || 0}% (Higher = More Recycled)
-
-### Technical Infrastructure
-- **Page Load Performance:** ${auditData?.performanceScore?.toFixed(1) || 0}/100
-- **SSL Certificate Valid:** ${auditData?.sslValid !== false ? 'Yes' : 'No - SECURITY ISSUE'}
-- **Broken Links Ratio:** ${auditData?.brokenLinkRatio?.toFixed(2) || 0}
-- **Domain Reputation:** ${this.assessDomainReputation(auditData)}
-- **WHOIS Privacy:** ${auditData?.whoisPrivate ? 'Enabled - Suspicious' : 'Transparent - Normal'}
-
-### Layout & UX Anomalies
-- **Viewport Inconsistency:** ${auditData?.viewportInconsistencyRatio?.toFixed(2) || 0} (Mobile/Desktop variance)
-- **Rendering Anomalies:** ${auditData?.renderingAnomalies?.toFixed(1) || 0}
-- **Hidden Element Ratio:** ${auditData?.hiddenElementRatio?.toFixed(2) || 0}`;
-
-    return metrics;
+    return `metrics(
+  ad_behavior(
+    density_standard("${auditData?.adDensity?.toFixed(1) || 0}%")
+    density_weighted("${auditData?.weightedVisualDensity?.toFixed(1) || 0}%")
+    clutter_atf("${auditData?.adsAboveFold || 0}")
+    auto_refresh("${auditData?.autoRefreshRate?.toFixed(1) || 0}/min")
+    viewport_occlusion("${auditData?.viewportOcclusionPercent?.toFixed(1) || 0}%")
+    scroll_jacking("${auditData?.scrollJackingDetected ? 'YES' : 'NO'}")
+    aggressive_positioning("${auditData?.aggressivePositioning?.toFixed(1) || 0}%")
+  )
+  content_quality(
+    entropy("${auditData?.entropyScore?.toFixed(1) || 0}/100")
+    ai_likelihood("${auditData?.aiLikelihood?.toFixed(1) || 0}%")
+    clickbait("${auditData?.clickbaitScore?.toFixed(1) || 0}/100")
+    readability("${auditData?.readabilityScore?.toFixed(1) || 0}/100")
+    freshness("${auditData?.freshnessScore?.toFixed(1) || 0}/100")
+    similarity("${auditData?.similarityScore?.toFixed(1) || 0}%")
+  )
+  technical(
+    ads_txt_arbitrage("${auditData?.adsTxtArbitrageRisk ? 'YES' : 'NO'}")
+    ads_txt_direct_ratio("${(auditData?.adsTxtDirectRatio * 100)?.toFixed(1) || 0}%")
+    performance("${auditData?.performanceScore?.toFixed(1) || 0}/100")
+    ssl_valid("${auditData?.sslValid !== false ? 'YES' : 'NO'}")
+    broken_links("${auditData?.brokenLinkRatio?.toFixed(2) || 0}")
+    reputation("${this.assessDomainReputation(auditData)}")
+    whois_privacy("${auditData?.whoisPrivate ? 'YES' : 'NO'}")
+  )
+  ux_anomalies(
+    viewport_inconsistency("${auditData?.viewportInconsistencyRatio?.toFixed(2) || 0}")
+    rendering_anomalies("${auditData?.renderingAnomalies?.toFixed(1) || 0}")
+    hidden_elements("${auditData?.hiddenElementRatio?.toFixed(2) || 0}")
+  )
+)`;
   }
 
   buildRiskProbabilitySection(scorerOutput) {
-    const riskProb = `## RISK PROBABILITY ASSESSMENT
-
-**Overall MFA Probability:** ${(scorerOutput?.scores?.mfaProbability * 100).toFixed(1)}%
-**Overall Risk Score:** ${scorerOutput?.scores?.overallRiskScore?.toFixed(2) || 0}/10
-**Methodology:** ${scorerOutput?.methodology || 'Bayesian Risk Engine'}
-**Confidence Level:** ${this.calculateConfidence(scorerOutput?.scores)}%
-
-### Component Risk Breakdown
-${this.formatComponentRisks(scorerOutput?.scores?.componentScores)}
-
-### Trend Analysis
-- **Risk Direction:** ${scorerOutput?.trend?.direction || 'Stable'}
-- **Velocity (Rate of Change):** ${scorerOutput?.trend?.velocity || 'Normal'}
-- **Anomaly Detected:** ${scorerOutput?.trend?.anomaly ? 'Yes - Investigation Priority' : 'No'}
-- **Benchmark Comparison:** ${this.formatBenchmarkComparison(scorerOutput?.benchmarks)}`;
-
-    return riskProb;
+    return `risk_assessment(
+  mfa_probability("${(scorerOutput?.scores?.mfaProbability * 100).toFixed(1)}%")
+  overall_score("${scorerOutput?.scores?.overallRiskScore?.toFixed(2) || 0}/10")
+  methodology("${scorerOutput?.methodology || 'Bayesian'}")
+  confidence("${this.calculateConfidence(scorerOutput?.scores)}%")
+  components(
+${this.formatComponentRisksTOON(scorerOutput?.scores?.componentScores)}
+  )
+  trend(
+    direction("${scorerOutput?.trend?.direction || 'Stable'}")
+    velocity("${scorerOutput?.trend?.velocity || 'Normal'}")
+    anomaly("${scorerOutput?.trend?.anomaly ? 'YES' : 'NO'}")
+    benchmark("${this.formatBenchmarkComparison(scorerOutput?.benchmarks)}")
+  )
+)`;
   }
 
   buildGamTrendsSection(scorerOutput) {
-    const gamData = `## GAM PERFORMANCE & CORRELATION SIGNALS
-
-### Monetary Metrics Deviation
-- **CTR vs Benchmark:** ${this.formatDeviation(scorerOutput?.benchmarks?.ctr?.deviation)}
-- **eCPM vs Benchmark:** ${this.formatDeviation(scorerOutput?.benchmarks?.ecpm?.deviation)}
-- **Fill Rate vs Publisher Group:** ${this.formatDeviation(scorerOutput?.benchmarks?.fillRate?.deviation)}
-
-### Anomaly Indicators
-- **Impression Spike Detected:** ${scorerOutput?.scores?.componentScores?.gamCorrelation > 0.7 ? 'Yes - Suspicious Pattern' : 'No'}
-- **Revenue Consistency:** ${this.assessRevenueConsistency(scorerOutput)}
-- **Publisher Group Alignment:** ${this.assessGroupAlignment(scorerOutput)}`;
-
-    return gamData;
+    return `gam_signals(
+  monetary_deviation(
+    ctr("${this.formatDeviation(scorerOutput?.benchmarks?.ctr?.deviation)}")
+    ecpm("${this.formatDeviation(scorerOutput?.benchmarks?.ecpm?.deviation)}")
+    fill_rate("${this.formatDeviation(scorerOutput?.benchmarks?.fillRate?.deviation)}")
+  )
+  anomalies(
+    impression_spike("${scorerOutput?.scores?.componentScores?.gamCorrelation > 0.7 ? 'YES' : 'NO'}")
+    revenue_consistency("${this.assessRevenueConsistency(scorerOutput)}")
+    group_alignment("${this.assessGroupAlignment(scorerOutput)}")
+  )
+)`;
   }
 
-  buildViolationsSection(policyViolations) {
-    const violations = `## POLICY & COMPLIANCE VIOLATIONS
-
-${policyViolations && policyViolations.length > 0
-        ? policyViolations.map((v, i) => `**Violation ${i + 1}:** ${v.category}\n- Type: ${v.type}\n- Severity: ${v.severity}\n- Evidence: ${v.evidence}`).join('\n\n')
-        : 'No explicit policy violations detected.'}
-
-### Jurisdiction Checks
-- **Applicable Regulations:** ${this.listApplicableRegulations()}
-- **Compliance Status:** ${policyViolations?.length > 0 ? 'Multiple Issues Identified' : 'Compliant'}`;
-
-    return violations;
-  }
-
-  buildAnalysisRequestSection() {
-    return `## ANALYSIS REQUEST
-
-Analyze findings using TOON format.
-
-## MFA SCORE REASONING
-Task: You are an expert web quality and ad policy auditor.
-For each score, output exactly one short sentence in this format:
-<Score Name>: <Score Value> — <Cause or Issue>
-
-Then provide a 1-line summary suggestion to improve it.
-
-Example Output:
-SEO Score: 78 — Missing meta descriptions and duplicate titles on several pages.
-Performance Score: 64 — High LCP and unoptimized images increase load time.
-Security Score: 90 — HTTPS enabled but missing Content-Security-Policy header.
-Policy Compliance Score: 65 — Too many sticky ads above the fold; violates ad density policy.
-Suggestion: Optimize images, fix meta tags, and reduce ad clutter.
-
-Important Rules:
-- Base reasoning on provided audit fields.
-- If score > 90, describe what it's doing well.
-- If score < 70, focus on critical reasons.
-- Keep total output under 120 words.
-- No long explanations.
-
-## MODULE ANALYSIS
-For each significant module/finding:
-
-For each module analysis:
-- interpret() - What does this metric mean for site quality?
-- detect() - Identify specific issues that arise from this
-- explain() - Root cause for the issue
-- suggest() - Actionable fix to improve the score
-- highlight() - Positive signals to maintain quality
-- calculate() - Impact on overall quality/risk score
-- combine() - Brief summary connecting all findings
-
-Output format for each module:
-module(name)
-found(issues:["problem1", "problem2"])
-cause:["root cause for problem1", "root cause for problem2"]
-fix:["actionable fix for problem1", "actionable fix for problem2"]
-impact(score_change="numerical or qualitative value")
-good:["positive signal1", "positive signal2"]
-review_summary("Brief evaluation combining causes, fixes, and improvements")
-
-Guidelines:
-- Be concise and specific
-- Avoid repetition
-- Give realistic fixes that match site context
-- Infer missing details logically from signals
-- Maintain human-readable TOON format (no JSON)`;
-  }
-
-  formatComponentRisks(componentScores) {
-    if (!componentScores) return 'No component data available.';
+  formatComponentRisksTOON(componentScores) {
+    if (!componentScores) return '    no_data()';
 
     const components = [
-      { name: 'Behavioral', score: componentScores.behavioral },
-      { name: 'Content Quality', score: componentScores.content },
-      { name: 'Technical', score: componentScores.technical },
-      { name: 'Layout & UX', score: componentScores.layout },
-      { name: 'GAM Correlation', score: componentScores.gamCorrelation },
-      { name: 'Policy Compliance', score: componentScores.policy }
+      { name: 'behavioral', score: componentScores.behavioral },
+      { name: 'content', score: componentScores.content },
+      { name: 'technical', score: componentScores.technical },
+      { name: 'layout', score: componentScores.layout },
+      { name: 'gam', score: componentScores.gamCorrelation },
+      { name: 'policy', score: componentScores.policy }
     ];
 
     return components
       .filter(c => c.score !== undefined)
-      .map(c => `- **${c.name}:** ${(c.score * 100).toFixed(0)}% risk`)
+      .map(c => `    ${c.name}("${(c.score * 100).toFixed(0)}%")`)
       .join('\n');
   }
+
+  buildViolationsSection(auditData, policyViolations) {
+    const violationList = policyViolations && policyViolations.length > 0
+      ? policyViolations.map(v => `    violation(category="${v.category}" type="${v.type}" severity="${v.severity}")`).join('\n')
+      : '    status("clean")';
+
+    return `compliance(
+  violations(
+${violationList}
+  )
+  brand_safety(
+    risk("${auditData?.brandSafetyRisk ? 'YES' : 'NO'}")
+  )
+  jurisdiction(
+    regulations("${this.listApplicableRegulations()}")
+    status("${policyViolations?.length > 0 ? 'Issues Found' : 'Compliant'}")
+  )
+)`;
+  }
+
+  buildAnalysisRequestSection() {
+    return `request(
+  task("Analyze findings using TOON format")
+  
+  mfa_score_reasoning(
+    instruction("Provide 1 sentence per score + 1 summary suggestion")
+    format("<Score Name>: <Value> — <Reason>")
+  )
+
+  module_analysis(
+    instruction("Analyze significant modules")
+    format(
+      module(name)
+      found(issues:["issue1", "issue2"])
+      cause:["cause1", "cause2"]
+      fix:["fix1", "fix2"]
+      impact(score_change="value")
+      good:["signal1", "signal2"]
+      review_summary("text")
+    )
+  )
+)`;
+  }
+
 
   formatBenchmarkComparison(benchmarks) {
     if (!benchmarks) return 'No benchmark data available.';
