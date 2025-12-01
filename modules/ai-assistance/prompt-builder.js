@@ -178,24 +178,29 @@ ${violationList}
 
   buildAnalysisRequestSection() {
     return `request(
-  task("Analyze findings using TOON format")
+  task("Analyze findings - OUTPUT in PLAIN TEXT format")
   
   mfa_score_reasoning(
     instruction("Provide 1 sentence per score + 1 summary suggestion")
-    format("<Score Name>: <Value> — <Reason>")
+    format("**MFA_SCORE_REASONING**\\n<Score Name>: <Value> — <Reason>\\n\\nSuggestion: <text>")
   )
 
   module_analysis(
-    instruction("Analyze significant modules")
-    format(
-      module(name)
-      found(issues:["issue1", "issue2"])
-      cause:["cause1", "cause2"]
-      fix:["fix1", "fix2"]
-      impact(score_change="value")
-      good:["signal1", "signal2"]
-      review_summary("text")
-    )
+    instruction("For each significant module, provide analysis in PLAIN TEXT")
+    output_format("
+## <Module Name>
+**Impact**: <Minimal/Moderate/High> negative impact
+**Issues Found**: <count or 'None'>
+  - <issue 1>
+  - <issue 2>
+**Root Cause**: <cause text>
+**Recommended Fix**: <fix text>
+**Positive Signals**:
+  ✓<signal 1>
+  ✓<signal 2>
+**Summary**: <brief summary text>
+    ")
+    note("Use plain markdown formatting, NOT TOON syntax for output")
   )
 )`;
   }
