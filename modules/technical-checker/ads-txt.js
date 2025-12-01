@@ -23,77 +23,61 @@ const KNOWN_NETWORKS = {
   'smartyads.com': 'SmartyAds',
 };
 
-async function fetchAdsTxt(domain, timeout = 10000, retryAttempt = 1) {
-  const maxRetries = 2;
+async function fetchAdsTxt(domain, timeout = 10000) {
+  const protocols = ['https://', 'http://'];
 
-  try {
-    const url = `https://${domain}/ads.txt`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
-
+  for (const protocol of protocols) {
     try {
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        },
-      });
+      const url = `${protocol}${domain}/ads.txt`;
+      logger.info(`Fetching ads.txt from ${url}`);
 
-      clearTimeout(timeoutId);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-      if (!response.ok) {
-        return {
-          found: false,
-          statusCode: response.status,
-          content: null,
-        };
-      }
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          },
+        });
 
-      const content = await response.text();
-      return {
-        found: true,
-        statusCode: 200,
-        content: content,
-      };
-    } catch (error) {
-      clearTimeout(timeoutId);
+        clearTimeout(timeoutId);
 
-      if (error.name === 'AbortError') {
-        if (retryAttempt === 1 && retryAttempt < maxRetries) {
-          logger.warn(
-            `ads.txt fetch timeout on attempt ${retryAttempt}, retrying in 1 second`,
-            { domain, timeout }
-          );
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          return fetchAdsTxt(domain, timeout, retryAttempt + 1);
+        if (response.ok) {
+          const content = await response.text();
+          return {
+            found: true,
+            statusCode: 200,
+            content: content,
+          };
+        } else if (response.status === 404) {
+          // If 404, no need to try other protocols usually, but maybe mixed content issues?
+          // Let's continue to next protocol only if it was HTTPS and we want to try HTTP
+          if (protocol === 'https://') continue;
+
+          return {
+            found: false,
+            statusCode: response.status,
+            content: null,
+          };
         }
-
-        logger.warn(
-          'ads.txt fetch timeout (retries exhausted), skipping ads.txt',
-          { domain, timeout, retryAttempt }
-        );
-        return {
-          found: false,
-          error: 'Fetch timeout - retries exhausted',
-          content: null,
-          skipped: true,
-        };
+      } catch (error) {
+        clearTimeout(timeoutId);
+        logger.warn(`Failed to fetch ads.txt from ${url}: ${error.message}`);
+        // Continue to next protocol
       }
-
-      throw error;
+    } catch (e) {
+      // Ignore setup errors
     }
-  } catch (error) {
-    logger.warn('Failed to fetch ads.txt, skipping ads.txt validation', {
-      domain,
-      error: error.message,
-    });
-    return {
-      found: false,
-      error: error.message,
-      content: null,
-      skipped: true,
-    };
   }
+
+  return {
+    found: false,
+    error: 'Failed to fetch ads.txt from all protocols',
+    content: null,
+    skipped: true,
+  };
 }
 
 function parseAdsTxt(content) {

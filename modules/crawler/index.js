@@ -177,16 +177,7 @@ class Crawler {
 
       timingMarks.endTime = Date.now();
 
-      const metrics = await extractMetrics(page);
-      logger.info('Metrics extracted:', {
-        ttfb: metrics.coreLWP?.ttfb || 0,
-        fcp: metrics.coreLWP?.fcp || 0,
-        lcp: metrics.coreLWP?.lcp || 0,
-        cls: metrics.coreLWP?.cls || 0,
-        dcp: metrics.coreLWP?.dcp || 0,
-        jsWeight: metrics.jsWeight || 0,
-        resourceCount: metrics.resourceCount || 0
-      });
+      // Metrics extraction moved to end of flow to ensure page is settled
 
       const domSnapshot = await createDOMSnapshot(page);
       logger.info('DOM snapshot created:', {
@@ -200,6 +191,23 @@ class Crawler {
 
       const iframes = await extractIframes(page);
       logger.info('Iframes extracted:', { count: iframes.length });
+
+      // Extract page content (Missing in previous version)
+      const content = await this.extractPageContent(page);
+      logger.info('Page content extracted:', { length: content.length });
+
+      // Extract metrics LAST to ensure all resources/ads have loaded and LCP/CLS are captured
+      const metrics = await extractMetrics(page);
+      logger.info('Metrics extracted (final):', {
+        ttfb: metrics.coreLWP?.ttfb || 0,
+        fcp: metrics.coreLWP?.fcp || 0,
+        lcp: metrics.coreLWP?.lcp || 0,
+        cls: metrics.coreLWP?.cls || 0,
+        dcp: metrics.coreLWP?.dcp || 0,
+        jsWeight: metrics.jsWeight || 0,
+        resourceCount: metrics.resourceCount || 0
+      });
+
       const har = harRecorder.getHAR();
 
       const crawlData = {
@@ -216,6 +224,7 @@ class Crawler {
         },
         adElements,
         iframes,
+        content, // Add content to crawlData
         mutationLog,
         domSnapshot: {
           elementCount: domSnapshot.elementCount,
@@ -586,10 +595,13 @@ class Crawler {
   async extractPageContent(page) {
     try {
       // Wait for body to be available
-      // Wait for body to be available (increased timeout)
-      await page.waitForSelector('body', { timeout: 10000 }).catch(() => {
-        logger.warn('Body selector timeout, attempting to read documentElement');
-      });
+      try {
+        await page.waitForSelector('body', { timeout: 10000 });
+        // Wait for some content to render (simple heuristic)
+        await page.waitForFunction(() => document.body.innerText.length > 100, { timeout: 5000 }).catch(() => { });
+      } catch (e) {
+        logger.warn('Body selector timeout or content wait failed', e);
+      }
 
       const content = await page.evaluate(() => {
         // Helper to clean text
