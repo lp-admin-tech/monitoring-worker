@@ -7,6 +7,9 @@ const THRESHOLDS = {
   tbt: { good: 200, poor: 600 },
 };
 
+// Lighthouse threshold for triggering detailed analysis
+const LIGHTHOUSE_THRESHOLD = 60; // Run Lighthouse if custom score < 60
+
 function getMetricStatus(value, type) {
   const threshold = THRESHOLDS[type];
   if (!threshold) return 'unknown';
@@ -76,7 +79,10 @@ function calculateTotalBlockingTime(metrics) {
   };
 }
 
-function analyzePerformance(crawlData) {
+/**
+ * Fast custom performance analysis using browser Performance API
+ */
+function analyzePerformanceFast(crawlData) {
   try {
     if (!crawlData) {
       logger.warn('No crawl data provided for performance analysis');
@@ -87,6 +93,7 @@ function analyzePerformance(crawlData) {
         tbt: null,
         performanceScore: 0,
         recommendations: ['Unable to analyze - no metrics available'],
+        method: 'custom',
       };
     }
 
@@ -114,6 +121,7 @@ function analyzePerformance(crawlData) {
       performanceScore: performanceScore,
       recommendations: recommendations,
       rawScores: scores,
+      method: 'custom',
     };
   } catch (error) {
     logger.error('Performance analysis failed', error);
@@ -125,7 +133,105 @@ function analyzePerformance(crawlData) {
       performanceScore: 0,
       recommendations: ['Performance analysis failed'],
       error: error.message,
+      method: 'custom',
     };
+  }
+}
+
+/**
+ * Hybrid performance analysis: Fast custom first, then Lighthouse if needed
+ * @param {object} crawlData - Crawl data with metrics
+ * @param {object} options - Analysis options
+ * @param {object} options.browser - Playwright browser instance (required for Lighthouse)
+ * @param {string} options.url - URL being analyzed (required for Lighthouse)
+ * @param {boolean} options.enableLighthouse - Enable Lighthouse fallback (default: true)
+ * @param {number} options.lighthouseThreshold - Score threshold to trigger Lighthouse (default: 60)
+ */
+async function analyzePerformance(crawlData, options = {}) {
+  const {
+    browser = null,
+    url = null,
+    enableLighthouse = true,
+    lighthouseThreshold = LIGHTHOUSE_THRESHOLD,
+  } = options;
+
+  // Step 1: Run fast custom analysis
+  const fastResult = analyzePerformanceFast(crawlData);
+
+  logger.info('Fast performance analysis completed', {
+    score: fastResult.performanceScore,
+    method: 'custom',
+  });
+
+  // Step 2: Check if Lighthouse is needed
+  const needsLighthouse =
+    enableLighthouse &&
+    browser &&
+    url &&
+    fastResult.performanceScore < lighthouseThreshold;
+
+  if (!needsLighthouse) {
+    return fastResult;
+  }
+
+  // Step 3: Run PageSpeed Insights for detailed analysis
+  try {
+    logger.info('Running PageSpeed Insights for detailed analysis', {
+      url,
+      customScore: fastResult.performanceScore,
+      threshold: lighthouseThreshold,
+    });
+
+    const PageSpeedAnalyzer = require('./lighthouse');
+    const pageSpeedAnalyzer = new PageSpeedAnalyzer({
+      enabled: true,
+      timeout: 60000,
+      strategy: 'desktop',
+    });
+
+    const pageSpeedResult = await pageSpeedAnalyzer.runPageSpeed(url);
+
+    if (pageSpeedResult && pageSpeedResult.performanceScore !== null) {
+      // Merge results, preferring PageSpeed data
+      return {
+        ...fastResult,
+        performanceScore: pageSpeedResult.performanceScore,
+        lcp: pageSpeedResult.metrics.lcp ? {
+          value: Math.round(pageSpeedResult.metrics.lcp),
+          status: getMetricStatus(pageSpeedResult.metrics.lcp, 'lcp'),
+        } : fastResult.lcp,
+        cls: pageSpeedResult.metrics.cls ? {
+          value: parseFloat(pageSpeedResult.metrics.cls.toFixed(3)),
+          status: getMetricStatus(pageSpeedResult.metrics.cls, 'cls'),
+        } : fastResult.cls,
+        tbt: pageSpeedResult.metrics.tbt ? {
+          value: Math.round(pageSpeedResult.metrics.tbt),
+          status: getMetricStatus(pageSpeedResult.metrics.tbt, 'tbt'),
+        } : fastResult.tbt,
+        pageSpeed: {
+          score: pageSpeedResult.performanceScore,
+          metrics: pageSpeedResult.metrics,
+          opportunities: pageSpeedResult.opportunities,
+          fieldData: pageSpeedResult.fieldData, // Real Chrome UX Report data
+          duration: pageSpeedResult.duration,
+        },
+        method: 'hybrid',
+        recommendations: [
+          ...fastResult.recommendations,
+          ...(pageSpeedResult.opportunities || []).map(opp => opp.title),
+        ],
+      };
+    } else {
+      logger.warn('PageSpeed Insights analysis failed, using custom results', {
+        error: pageSpeedResult?.error,
+        rateLimited: pageSpeedResult?.rateLimited,
+        quotaExceeded: pageSpeedResult?.quotaExceeded,
+      });
+      return fastResult;
+    }
+  } catch (error) {
+    logger.error('PageSpeed Insights analysis error, falling back to custom results', error);
+    return fastResult;
   }
 }
 
@@ -157,7 +263,9 @@ function generateRecommendations(vitals, tbt) {
 
 module.exports = {
   analyzePerformance,
+  analyzePerformanceFast, // Export for direct use without Lighthouse
   extractWebVitals,
   calculateTotalBlockingTime,
   THRESHOLDS,
+  LIGHTHOUSE_THRESHOLD,
 };

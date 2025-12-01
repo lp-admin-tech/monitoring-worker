@@ -59,8 +59,13 @@ async function runTechnicalHealthCheck(crawlData, domain, options = {}) {
 
   if (!skipPerformance && crawlData) {
     checks.push(
-      Promise.resolve().then(() => {
-        results.components.performance = analyzePerformance(crawlData);
+      Promise.resolve().then(async () => {
+        results.components.performance = await analyzePerformance(crawlData, {
+          browser: options.browser || null,
+          url: domain,
+          enableLighthouse: options.enableLighthouse !== false,
+          lighthouseThreshold: options.lighthouseThreshold || 60,
+        });
       })
     );
   }

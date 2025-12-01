@@ -72,7 +72,7 @@ class Crawler {
 
   async crawlPublisher(publisher, options = {}) {
     const {
-      sessionDuration = 70000,
+      sessionDuration = 100000, 
       viewport = this.viewports[0],
       captureScreenshots = true,
       uploadResults = true,
@@ -168,7 +168,7 @@ class Crawler {
 
       // Phase 2: Interaction & Access
       await this.handleConsentBanners(page);
-      await this.simulateHumanBehavior(page);
+      await this.simulateHumanBehavior(page, sessionDuration);
 
       // Wait remaining session duration if needed, or just a fixed buffer since we simulated behavior
       // The sessionDuration was originally a big sleep. Now we've spent some time scrolling.
@@ -516,153 +516,177 @@ class Crawler {
     return extractIframes(page);
   }
 
-  async simulateHumanBehavior(page) {
+  async simulateHumanBehavior(page, minDuration = 120000) {
     try {
-      logger.info('Simulating human behavior (scrolling & mouse movements)');
+      logger.info(`Simulating human behavior for ${minDuration / 1000}s (scrolling & mouse movements)`);
+      const startTime = Date.now();
 
-      // 1. Mouse movements (Bezier curves)
-      // Move mouse to random positions to simulate "reading"
-      for (let i = 0; i < 3; i++) {
+      // 1. Initial Mouse movements
+      for (let i = 0; i < 5; i++) {
         const x = Math.floor(Math.random() * 500);
         const y = Math.floor(Math.random() * 500);
         await page.mouse.move(x, y, { steps: 10 });
-        await page.waitForTimeout(Math.random() * 500 + 200);
+        await page.waitForTimeout(Math.random() * 200 + 100);
       }
 
-      // 2. Smooth Scrolling (Trigger lazy loading)
-      await page.evaluate(async () => {
+      // 2. Long-duration Scrolling (Trigger lazy loading & infinite scroll)
+      await page.evaluate(async (duration) => {
         await new Promise((resolve) => {
           let totalHeight = 0;
           const distance = 100;
+          const startTime = Date.now();
+
           const timer = setInterval(() => {
             const scrollHeight = document.body.scrollHeight;
+            const currentScroll = window.scrollY + window.innerHeight;
+
+            // Scroll down
             window.scrollBy(0, distance);
             totalHeight += distance;
 
-            // Stop if we've scrolled past the bottom or for too long
-            if (totalHeight >= scrollHeight || totalHeight > 5000) {
+            // If we reached the bottom
+            if (currentScroll >= scrollHeight) {
+              // If we haven't met the time requirement, scroll back up a bit to keep activity alive
+              // or wait for infinite scroll to trigger
+              if (Date.now() - startTime < duration) {
+                // Scroll up a bit to simulate reading/re-checking
+                window.scrollBy(0, -300);
+              } else {
+                clearInterval(timer);
+                resolve();
+              }
+            }
+
+            // Check time limit
+            if (Date.now() - startTime >= duration) {
               clearInterval(timer);
               resolve();
             }
-          }, 100); // Scroll every 100ms
+          }, 200); // Scroll every 200ms (slower, more human-like)
         });
-      });
+      }, minDuration);
 
-      // Wait a bit after scrolling for lazy items to load
-      await page.waitForTimeout(2000);
-
+      logger.info('Human behavior simulation completed');
     } catch (error) {
       logger.warn('Error simulating human behavior', error);
     }
   }
 
-  async handleConsentBanners(page) {
-    try {
-      logger.info('Checking for consent banners (CMP)');
+      // Wait a bit after scrolling for lazy items to load
+      await page.waitForTimeout(2000);
 
-      // Common selectors for "Accept/Agree" buttons
-      const consentSelectors = [
-        '#onetrust-accept-btn-handler',
-        '.fc-cta-consent',
-        '.cc-btn.cc-accept',
-        '[aria-label="Accept cookies"]',
-        'button:has-text("Accept All")',
-        'button:has-text("I Agree")',
-        'button:has-text("Accept Cookies")',
-        '.cmp-button',
-        '#accept-cookies',
-      ];
-
-      for (const selector of consentSelectors) {
-        try {
-          const button = await page.$(selector);
-          if (button && await button.isVisible()) {
-            logger.info(`Found consent banner with selector: ${selector}, clicking...`);
-            await button.click();
-            await page.waitForTimeout(1000); // Wait for dismissal animation
-            return; // Found and clicked one, usually enough
-          }
-        } catch (e) {
-          // Ignore errors for individual selectors
-        }
-      }
     } catch (error) {
-      logger.warn('Error handling consent banners', error);
-    }
+  logger.warn('Error simulating human behavior', error);
+}
   }
+
+  async handleConsentBanners(page) {
+  try {
+    logger.info('Checking for consent banners (CMP)');
+
+    // Common selectors for "Accept/Agree" buttons
+    const consentSelectors = [
+      '#onetrust-accept-btn-handler',
+      '.fc-cta-consent',
+      '.cc-btn.cc-accept',
+      '[aria-label="Accept cookies"]',
+      'button:has-text("Accept All")',
+      'button:has-text("I Agree")',
+      'button:has-text("Accept Cookies")',
+      '.cmp-button',
+      '#accept-cookies',
+    ];
+
+    for (const selector of consentSelectors) {
+      try {
+        const button = await page.$(selector);
+        if (button && await button.isVisible()) {
+          logger.info(`Found consent banner with selector: ${selector}, clicking...`);
+          await button.click();
+          await page.waitForTimeout(1000); // Wait for dismissal animation
+          return; // Found and clicked one, usually enough
+        }
+      } catch (e) {
+        // Ignore errors for individual selectors
+      }
+    }
+  } catch (error) {
+    logger.warn('Error handling consent banners', error);
+  }
+}
 
 
   async extractPageContent(page) {
+  try {
+    // Wait for body to be available
     try {
-      // Wait for body to be available
-      try {
-        await page.waitForSelector('body', { timeout: 10000 });
-        // Wait for some content to render (simple heuristic)
-        await page.waitForFunction(() => document.body.innerText.length > 100, { timeout: 5000 }).catch(() => { });
-      } catch (e) {
-        logger.warn('Body selector timeout or content wait failed', e);
-      }
+      await page.waitForSelector('body', { timeout: 10000 });
+      // Wait for some content to render (simple heuristic)
+      await page.waitForFunction(() => document.body.innerText.length > 100, { timeout: 5000 }).catch(() => { });
+    } catch (e) {
+      logger.warn('Body selector timeout or content wait failed', e);
+    }
 
-      const content = await page.evaluate(() => {
-        // Helper to clean text
-        const cleanText = (text) => {
-          return text
-            .replace(/\s+/g, ' ')
-            .replace(/[\n\r]+/g, ' ')
-            .trim();
-        };
+    const content = await page.evaluate(() => {
+      // Helper to clean text
+      const cleanText = (text) => {
+        return text
+          .replace(/\s+/g, ' ')
+          .replace(/[\n\r]+/g, ' ')
+          .trim();
+      };
 
-        // 1. Try common content selectors first (usually higher quality)
-        const contentSelectors = [
-          'article',
-          'main',
-          '[role="main"]',
-          '.post-content',
-          '.article-content',
-          '.entry-content',
-          '#content',
-          '.content'
-        ];
+      // 1. Try common content selectors first (usually higher quality)
+      const contentSelectors = [
+        'article',
+        'main',
+        '[role="main"]',
+        '.post-content',
+        '.article-content',
+        '.entry-content',
+        '#content',
+        '.content'
+      ];
 
-        for (const selector of contentSelectors) {
-          const element = document.querySelector(selector);
-          if (element) {
-            const text = cleanText(element.innerText);
-            if (text.length > 100) { // Threshold for meaningful content
-              return { source: selector, text };
-            }
+      for (const selector of contentSelectors) {
+        const element = document.querySelector(selector);
+        if (element) {
+          const text = cleanText(element.innerText);
+          if (text.length > 100) { // Threshold for meaningful content
+            return { source: selector, text };
           }
         }
+      }
 
-        // 2. Fallback to body innerText
-        const bodyText = cleanText(document.body.innerText);
-        if (bodyText.length > 50) {
-          return { source: 'body.innerText', text: bodyText };
-        }
+      // 2. Fallback to body innerText
+      const bodyText = cleanText(document.body.innerText);
+      if (bodyText.length > 50) {
+        return { source: 'body.innerText', text: bodyText };
+      }
 
-        // 3. Fallback to textContent (includes hidden text, but better than nothing)
-        const bodyContent = cleanText(document.body.textContent);
-        if (bodyContent.length > 50) {
-          return { source: 'body.textContent', text: bodyContent };
-        }
+      // 3. Fallback to textContent (includes hidden text, but better than nothing)
+      const bodyContent = cleanText(document.body.textContent);
+      if (bodyContent.length > 50) {
+        return { source: 'body.textContent', text: bodyContent };
+      }
 
-        // 4. Last resort: meta description
-        const metaDesc = document.querySelector('meta[name="description"]');
-        if (metaDesc && metaDesc.content) {
-          return { source: 'meta[name="description"]', text: metaDesc.content };
-        }
+      // 4. Last resort: meta description
+      const metaDesc = document.querySelector('meta[name="description"]');
+      if (metaDesc && metaDesc.content) {
+        return { source: 'meta[name="description"]', text: metaDesc.content };
+      }
 
-        return { source: 'none', text: "No content extracted" };
-      });
+      return { source: 'none', text: "No content extracted" };
+    });
 
-      logger.info(`Extracted content from ${content.source}, length: ${content.text.length}`);
-      return content.text;
+    logger.info(`Extracted content from ${content.source}, length: ${content.text.length}`);
+    return content.text;
 
-    } catch (error) {
-      logger.warn('Error extracting page content', error);
-      return "Error extracting content";
-    }
+  } catch (error) {
+    logger.warn('Error extracting page content', error);
+    return "Error extracting content";
   }
+}
 }
 
 module.exports = new Crawler();

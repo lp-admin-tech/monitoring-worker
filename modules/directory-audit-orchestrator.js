@@ -167,6 +167,10 @@ class DirectoryAuditOrchestrator {
         try {
             logger.info(`Running full audit for ${location} on ${viewport.name}`, { url });
 
+            // Simulate human behavior (scrolling) to trigger lazy loading
+            // Use 120s duration as requested
+            await this.crawler.simulateHumanBehavior(page, 120000);
+
             // Extract data needed for modules
             const textContent = await this.crawler.extractPageContent(page);
             const metrics = await this.crawler.extractPageMetrics(page);
