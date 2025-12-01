@@ -177,32 +177,35 @@ ${violationList}
   }
 
   buildAnalysisRequestSection() {
-    return `request(
-  task("Analyze findings - OUTPUT in PLAIN TEXT format")
-  
-  mfa_score_reasoning(
-    instruction("Provide 1 sentence per score + 1 summary suggestion")
-    format("**MFA_SCORE_REASONING**\\n<Score Name>: <Value> — <Reason>\\n\\nSuggestion: <text>")
-  )
+    return `
+---
+IMPORTANT: Output your analysis in PLAIN MARKDOWN format. Do NOT use TOON syntax in your response.
 
-  module_analysis(
-    instruction("For each significant module, provide analysis in PLAIN TEXT")
-    output_format("
+## MFA Score Reasoning
+
+Provide analysis for each score in this format:
+<Score Name>: <Value> — <Brief reason>
+
+Then provide ONE suggestion line at the end.
+
+## Module Analysis
+
+For each significant module, use this plain markdown structure:
+
 ## <Module Name>
 **Impact**: <Minimal/Moderate/High> negative impact
-**Issues Found**: <count or 'None'>
+**Issues Found**: <description>
   - <issue 1>
-  - <issue 2>
-**Root Cause**: <cause text>
-**Recommended Fix**: <fix text>
+  - <issue 2 if any>
+**Root Cause**: <explanation>
+**Recommended Fix**: <steps>
 **Positive Signals**:
   ✓<signal 1>
   ✓<signal 2>
-**Summary**: <brief summary text>
-    ")
-    note("Use plain markdown formatting, NOT TOON syntax for output")
-  )
-)`;
+**Summary**: <one sentence>
+
+Remember: Use markdown headers (##), bullet points (-), and check marks (✓). NO parentheses syntax like module(name).
+`;
   }
 
 
