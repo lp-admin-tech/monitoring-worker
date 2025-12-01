@@ -2,23 +2,59 @@ const logger = require('../logger');
 
 async function extractAdElements(page) {
   try {
+    // Wait for Google Ads to load (GPT library ready + slots rendered)
+    logger.info('Waiting for ads to load...');
+    await page.waitForTimeout(3000); // Initial wait for ad scripts
+
+    // Wait for GPT to be ready if it exists
+    try {
+      await page.waitForFunction(
+        () => {
+          return !window.googletag || (window.googletag && window.googletag.apiReady);
+        },
+        { timeout: 5000 }
+      );
+      logger.info('Google Publisher Tag detected and ready');
+    } catch (e) {
+      logger.warn('GPT not detected or timeout waiting for readiness');
+    }
+
+    // Additional wait for ad slots to render
+    await page.waitForTimeout(2000);
+
     const adElements = await page.evaluate(() => {
       const ads = [];
 
       // Helper to check if an element matches ad patterns
       const isAd = (el) => {
-        // 1. ID/Class Patterns
-        if (el.id && (el.id.includes('ad-') || el.id.includes('gpt-') || el.id.includes('dfp-'))) return 'id-pattern';
-        if (el.className && typeof el.className === 'string' && (el.className.includes('ad-slot') || el.className.includes('adsbygoogle'))) return 'class-pattern';
+        const id = el.id || '';
+        const className = (typeof el.className === 'string' ? el.className : '');
 
-        // 2. Attribute Patterns (Strong signals)
+        // 1. ID Patterns (expanded)
+        if (id.match(/ad[-_]|gpt[-_]|dfp[-_]|google[-_]ad|div[-_]ad/i)) return 'id-pattern';
+
+        // 2. Class Patterns (expanded)
+        if (className.match(/adsbygoogle|ad[-_]slot|ad[-_]unit|ad[-_]container|ad[-_]wrapper|google[-_]ad/i)) return 'class-pattern';
+
+        // 3. Attribute Patterns (Strong signals)
         if (el.hasAttribute('data-google-query-id')) return 'google-query-id';
         if (el.hasAttribute('data-ad-slot')) return 'data-ad-slot';
         if (el.hasAttribute('data-ad-unit')) return 'data-ad-unit';
+        if (el.hasAttribute('data-ad-client')) return 'data-ad-client';
+        if (el.hasAttribute('data-adsbygoogle-status')) return 'adsbygoogle-status';
 
-        // 3. Tag Patterns
+        // 4. Tag Patterns
         if (el.tagName === 'INS' && el.classList.contains('adsbygoogle')) return 'google-ins';
         if (el.tagName === 'GPT-AD') return 'gpt-tag';
+        if (el.tagName === 'AMP-AD') return 'amp-ad';
+
+        // 5. Check for iframe with ad-related src
+        if (el.tagName === 'IFRAME') {
+          const src = el.src || el.getAttribute('src') || '';
+          if (src.match(/doubleclick|googlesyndication|googleadservices|adnxs/i)) {
+            return 'ad-iframe';
+          }
+        }
 
         return null;
       };
