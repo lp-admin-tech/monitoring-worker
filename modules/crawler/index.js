@@ -72,7 +72,7 @@ class Crawler {
 
   async crawlPublisher(publisher, options = {}) {
     const {
-      sessionDuration = 100000, 
+      sessionDuration = 120000, // Default 120s (2 minutes)
       viewport = this.viewports[0],
       captureScreenshots = true,
       uploadResults = true,
@@ -572,121 +572,113 @@ class Crawler {
     }
   }
 
-      // Wait a bit after scrolling for lazy items to load
-      await page.waitForTimeout(2000);
-
-    } catch (error) {
-  logger.warn('Error simulating human behavior', error);
-}
-  }
-
   async handleConsentBanners(page) {
-  try {
-    logger.info('Checking for consent banners (CMP)');
+    try {
+      logger.info('Checking for consent banners (CMP)');
 
-    // Common selectors for "Accept/Agree" buttons
-    const consentSelectors = [
-      '#onetrust-accept-btn-handler',
-      '.fc-cta-consent',
-      '.cc-btn.cc-accept',
-      '[aria-label="Accept cookies"]',
-      'button:has-text("Accept All")',
-      'button:has-text("I Agree")',
-      'button:has-text("Accept Cookies")',
-      '.cmp-button',
-      '#accept-cookies',
-    ];
+      // Common selectors for "Accept/Agree" buttons
+      const consentSelectors = [
+        '#onetrust-accept-btn-handler',
+        '.fc-cta-consent',
+        '.cc-btn.cc-accept',
+        '[aria-label="Accept cookies"]',
+        'button:has-text("Accept All")',
+        'button:has-text("I Agree")',
+        'button:has-text("Accept Cookies")',
+        '.cmp-button',
+        '#accept-cookies',
+      ];
 
-    for (const selector of consentSelectors) {
-      try {
-        const button = await page.$(selector);
-        if (button && await button.isVisible()) {
-          logger.info(`Found consent banner with selector: ${selector}, clicking...`);
-          await button.click();
-          await page.waitForTimeout(1000); // Wait for dismissal animation
-          return; // Found and clicked one, usually enough
+      for (const selector of consentSelectors) {
+        try {
+          const button = await page.$(selector);
+          if (button && await button.isVisible()) {
+            logger.info(`Found consent banner with selector: ${selector}, clicking...`);
+            await button.click();
+            await page.waitForTimeout(1000); // Wait for dismissal animation
+            return; // Found and clicked one, usually enough
+          }
+        } catch (e) {
+          // Ignore errors for individual selectors
         }
-      } catch (e) {
-        // Ignore errors for individual selectors
       }
+    } catch (error) {
+      logger.warn('Error handling consent banners', error);
     }
-  } catch (error) {
-    logger.warn('Error handling consent banners', error);
   }
-}
 
 
   async extractPageContent(page) {
-  try {
-    // Wait for body to be available
     try {
-      await page.waitForSelector('body', { timeout: 10000 });
-      // Wait for some content to render (simple heuristic)
-      await page.waitForFunction(() => document.body.innerText.length > 100, { timeout: 5000 }).catch(() => { });
-    } catch (e) {
-      logger.warn('Body selector timeout or content wait failed', e);
-    }
+      // Wait for body to be available
+      try {
+        await page.waitForSelector('body', { timeout: 10000 });
+        // Wait for some content to render (simple heuristic)
+        await page.waitForFunction(() => document.body.innerText.length > 100, { timeout: 5000 }).catch(() => { });
+      } catch (e) {
+        logger.warn('Body selector timeout or content wait failed', e);
+      }
 
-    const content = await page.evaluate(() => {
-      // Helper to clean text
-      const cleanText = (text) => {
-        return text
-          .replace(/\s+/g, ' ')
-          .replace(/[\n\r]+/g, ' ')
-          .trim();
-      };
+      const content = await page.evaluate(() => {
+        // Helper to clean text
+        const cleanText = (text) => {
+          return text
+            .replace(/\s+/g, ' ')
+            .replace(/[\n\r]+/g, ' ')
+            .trim();
+        };
 
-      // 1. Try common content selectors first (usually higher quality)
-      const contentSelectors = [
-        'article',
-        'main',
-        '[role="main"]',
-        '.post-content',
-        '.article-content',
-        '.entry-content',
-        '#content',
-        '.content'
-      ];
+        // 1. Try common content selectors first (usually higher quality)
+        const contentSelectors = [
+          'article',
+          'main',
+          '[role="main"]',
+          '.post-content',
+          '.article-content',
+          '.entry-content',
+          '#content',
+          '.content'
+        ];
 
-      for (const selector of contentSelectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-          const text = cleanText(element.innerText);
-          if (text.length > 100) { // Threshold for meaningful content
-            return { source: selector, text };
+        for (const selector of contentSelectors) {
+          const element = document.querySelector(selector);
+          if (element) {
+            const text = cleanText(element.innerText);
+            if (text.length > 100) { // Threshold for meaningful content
+              return { source: selector, text };
+            }
           }
         }
-      }
 
-      // 2. Fallback to body innerText
-      const bodyText = cleanText(document.body.innerText);
-      if (bodyText.length > 50) {
-        return { source: 'body.innerText', text: bodyText };
-      }
+        // 2. Fallback to body innerText
+        const bodyText = cleanText(document.body.innerText);
+        if (bodyText.length > 50) {
+          return { source: 'body.innerText', text: bodyText };
+        }
 
-      // 3. Fallback to textContent (includes hidden text, but better than nothing)
-      const bodyContent = cleanText(document.body.textContent);
-      if (bodyContent.length > 50) {
-        return { source: 'body.textContent', text: bodyContent };
-      }
+        // 3. Fallback to textContent (includes hidden text, but better than nothing)
+        const bodyContent = cleanText(document.body.textContent);
+        if (bodyContent.length > 50) {
+          return { source: 'body.textContent', text: bodyContent };
+        }
 
-      // 4. Last resort: meta description
-      const metaDesc = document.querySelector('meta[name="description"]');
-      if (metaDesc && metaDesc.content) {
-        return { source: 'meta[name="description"]', text: metaDesc.content };
-      }
+        // 4. Last resort: meta description
+        const metaDesc = document.querySelector('meta[name="description"]');
+        if (metaDesc && metaDesc.content) {
+          return { source: 'meta[name="description"]', text: metaDesc.content };
+        }
 
-      return { source: 'none', text: "No content extracted" };
-    });
+        return { source: 'none', text: "No content extracted" };
+      });
 
-    logger.info(`Extracted content from ${content.source}, length: ${content.text.length}`);
-    return content.text;
+      logger.info(`Extracted content from ${content.source}, length: ${content.text.length}`);
+      return content.text;
 
-  } catch (error) {
-    logger.warn('Error extracting page content', error);
-    return "Error extracting content";
+    } catch (error) {
+      logger.warn('Error extracting page content', error);
+      return "Error extracting content";
+    }
   }
-}
 }
 
 module.exports = new Crawler();
