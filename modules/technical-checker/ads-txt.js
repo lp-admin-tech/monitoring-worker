@@ -362,6 +362,12 @@ async function validateAdsTxt(domain, page = null) {
         invalidEntries: validation.invalid.length,
         directEntries: supplyChain.directCount,
         resellerEntries: supplyChain.resellerCount,
+        directRatio: entries.length > 0
+          ? Math.round((supplyChain.directCount / entries.length) * 100)
+          : 0,
+        resellerRatio: entries.length > 0
+          ? Math.round((supplyChain.resellerCount / entries.length) * 100)
+          : 0,
       },
     };
   } catch (error) {
