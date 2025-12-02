@@ -624,16 +624,19 @@ class Crawler {
     try {
       // Wait for body to be available
       try {
-        await page.waitForSelector('body', { timeout: 10000 });
+        await page.waitForSelector('body', { timeout: 5000 });
         // Wait for some content to render (simple heuristic)
-        await page.waitForFunction(() => document.body.innerText.length > 100, { timeout: 5000 }).catch(() => { });
+        await page.waitForFunction(() => document.body && document.body.innerText.length > 100, { timeout: 5000 }).catch(() => { });
       } catch (e) {
-        logger.warn('Body selector timeout or content wait failed', e);
+        logger.warn('Body selector timeout or content wait failed', { error: e.message });
       }
 
       const content = await page.evaluate(() => {
+        if (!document.body) return { source: 'none', text: "No body element found" };
+
         // Helper to clean text
         const cleanText = (text) => {
+          if (!text) return '';
           return text
             .replace(/\s+/g, ' ')
             .replace(/[\n\r]+/g, ' ')
@@ -687,7 +690,7 @@ class Crawler {
       return content.text;
 
     } catch (error) {
-      logger.warn('Error extracting page content', error);
+      logger.warn('Error extracting page content', { error: error.message });
       return "Error extracting content";
     }
   }

@@ -305,10 +305,21 @@ function calculateAdsTxtScore(validation, supplyChain) {
 
 async function validateAdsTxt(domain, page = null) {
   try {
-    // Use browser-based fetching if page is provided, otherwise HTTP fetch
-    const fetchResult = page
-      ? await fetchAdsTxtWithBrowser(domain, page)
-      : await fetchAdsTxt(domain);
+    // Use browser-based fetching if page is provided
+    let fetchResult = null;
+    if (page) {
+      try {
+        fetchResult = await fetchAdsTxtWithBrowser(domain, page);
+      } catch (e) {
+        logger.warn('Browser fetch for ads.txt threw error, falling back to standard fetch', { error: e.message });
+      }
+    }
+
+    // Fallback to standard fetch if browser fetch failed or wasn't attempted
+    if (!fetchResult || (!fetchResult.found && fetchResult.error === 'Navigation failed')) {
+      logger.info('Using standard HTTP fetch for ads.txt (fallback or primary)');
+      fetchResult = await fetchAdsTxt(domain);
+    }
 
     if (!fetchResult.found) {
       if (fetchResult.skipped) {

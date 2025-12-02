@@ -90,8 +90,10 @@ Output in clean, structured TOON format. Be balanced, evidence-based, and explai
     similarity("${auditData?.similarityScore?.toFixed(1) || 0}%")
   )
   technical(
-    ads_txt_arbitrage("${auditData?.adsTxtArbitrageRisk ? 'YES' : 'NO'}")
-    ads_txt_direct_ratio("${(auditData?.adsTxtDirectRatio * 100)?.toFixed(1) || 0}%")
+    ads_txt_present(${auditData?.technicalCheck?.components?.adsTxt?.found ? "yes" : "no"})
+    ads_txt_authorized_sellers(${auditData?.technicalCheck?.components?.adsTxt?.summary?.validEntries || 0})
+    ads_txt_direct_ratio("${directRatioStr}%")
+    sellers_json_present(${auditData?.technicalCheck?.components?.sellersJson?.found ? "yes" : "no"})
     performance("${auditData?.performanceScore?.toFixed(1) || 0}/100")
     ssl_valid("${auditData?.sslValid !== false ? 'YES' : 'NO'}")
     broken_links("${auditData?.brokenLinkRatio?.toFixed(2) || 0}")

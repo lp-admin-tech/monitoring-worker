@@ -174,6 +174,24 @@ async function processAuditJob(job) {
       started_at: new Date().toISOString(),
     };
 
+    // Clean up any stale 'processing' audits for this site to prevent duplicates in UI
+    try {
+      await supabase.supabaseClient
+        .from('site_audits')
+        .update({
+          status: 'cancelled',
+          error_message: 'Superceded by new audit request',
+          completed_at: new Date().toISOString()
+        })
+        .eq('publisher_id', publisherId)
+        .eq('site_name', siteAudit.site_name)
+        .eq('status', 'processing');
+
+      logger.info(`[${requestId}] Cancelled stale processing audits for ${siteAudit.site_name}`);
+    } catch (cleanupErr) {
+      logger.warn(`[${requestId}] Failed to cleanup stale audits`, cleanupErr);
+    }
+
     let siteAuditId;
     try {
       // Use supabase.supabaseClient for raw access to avoid wrapper issues

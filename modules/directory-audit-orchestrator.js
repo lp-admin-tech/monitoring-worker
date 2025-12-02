@@ -101,7 +101,6 @@ class DirectoryAuditOrchestrator {
             const auditUrlOnAllViewports = async (url, locationName) => {
                 const results = {};
 
-
                 for (const viewport of this.crawler.viewports) {
                     const viewportName = viewport.name || 'desktop';
                     logger.info(`Running audit for ${locationName} on ${viewportName}`, { url });
@@ -211,7 +210,7 @@ class DirectoryAuditOrchestrator {
             // Extract data needed for modules with timeout protection
             const textContent = await Promise.race([
                 this.crawler.extractPageContent(page),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Content extraction timeout')), 10000))
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Content extraction timeout')), 30000))
             ]).catch(() => 'No content extracted');
 
             const metrics = await Promise.race([
@@ -278,10 +277,21 @@ class DirectoryAuditOrchestrator {
                         // Extract domain from URL for technical checks (ads.txt, SSL, etc.)
                         let domain = url;
                         try {
-                            const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
+                            // Handle potential trailing characters or malformed URLs
+                            let cleanUrl = url.trim();
+                            // Remove trailing colon if present (common copy-paste error)
+                            if (cleanUrl.endsWith(':')) cleanUrl = cleanUrl.slice(0, -1);
+
+                            const urlObj = new URL(cleanUrl.startsWith('http') ? cleanUrl : `https://${cleanUrl}`);
                             domain = urlObj.hostname;
                         } catch (e) {
-                            logger.warn('Failed to parse URL for domain extraction, using as-is', { url });
+                            // Fallback: regex extraction to get hostname
+                            const match = url.match(/^(?:https?:\/\/)?([^\/:]+)/i);
+                            if (match && match[1]) {
+                                domain = match[1];
+                            } else {
+                                logger.warn('Failed to parse URL for domain extraction, using as-is', { url });
+                            }
                         }
                         return await this.technicalChecker.runTechnicalHealthCheck(crawlData, domain, {
                             page: page  // Pass page instance for browser-based fetching
