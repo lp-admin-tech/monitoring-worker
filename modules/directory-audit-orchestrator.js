@@ -223,7 +223,15 @@ class DirectoryAuditOrchestrator {
             if (this.technicalChecker) {
                 modulePromises.push(
                     this.runModule('technicalChecker', async () => {
-                        return await this.technicalChecker.runTechnicalHealthCheck(crawlData, url);
+                        // Extract domain from URL for technical checks (ads.txt, SSL, etc.)
+                        let domain = url;
+                        try {
+                            const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
+                            domain = urlObj.hostname;
+                        } catch (e) {
+                            logger.warn('Failed to parse URL for domain extraction, using as-is', { url });
+                        }
+                        return await this.technicalChecker.runTechnicalHealthCheck(crawlData, domain);
                     })
                 );
             }

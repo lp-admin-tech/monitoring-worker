@@ -32,13 +32,30 @@ class ScoringEngine {
     }
 
     if (auditData.adAnalysis) {
+      // The ad analyzer returns nested structure: adAnalysis.data.analysis
+      const adData = auditData.adAnalysis.data || auditData.adAnalysis;
+      const analysis = adData.analysis || adData;
+
       // Phase 3: Prefer Weighted Visual Density
-      flattened.adDensity = auditData.adAnalysis.metrics?.weightedDensity || auditData.adAnalysis.adDensity || auditData.adAnalysis.density?.percentage || 0;
-      flattened.autoRefreshRate = auditData.adAnalysis.autoRefreshRate || auditData.adAnalysis.autoRefresh?.rate || 0;
-      flattened.viewportOcclusionPercent = auditData.adAnalysis.viewportOcclusion?.percent || auditData.adAnalysis.viewportOcclusionPercent || 0;
+      flattened.adDensity = analysis.density?.metrics?.weightedDensity ||
+        analysis.density?.metrics?.adDensity ||
+        auditData.adAnalysis.adDensity ||
+        auditData.adAnalysis.density?.percentage || 0;
+
+      flattened.autoRefreshRate = analysis.autoRefresh?.summary?.criticalRefreshCount ||
+        analysis.autoRefresh?.summary?.warningRefreshCount ||
+        auditData.adAnalysis.autoRefreshRate ||
+        auditData.adAnalysis.autoRefresh?.rate || 0;
+
+      flattened.viewportOcclusionPercent = analysis.visibility?.metrics?.hiddenCount > 0 ?
+        (analysis.visibility?.metrics?.hiddenCount /
+          (analysis.visibility?.metrics?.visibleCount + analysis.visibility?.metrics?.hiddenCount)) :
+        auditData.adAnalysis.viewportOcclusion?.percent ||
+        auditData.adAnalysis.viewportOcclusionPercent || 0;
+
       flattened.suspiciousInteractionRatio = auditData.adAnalysis.suspiciousInteractionRatio || 0;
       flattened.scrollJackingDetected = auditData.adAnalysis.scrollJackingDetected || false;
-      flattened.visualDensity = auditData.adAnalysis.visualDensity || 0;
+      flattened.visualDensity = analysis.density?.metrics?.weightedDensity || auditData.adAnalysis.visualDensity || 0;
     }
 
     if (auditData.policyCheck) {
