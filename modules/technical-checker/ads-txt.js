@@ -80,6 +80,94 @@ async function fetchAdsTxt(domain, timeout = 10000) {
   };
 }
 
+/**
+ * Fetch ads.txt using browser (bypasses bot detection)
+ * @param {string} domain - Domain to fetch ads.txt from
+ * @param {object} page - Playwright page instance (optional)
+ * @param {number} timeout - Timeout in milliseconds
+ * @returns {Promise<{found: boolean, statusCode: number, content: string|null, method: string}>}
+ */
+async function fetchAdsTxtWithBrowser(domain, page = null, timeout = 10000) {
+  if (!page) {
+    logger.info('No browser page provided, falling back to HTTP fetch');
+    return await fetchAdsTxt(domain, timeout);
+  }
+
+  const protocols = ['https://', 'http://'];
+
+  for (const protocol of protocols) {
+    try {
+      const url = `${protocol}${domain}/ads.txt`;
+      logger.info(`Fetching ads.txt via browser from ${url}`);
+
+      // Navigate to ads.txt URL
+      const response = await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: timeout
+      }).catch(err => {
+        logger.warn(`Browser navigation failed for ${url}: ${err.message}`);
+        return null;
+      });
+
+      if (!response) {
+        if (protocol === 'https://') continue;
+        return {
+          found: false,
+          statusCode: 0,
+          content: null,
+          method: 'browser',
+          error: 'Navigation failed'
+        };
+      }
+
+      const statusCode = response.status();
+
+      if (statusCode === 200) {
+        // Extract text content from the page
+        const content = await page.textContent('body').catch(() => null);
+
+        if (content) {
+          logger.info(`Successfully fetched ads.txt via browser from ${url}`);
+          return {
+            found: true,
+            statusCode: 200,
+            content: content.trim(),
+            method: 'browser'
+          };
+        }
+      } else if (statusCode === 404) {
+        if (protocol === 'https://') continue;
+        return {
+          found: false,
+          statusCode: 404,
+          content: null,
+          method: 'browser'
+        };
+      }
+    } catch (error) {
+      logger.warn(`Failed to fetch ads.txt via browser from ${protocol}${domain}: ${error.message}`);
+      if (protocol === 'http://') {
+        // Last attempt failed, return error
+        return {
+          found: false,
+          error: error.message,
+          content: null,
+          method: 'browser',
+          skipped: false
+        };
+      }
+    }
+  }
+
+  return {
+    found: false,
+    error: 'Failed to fetch ads.txt from all protocols via browser',
+    content: null,
+    method: 'browser',
+    skipped: true,
+  };
+}
+
 function parseAdsTxt(content) {
   if (!content) return [];
 
@@ -215,9 +303,12 @@ function calculateAdsTxtScore(validation, supplyChain) {
   };
 }
 
-async function validateAdsTxt(domain) {
+async function validateAdsTxt(domain, page = null) {
   try {
-    const fetchResult = await fetchAdsTxt(domain);
+    // Use browser-based fetching if page is provided, otherwise HTTP fetch
+    const fetchResult = page
+      ? await fetchAdsTxtWithBrowser(domain, page)
+      : await fetchAdsTxt(domain);
 
     if (!fetchResult.found) {
       if (fetchResult.skipped) {

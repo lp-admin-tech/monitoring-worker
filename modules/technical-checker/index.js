@@ -72,7 +72,7 @@ async function runTechnicalHealthCheck(crawlData, domain, options = {}) {
 
   if (!skipAdsTxt) {
     checks.push(
-      validateAdsTxt(domain)
+      validateAdsTxt(domain, options.page || null)
         .then(result => {
           results.components.adsTxt = result;
         })

@@ -238,7 +238,9 @@ class DirectoryAuditOrchestrator {
                         } catch (e) {
                             logger.warn('Failed to parse URL for domain extraction, using as-is', { url });
                         }
-                        return await this.technicalChecker.runTechnicalHealthCheck(crawlData, domain);
+                        return await this.technicalChecker.runTechnicalHealthCheck(crawlData, domain, {
+                            page: page  // Pass page instance for browser-based fetching
+                        });
                     })
                 );
             }
