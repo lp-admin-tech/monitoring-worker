@@ -69,8 +69,33 @@ class DirectoryAuditOrchestrator {
             const directoriesToAudit = Array.from(allDirs);
             auditResults.summary.totalDirectories = directoriesToAudit.length;
 
-            await page.close();
-            await context.close();
+            await page.close().catch(err => logger.warn('Error closing discovery page', { error: err.message }));
+            await context.close().catch(err => logger.warn('Error closing discovery context', { error: err.message }));
+
+            // Safe cleanup helper with timeout
+            const safeCleanup = async (page, context, locationName) => {
+                try {
+                    if (page) {
+                        await Promise.race([
+                            page.close(),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('Page close timeout')), 5000))
+                        ]).catch(err => logger.warn(`Error closing page for ${locationName}`, { error: err.message }));
+                    }
+                } catch (err) {
+                    logger.error(`Failed to close page for ${locationName}`, err);
+                }
+
+                try {
+                    if (context) {
+                        await Promise.race([
+                            context.close(),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('Context close timeout')), 5000))
+                        ]).catch(err => logger.warn(`Error closing context for ${locationName}`, { error: err.message }));
+                    }
+                } catch (err) {
+                    logger.error(`Failed to close context for ${locationName}`, err);
+                }
+            };
 
             // Helper to run audit for a specific URL on all viewports
             const auditUrlOnAllViewports = async (url, locationName) => {
@@ -81,21 +106,24 @@ class DirectoryAuditOrchestrator {
                     const viewportName = viewport.name || 'desktop';
                     logger.info(`Running audit for ${locationName} on ${viewportName}`, { url });
 
-                    // Ensure browser is still available
-                    await this.crawler.ensureBrowser();
-
-                    const vpContext = await this.crawler.browser.newContext({
-                        userAgent: viewport.isMobile
-                            ? this.crawler.userAgents.find(ua => ua.platform === 'mobile')?.agent
-                            : this.crawler.getRandomUserAgent(),
-                        viewport: viewport,
-                        isMobile: viewport.isMobile,
-                        hasTouch: viewport.isMobile,
-                        extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' },
-                    });
-                    const vpPage = await vpContext.newPage();
+                    let vpContext = null;
+                    let vpPage = null;
 
                     try {
+                        // Ensure browser is still available
+                        await this.crawler.ensureBrowser();
+
+                        vpContext = await this.crawler.browser.newContext({
+                            userAgent: viewport.isMobile
+                                ? this.crawler.userAgents.find(ua => ua.platform === 'mobile')?.agent
+                                : this.crawler.getRandomUserAgent(),
+                            viewport: viewport,
+                            isMobile: viewport.isMobile,
+                            hasTouch: viewport.isMobile,
+                            extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' },
+                        });
+                        vpPage = await vpContext.newPage();
+
                         await vpPage.goto(url, { waitUntil: 'networkidle', timeout: 60000 }).catch(() => { });
 
                         const auditResult = await this.runFullAudit(
@@ -117,8 +145,7 @@ class DirectoryAuditOrchestrator {
                         results[viewportName] = { success: false, error: err.message };
                         auditResults.summary.failedAudits++;
                     } finally {
-                        await vpPage.close();
-                        await vpContext.close();
+                        await safeCleanup(vpPage, vpContext, `${locationName}-${viewportName}`);
                     }
                 }
                 return results;
