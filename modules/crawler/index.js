@@ -59,6 +59,18 @@ class Crawler {
     }
   }
 
+  async ensureBrowser() {
+    if (!this.browser || (this.browser.isConnected && !this.browser.isConnected())) {
+      logger.warn('Browser is not available or disconnected. Re-initializing...');
+      try {
+        await this.close();
+      } catch (e) {
+        // Ignore close errors
+      }
+      await this.initialize();
+    }
+  }
+
   async close() {
     if (this.browser) {
       await this.browser.close();

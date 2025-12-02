@@ -163,7 +163,8 @@ function analyzeSupplyChain(entries) {
   }
 
   const total = directCount + resellerCount;
-  const directRatio = total > 0 ? directCount / total : 0;
+  const rawRatio = total > 0 ? directCount / total : 0;
+  const directRatio = Number.isNaN(rawRatio) ? 0 : rawRatio;
 
   logger.info(`Supply Chain Analysis: Found ${directCount} DIRECT and ${resellerCount} RESELLER entries. Direct Ratio: ${(directRatio * 100).toFixed(1)}%`);
 
