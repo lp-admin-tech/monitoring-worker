@@ -273,7 +273,7 @@ class AIAssistanceModule {
 
   async callAlibabaLLM(systemPrompt, userPrompt) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
+    const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout
 
     try {
       const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation', {
@@ -330,7 +330,7 @@ class AIAssistanceModule {
   async performOpenRouterCall(model, apiKey, systemPrompt, userPrompt) {
     const makeRequest = async () => {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
+      const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout
 
       try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
