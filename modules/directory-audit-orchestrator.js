@@ -45,6 +45,11 @@ class DirectoryAuditOrchestrator {
 
             const startTime = Date.now();
 
+            // Ensure browser is available
+            if (!this.crawler.browser || this.crawler.browser.isConnected && !this.crawler.browser.isConnected()) {
+                throw new Error('Browser is not available or has been closed');
+            }
+
             // 1. Directory Discovery (Use Desktop)
             context = await this.crawler.browser.newContext({
                 userAgent: this.crawler.getRandomUserAgent(),
@@ -73,9 +78,18 @@ class DirectoryAuditOrchestrator {
             const auditUrlOnAllViewports = async (url, locationName) => {
                 const results = {};
 
+
                 for (const viewport of this.crawler.viewports) {
                     const viewportName = viewport.name || 'desktop';
                     logger.info(`Running audit for ${locationName} on ${viewportName}`, { url });
+
+                    // Ensure browser is still available
+                    if (!this.crawler.browser || this.crawler.browser.isConnected && !this.crawler.browser.isConnected()) {
+                        logger.error('Browser closed during audit');
+                        results[viewportName] = { success: false, error: 'Browser closed' };
+                        auditResults.summary.failedAudits++;
+                        continue;
+                    }
 
                     const vpContext = await this.crawler.browser.newContext({
                         userAgent: viewport.isMobile
