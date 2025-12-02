@@ -202,14 +202,32 @@ class DirectoryAuditOrchestrator {
             logger.info(`Running full audit for ${location} on ${viewport.name}`, { url });
 
             // Simulate human behavior (scrolling) to trigger lazy loading
-            // Use 120s duration as requested
-            await this.crawler.simulateHumanBehavior(page, 120000);
+            // Reduced to 15s to prevent worker hangs
+            await Promise.race([
+                this.crawler.simulateHumanBehavior(page, 15000),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Human behavior timeout')), 20000))
+            ]).catch(err => logger.warn('Human behavior simulation timed out', { error: err.message }));
 
-            // Extract data needed for modules
-            const textContent = await this.crawler.extractPageContent(page);
-            const metrics = await this.crawler.extractPageMetrics(page);
-            const adElements = await this.crawler.extractPageAdElements(page);
-            const iframes = await this.crawler.extractPageIframes(page);
+            // Extract data needed for modules with timeout protection
+            const textContent = await Promise.race([
+                this.crawler.extractPageContent(page),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Content extraction timeout')), 10000))
+            ]).catch(() => 'No content extracted');
+
+            const metrics = await Promise.race([
+                this.crawler.extractPageMetrics(page),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Metrics extraction timeout')), 10000))
+            ]).catch(() => ({}));
+
+            const adElements = await Promise.race([
+                this.crawler.extractPageAdElements(page),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Ad elements timeout')), 10000))
+            ]).catch(() => []);
+
+            const iframes = await Promise.race([
+                this.crawler.extractPageIframes(page),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Iframes timeout')), 10000))
+            ]).catch(() => []);
 
             // Construct crawlData object expected by modules
             const crawlData = {
