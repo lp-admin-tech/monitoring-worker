@@ -51,7 +51,7 @@ All endpoints require `Authorization: Bearer <WORKER_SECRET>` header.
 
 ## Recent Changes
 
-### 2024-12-03: Improved Ad Detection and Metrics
+### 2024-12-03: Improved Ad Detection, SSL, and ads.txt
 
 **Fixes Applied:**
 1. **Crawler Resource Blocking** - Fixed overly aggressive resource blocking that was preventing ad scripts from loading. Now allows:
@@ -68,9 +68,21 @@ All endpoints require `Authorization: Bearer <WORKER_SECRET>` header.
 3. **HAR Capture Enhancement** - Better network request classification:
    - Automatic ad network identification
    - Bid request detection
-   - Ad network statistics in HAR data
+   - Safe handling of non-JSON payloads
 
-4. **Validation Checks** - Added data quality validation after crawling:
+4. **SSL Detection Fix** - Corrected TLS connection handling:
+   - Proper use of `secureConnect` event
+   - Certificate validity checks (expiry, chain, authorization)
+   - Detailed error reporting for certificate issues
+   - Risk scoring based on certificate status
+
+5. **ads.txt Detection Fix** - Improved content extraction:
+   - Multiple extraction methods (pre, body.innerText, textContent)
+   - Fallback to HTTP fetch if browser fails
+   - Better logging for debugging
+   - Proper handling of plain text responses
+
+6. **Validation Checks** - Added data quality validation after crawling:
    - Content extraction validation
    - Ad element count checking
    - Network request verification
