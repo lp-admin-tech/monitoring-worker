@@ -249,9 +249,68 @@ class RiskEngine {
     return totalWeight === 0 ? 0 : totalWeightedScore / totalWeight;
   }
 
+  /**
+   * Calculate penalty for missing or incomplete data
+   * Missing data is treated as a risk factor rather than a safe indicator
+   * @param {Object} data - Input data object
+   * @param {Object} dataQuality - Data quality metrics from worker
+   * @returns {number} Penalty score (0.0 - 0.3)
+   */
+  calculateMissingDataPenalty(data, dataQuality = null) {
+    let penalty = 0.0;
+    const criticalFields = [
+      'adDensity',
+      'entropyScore',
+      'performanceScore',
+      'aiLikelihood',
+      'clickbaitScore'
+    ];
+
+    // If we have explicit data quality metrics from worker, use them
+    if (dataQuality) {
+      const qualityScore = dataQuality.score || 0;
+      // Lower quality = higher penalty (inverse relationship)
+      penalty = Math.max(0, (1.0 - qualityScore) * 0.3);
+
+      logger.debug('Missing data penalty from quality score', {
+        qualityScore,
+        penalty,
+        isComplete: dataQuality.isComplete
+      });
+
+      return penalty;
+    }
+
+    // Fallback: Check individual critical fields
+    let missingCount = 0;
+    for (const field of criticalFields) {
+      if (data[field] === null || data[field] === undefined) {
+        missingCount++;
+      } else if (field === 'entropyScore' && data[field] === 0) {
+        // Zero entropy is suspicious - likely failed extraction
+        penalty += 0.05;
+      } else if (field === 'adDensity' && data[field] === 0 && !data.totalAds) {
+        // Zero ads with no totalAds field is suspicious
+        penalty += 0.05;
+      }
+    }
+
+    // Each missing critical field adds 0.06 penalty (5 fields max = 0.3)
+    penalty += (missingCount / criticalFields.length) * 0.3;
+
+    logger.debug('Missing data penalty calculated', {
+      missingCount,
+      criticalFieldsTotal: criticalFields.length,
+      penalty
+    });
+
+    return Math.min(penalty, 0.3); // Cap at 0.3
+  }
+
   aggregateRiskScores(data, options = {}) {
     try {
       const method = options.method || 'bayesian';
+      const dataQuality = options.dataQuality || null;
 
       const componentRisks = this.calculateComponentRisks(data);
 
@@ -259,12 +318,19 @@ class RiskEngine {
 
       const weightedScore = this.calculateWeightedScore(componentRisks);
 
-      const overallRisk = Math.max(mfaResult.score, weightedScore);
+      // ✅ Apply missing data penalty
+      const missingDataPenalty = this.calculateMissingDataPenalty(data, dataQuality);
+
+      // Apply penalty to both MFA probability and weighted score
+      const adjustedMfaProbability = Math.min(mfaResult.score + missingDataPenalty, 1.0);
+      const adjustedWeightedScore = Math.min(weightedScore + missingDataPenalty, 1.0);
+
+      const overallRisk = Math.max(adjustedMfaProbability, adjustedWeightedScore);
 
       const result = {
-        mfaProbability: mfaResult.score,
+        mfaProbability: adjustedMfaProbability,
         overallRiskScore: overallRisk,
-        weightedScore,
+        weightedScore: adjustedWeightedScore,
         componentRisks,
         methodology: mfaResult.methodology,
         timestamp: new Date().toISOString(),
@@ -275,12 +341,17 @@ class RiskEngine {
           layout: componentRisks.layout.score,
           gamCorrelation: componentRisks.gamCorrelation.score,
           policy: componentRisks.policy.score
-        }
+        },
+        // ✅ Include data quality information
+        dataQuality: dataQuality || { score: 1.0, isComplete: true },
+        missingDataPenalty
       };
 
       logger.info('Risk aggregation complete', {
         mfaProbability: result.mfaProbability,
-        overallRiskScore: result.overallRiskScore
+        overallRiskScore: result.overallRiskScore,
+        missingDataPenalty,
+        dataQualityScore: dataQuality?.score || 'N/A'
       });
 
       return result;

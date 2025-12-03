@@ -79,6 +79,118 @@ try {
 const app = express();
 app.use(express.json());
 
+/**
+ * Calculate data quality metrics based on module success and data completeness
+ * @param {Object} modules - Module results
+ * @param {Object} crawlData - Crawler data
+ * @returns {Object} Data quality assessment
+ */
+function calculateDataQuality(modules, crawlData) {
+  const metricsCollected = {};
+  const failures = [];
+  let successCount = 0;
+  const totalModules = 5; // crawler, content, ads, policy, technical
+
+  // Check crawler
+  if (crawlData && crawlData.content && crawlData.content.length >= 100) {
+    metricsCollected.crawler = true;
+    successCount++;
+  } else {
+    metricsCollected.crawler = false;
+    failures.push({
+      module: 'crawler',
+      reason: 'Insufficient content extracted',
+      contentLength: crawlData?.content?.length || 0,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // Check content analyzer
+  const contentData = modules.contentAnalyzer?.data;
+  if (contentData && contentData.textLength > 100 && contentData.entropy?.entropyScore > 0) {
+    metricsCollected.content = true;
+    successCount++;
+  } else {
+    metricsCollected.content = false;
+    failures.push({
+      module: 'content',
+      reason: 'Content analysis failed or returned zero metrics',
+      textLength: contentData?.textLength || 0,
+      entropyScore: contentData?.entropy?.entropyScore || 0,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // Check ad analyzer
+  const adData = modules.adAnalyzer?.data;
+  if (adData && (adData.summary?.totalAds > 0 || adData.summary?.adDensity >= 0)) {
+    metricsCollected.ads = true;
+    successCount++;
+  } else {
+    metricsCollected.ads = false;
+    failures.push({
+      module: 'ads',
+      reason: 'Ad analysis returned no data or zero ads detected',
+      totalAds: adData?.summary?.totalAds || 0,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // Check policy checker
+  const policyData = modules.policyChecker?.data;
+  if (policyData && policyData.issues !== undefined) {
+    metricsCollected.policy = true;
+    successCount++;
+  } else {
+    metricsCollected.policy = false;
+    failures.push({
+      module: 'policy',
+      reason: 'Policy check failed or returned no data',
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // Check technical checker
+  const technicalData = modules.technicalChecker?.data;
+  if (technicalData && technicalData.performance?.pageLoadTime > 0) {
+    metricsCollected.technical = true;
+    successCount++;
+  } else {
+    metricsCollected.technical = false;
+    failures.push({
+      module: 'technical',
+      reason: 'Technical check failed or returned no performance data',
+      pageLoadTime: technicalData?.performance?.pageLoadTime || 0,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // Calculate quality score (0.0 - 1.0)
+  const baseScore = successCount / totalModules;
+  const failurePenalty = Math.min(failures.length * 0.05, 0.3);
+  const qualityScore = Math.max(baseScore - failurePenalty, 0.0);
+
+  // Determine quality level
+  let qualityLevel;
+  if (qualityScore >= 0.9) qualityLevel = 'excellent';
+  else if (qualityScore >= 0.7) qualityLevel = 'good';
+  else if (qualityScore >= 0.5) qualityLevel = 'warning';
+  else qualityLevel = 'critical';
+
+  // Audit is complete if at least 70% of metrics collected (3 out of 5)
+  const isComplete = successCount >= Math.ceil(totalModules * 0.7);
+
+  return {
+    score: Math.round(qualityScore * 100) / 100,
+    level: qualityLevel,
+    isComplete,
+    metricsCollected,
+    failures,
+    successCount,
+    totalModules
+  };
+}
+
 const WORKER_SECRET = process.env.WORKER_SECRET;
 const BATCH_CONCURRENCY_LIMIT = parseInt(process.env.BATCH_CONCURRENCY_LIMIT || '3');
 const MODULE_TIMEOUT = parseInt(process.env.MODULE_TIMEOUT || '30000');
@@ -256,6 +368,16 @@ async function processAuditJob(job) {
     // Aggregate results
     const aggregatedResults = directoryAuditOrchestrator.aggregateResults(orchestratorResult);
 
+    // ✅ Calculate Data Quality Metrics
+    const dataQuality = calculateDataQuality(modules, mainSiteCrawlData);
+    logger.info(`[${requestId}] Data Quality Assessment:`, {
+      score: dataQuality.score,
+      level: dataQuality.level,
+      isComplete: dataQuality.isComplete,
+      metricsCollected: dataQuality.metricsCollected,
+      failures: dataQuality.failures
+    });
+
     // DEBUG: Log content analysis data
     logger.info('[DEBUG] Content Analysis Data:', {
       hasData: !!modules.contentAnalyzer.data,
@@ -312,7 +434,7 @@ async function processAuditJob(job) {
     const scorerResult = await executeWithRetry(
       'Scorer',
       async () => {
-        const result = await scorer.calculateComprehensiveScore(scorerInput, { id: publisherId });
+        const result = await scorer.calculateComprehensiveScore(scorerInput, { id: publisherId }, { dataQuality });
         return result;
       },
       {},
@@ -424,6 +546,11 @@ async function processAuditJob(job) {
         })),
         aggregatedScores: aggregatedResults.aggregatedScores
       },
+      // ✅ Data Quality Fields
+      data_quality_score: dataQuality.score,
+      metrics_collected: dataQuality.metricsCollected,
+      is_complete: dataQuality.isComplete,
+      collection_failures: dataQuality.failures,
       completed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };

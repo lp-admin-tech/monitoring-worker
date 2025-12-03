@@ -188,7 +188,9 @@ class ScoringEngine {
       });
 
       const method = options.method || 'bayesian';
-      const riskScores = this.riskEngine.aggregateRiskScores(componentRisks, { method });
+      // ✅ Pass data quality to risk engine
+      const dataQuality = options.dataQuality || null;
+      const riskScores = this.riskEngine.aggregateRiskScores(componentRisks, { method, dataQuality });
       riskScores.riskScore = riskScores.overallRiskScore;
 
       const historicalScores = auditData?.historicalScores || [];
@@ -247,6 +249,9 @@ class ScoringEngine {
         patternDrift,
         explanation,
         methodology: riskScores.methodology,
+        // ✅ Include data quality in response
+        dataQuality: riskScores.dataQuality,
+        missingDataPenalty: riskScores.missingDataPenalty,
         timestamp: new Date().toISOString()
       };
 
@@ -254,7 +259,9 @@ class ScoringEngine {
         module: 'Scorer',
         riskScore: Math.round(riskScores.overallRiskScore * 100) / 100,
         riskLevel: explanation.riskLevel,
-        publisherId: publisherData?.id
+        publisherId: publisherData?.id,
+        dataQualityScore: dataQuality?.score || 'N/A',
+        missingDataPenalty: riskScores.missingDataPenalty || 0
       });
 
       return comprehensiveScore;
