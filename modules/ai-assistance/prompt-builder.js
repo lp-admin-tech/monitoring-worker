@@ -89,7 +89,21 @@ Output in clean, structured TOON format. Be balanced, evidence-based, and explai
     freshness("${auditData?.freshnessScore?.toFixed(1) || 0}/100")
     similarity("${auditData?.similarityScore?.toFixed(1) || 0}%")
   )
-  technical(
+${this.buildTechnicalSection(auditData)}
+  ux_anomalies(
+    viewport_inconsistency("${auditData?.viewportInconsistencyRatio?.toFixed(2) || 0}")
+    rendering_anomalies("${auditData?.renderingAnomalies?.toFixed(1) || 0}")
+    hidden_elements("${auditData?.hiddenElementRatio?.toFixed(2) || 0}")
+  )
+)`;
+  }
+
+  buildTechnicalSection(auditData) {
+    // Calculate directRatioStr BEFORE using it
+    const directRatioVal = Number(auditData?.adsTxtDirectRatio);
+    const directRatioStr = !isNaN(directRatioVal) ? (directRatioVal * 100).toFixed(1) : '0';
+
+    return `  technical(
     ads_txt_present(${auditData?.technicalCheck?.components?.adsTxt?.found ? "yes" : "no"})
     ads_txt_authorized_sellers(${auditData?.technicalCheck?.components?.adsTxt?.summary?.validEntries || 0})
     ads_txt_direct_ratio("${directRatioStr}%")
@@ -99,11 +113,6 @@ Output in clean, structured TOON format. Be balanced, evidence-based, and explai
     broken_links("${auditData?.brokenLinkRatio?.toFixed(2) || 0}")
     reputation("${this.assessDomainReputation(auditData)}")
     whois_privacy("${auditData?.whoisPrivate ? 'YES' : 'NO'}")
-  )
-  ux_anomalies(
-    viewport_inconsistency("${auditData?.viewportInconsistencyRatio?.toFixed(2) || 0}")
-    rendering_anomalies("${auditData?.renderingAnomalies?.toFixed(1) || 0}")
-    hidden_elements("${auditData?.hiddenElementRatio?.toFixed(2) || 0}")
   )
 )`;
   }
