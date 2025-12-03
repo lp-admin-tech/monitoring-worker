@@ -2,9 +2,10 @@ const logger = require('../logger');
 
 async function extractAdElements(page) {
   try {
-    // Wait for Google Ads to load (GPT library ready + slots rendered)
     logger.info('Waiting for ads to load...');
-    await page.waitForTimeout(3000); // Initial wait for ad scripts
+    
+    // Wait for page to be more stable before looking for ads
+    await page.waitForTimeout(3000);
 
     // Wait for GPT to be ready if it exists
     try {
@@ -12,47 +13,103 @@ async function extractAdElements(page) {
         () => {
           return !window.googletag || (window.googletag && window.googletag.apiReady);
         },
-        { timeout: 5000 }
+        { timeout: 8000 }
       );
       logger.info('Google Publisher Tag detected and ready');
     } catch (e) {
       logger.warn('GPT not detected or timeout waiting for readiness');
     }
 
-    // Additional wait for ad slots to render
-    await page.waitForTimeout(2000);
+    // Wait for Prebid if present
+    try {
+      await page.waitForFunction(
+        () => !window.pbjs || (window.pbjs && window.pbjs.requestBids),
+        { timeout: 3000 }
+      );
+    } catch (e) {
+      // Prebid not present or not ready, continue
+    }
+
+    // Additional wait for ad slots to render after auction completes
+    await page.waitForTimeout(3000);
 
     const adElements = await page.evaluate(() => {
       const ads = [];
+      const processedElements = new Set();
 
-      // Helper to check if an element matches ad patterns
+      // Comprehensive ad detection patterns
       const isAd = (el) => {
-        const id = el.id || '';
-        const className = (typeof el.className === 'string' ? el.className : '');
+        const id = (el.id || '').toLowerCase();
+        const className = (typeof el.className === 'string' ? el.className.toLowerCase() : '');
+        const tagName = el.tagName.toUpperCase();
 
-        // 1. ID Patterns (expanded)
-        if (id.match(/ad[-_]|gpt[-_]|dfp[-_]|google[-_]ad|div[-_]ad/i)) return 'id-pattern';
+        // 1. ID Patterns (comprehensive)
+        const idPatterns = [
+          /^ad[-_\s]?/i, /[-_\s]ad$/i, /[-_\s]ad[-_\s]/i,
+          /^gpt[-_]/i, /^dfp[-_]/i, /^div[-_]gpt/i,
+          /google[-_]?ad/i, /adsense/i, /advert/i,
+          /^banner[-_]?ad/i, /^sidebar[-_]?ad/i,
+          /^leaderboard/i, /^skyscraper/i, /^rectangle/i,
+          /^sticky[-_]?ad/i, /^floating[-_]?ad/i
+        ];
+        for (const pattern of idPatterns) {
+          if (pattern.test(id)) return 'id-pattern';
+        }
 
-        // 2. Class Patterns (expanded)
-        if (className.match(/adsbygoogle|ad[-_]slot|ad[-_]unit|ad[-_]container|ad[-_]wrapper|google[-_]ad/i)) return 'class-pattern';
+        // 2. Class Patterns (comprehensive)
+        const classPatterns = [
+          /adsbygoogle/i, /ad[-_]?slot/i, /ad[-_]?unit/i, 
+          /ad[-_]?container/i, /ad[-_]?wrapper/i, /ad[-_]?block/i,
+          /google[-_]?ad/i, /dfp[-_]?ad/i, /gpt[-_]?ad/i,
+          /sponsored/i, /advertisement/i, /promo[-_]?banner/i,
+          /native[-_]?ad/i, /in[-_]?feed[-_]?ad/i,
+          /taboola/i, /outbrain/i, /mgid/i, /revcontent/i
+        ];
+        for (const pattern of classPatterns) {
+          if (pattern.test(className)) return 'class-pattern';
+        }
 
-        // 3. Attribute Patterns (Strong signals)
-        if (el.hasAttribute('data-google-query-id')) return 'google-query-id';
-        if (el.hasAttribute('data-ad-slot')) return 'data-ad-slot';
-        if (el.hasAttribute('data-ad-unit')) return 'data-ad-unit';
-        if (el.hasAttribute('data-ad-client')) return 'data-ad-client';
-        if (el.hasAttribute('data-adsbygoogle-status')) return 'adsbygoogle-status';
+        // 3. Data Attribute Patterns (Strong signals)
+        const dataAttrs = [
+          'data-google-query-id', 'data-ad-slot', 'data-ad-unit', 
+          'data-ad-client', 'data-adsbygoogle-status', 'data-ad-format',
+          'data-full-width-responsive', 'data-matched-content-ui-type',
+          'data-taboola-widget-id', 'data-outbrain-widget-id'
+        ];
+        for (const attr of dataAttrs) {
+          if (el.hasAttribute(attr)) return 'data-attribute';
+        }
 
         // 4. Tag Patterns
-        if (el.tagName === 'INS' && el.classList.contains('adsbygoogle')) return 'google-ins';
-        if (el.tagName === 'GPT-AD') return 'gpt-tag';
-        if (el.tagName === 'AMP-AD') return 'amp-ad';
+        if (tagName === 'INS' && (el.classList.contains('adsbygoogle') || el.hasAttribute('data-ad-client'))) return 'google-ins';
+        if (tagName === 'GPT-AD') return 'gpt-tag';
+        if (tagName === 'AMP-AD' || tagName === 'AMP-EMBED') return 'amp-ad';
 
         // 5. Check for iframe with ad-related src
-        if (el.tagName === 'IFRAME') {
-          const src = el.src || el.getAttribute('src') || '';
-          if (src.match(/doubleclick|googlesyndication|googleadservices|adnxs/i)) {
+        if (tagName === 'IFRAME') {
+          const src = (el.src || el.getAttribute('src') || '').toLowerCase();
+          const adIframeDomains = [
+            'doubleclick.net', 'googlesyndication.com', 'googleadservices.com',
+            'adnxs.com', 'pubmatic.com', 'rubiconproject.com', 'openx.net',
+            'criteo.com', 'amazon-adsystem.com', 'taboola.com', 'outbrain.com',
+            'mgid.com', 'sharethrough.com', 'triplelift.com'
+          ];
+          if (adIframeDomains.some(domain => src.includes(domain))) {
             return 'ad-iframe';
+          }
+          // Check iframe ID/name patterns
+          if (/google_ads|ad[-_]?frame/i.test(el.id || el.name || '')) {
+            return 'ad-iframe-id';
+          }
+        }
+
+        // 6. Check parent context (sometimes ads are wrapped)
+        const parent = el.parentElement;
+        if (parent) {
+          const parentId = (parent.id || '').toLowerCase();
+          const parentClass = (typeof parent.className === 'string' ? parent.className.toLowerCase() : '');
+          if (/^ad[-_]|[-_]ad[-_]|[-_]ad$/i.test(parentId) || /ad[-_]?container|ad[-_]?wrapper/i.test(parentClass)) {
+            return 'parent-context';
           }
         }
 

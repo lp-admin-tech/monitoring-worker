@@ -135,24 +135,56 @@ class Crawler {
         Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
       });
 
-      // 2. Performance: Smart Resource Blocking
+      // 2. Performance: Smart Resource Blocking (FIXED: Allow ad-related resources)
       await page.route('**/*', (route) => {
         const type = route.request().resourceType();
-        const url = route.request().url();
+        const url = route.request().url().toLowerCase();
 
-        // Block heavy media and fonts
-        if (['media', 'font', 'other'].includes(type)) {
+        // CRITICAL: Allow all scripts (including ad scripts) to load for proper detection
+        if (type === 'script') {
+          return route.continue();
+        }
+
+        // Allow ad-related network requests (important for HAR capture and detection)
+        const adDomains = [
+          'doubleclick.net', 'googlesyndication.com', 'googleadservices.com',
+          'googletag', 'gpt.js', 'adnxs.com', 'adsystem', 'pubmatic.com',
+          'rubiconproject.com', 'openx.net', 'criteo', 'amazon-adsystem',
+          'prebid', 'moatads.com', 'adsafeprotected.com', 'iasds01.com',
+          'taboola.com', 'outbrain.com', 'mgid.com', 'revcontent.com',
+          'teads.tv', 'sharethrough.com', 'triplelift.com', 'indexexchange.com'
+        ];
+        
+        if (adDomains.some(domain => url.includes(domain))) {
+          return route.continue();
+        }
+
+        // Allow XHR/fetch requests (may contain ad config or bidding data)
+        if (type === 'xhr' || type === 'fetch') {
+          return route.continue();
+        }
+
+        // Block heavy media files (video, audio) but NOT video player scripts
+        if (type === 'media') {
           return route.abort();
         }
 
-        // Smart Block Images: Block download but allow request to register in DOM
-        // (We need the <img> tags for feature image detection, but don't need the bytes)
+        // Block fonts to speed up loading
+        if (type === 'font') {
+          return route.abort();
+        }
+
+        // Block large images but allow small ones (may be ad creatives)
         if (type === 'image') {
+          // Allow ad-related images
+          if (adDomains.some(domain => url.includes(domain))) {
+            return route.continue();
+          }
           return route.abort();
         }
 
-        // Block Analytics & Trackers (Optional list)
-        if (url.includes('google-analytics') || url.includes('facebook.com/tr')) {
+        // Block analytics trackers that don't help with ad detection
+        if (url.includes('google-analytics.com/') || url.includes('facebook.com/tr')) {
           return route.abort();
         }
 
@@ -222,6 +254,32 @@ class Crawler {
 
       const har = harRecorder.getHAR();
 
+      // Validation: Log warnings if critical data is missing
+      const validationIssues = [];
+      if (!content || content.length < 100) {
+        validationIssues.push('Content extraction failed or returned minimal text');
+      }
+      if (!adElements || adElements.length === 0) {
+        validationIssues.push('No ad elements detected - site may have no ads or detection failed');
+      }
+      if (!har.log.entries || har.log.entries.length < 5) {
+        validationIssues.push('Very few network requests captured - resource blocking may be too aggressive');
+      }
+      if (har.log.adAnalysis && har.log.adAnalysis.adRequestCount === 0) {
+        validationIssues.push('No ad network requests detected');
+      }
+
+      if (validationIssues.length > 0) {
+        logger.warn('Crawl data validation issues detected:', {
+          issues: validationIssues,
+          url: publisher.site_url,
+          contentLength: content?.length || 0,
+          adElementCount: adElements?.length || 0,
+          networkRequestCount: har.log?.entries?.length || 0,
+          adRequestCount: har.log?.adAnalysis?.adRequestCount || 0
+        });
+      }
+
       const crawlData = {
         publisherId: publisher.id,
         publisherName: publisher.site_name,
@@ -236,14 +294,22 @@ class Crawler {
         },
         adElements,
         iframes,
-        content, // Add content to crawlData
+        content,
         mutationLog,
+        har, // Include full HAR data for downstream analysis
         domSnapshot: {
           elementCount: domSnapshot.elementCount,
           iframeCount: domSnapshot.iframeCount,
           scriptCount: domSnapshot.scriptCount,
           adSlotIds: domSnapshot.adSlotIds,
         },
+        validationIssues,
+        dataQuality: {
+          hasContent: content && content.length >= 100,
+          hasAds: adElements && adElements.length > 0,
+          hasNetworkData: har.log.entries && har.log.entries.length >= 5,
+          adNetworksDetected: har.log.adAnalysis?.detectedNetworks || []
+        }
       };
 
       if (captureScreenshots) {
