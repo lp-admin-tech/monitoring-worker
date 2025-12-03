@@ -100,9 +100,8 @@ async function fetchAdsTxtWithBrowser(domain, page = null, timeout = 10000) {
       const url = `${protocol}${domain}/ads.txt`;
       logger.info(`Fetching ads.txt via browser from ${url}`);
 
-      // Navigate to ads.txt URL
       const response = await page.goto(url, {
-        waitUntil: 'domcontentloaded',
+        waitUntil: 'networkidle',
         timeout: timeout
       }).catch(err => {
         logger.warn(`Browser navigation failed for ${url}: ${err.message}`);
@@ -123,19 +122,37 @@ async function fetchAdsTxtWithBrowser(domain, page = null, timeout = 10000) {
       const statusCode = response.status();
 
       if (statusCode === 200) {
-        // Extract text content from the page
-        const content = await page.textContent('body').catch(() => null);
+        let content = null;
+        
+        try {
+          content = await page.evaluate(() => {
+            const pre = document.querySelector('pre');
+            if (pre) return pre.textContent;
+            const body = document.body;
+            if (body) return body.innerText || body.textContent;
+            return document.documentElement.textContent;
+          });
+        } catch (evalError) {
+          logger.warn('Page evaluate failed, trying textContent', { error: evalError.message });
+          content = await page.textContent('body').catch(() => null);
+        }
 
-        if (content) {
-          logger.info(`Successfully fetched ads.txt via browser from ${url}`);
+        if (content && content.trim().length > 0) {
+          logger.info(`Successfully fetched ads.txt via browser from ${url}`, {
+            contentLength: content.length,
+            preview: content.substring(0, 100)
+          });
           return {
             found: true,
             statusCode: 200,
             content: content.trim(),
             method: 'browser'
           };
+        } else {
+          logger.warn('ads.txt response was empty or could not be parsed', { url });
         }
       } else if (statusCode === 404) {
+        logger.info(`ads.txt not found (404) at ${url}`);
         if (protocol === 'https://') continue;
         return {
           found: false,
@@ -143,11 +160,12 @@ async function fetchAdsTxtWithBrowser(domain, page = null, timeout = 10000) {
           content: null,
           method: 'browser'
         };
+      } else {
+        logger.warn(`Unexpected status code for ads.txt: ${statusCode}`, { url });
       }
     } catch (error) {
       logger.warn(`Failed to fetch ads.txt via browser from ${protocol}${domain}: ${error.message}`);
       if (protocol === 'http://') {
-        // Last attempt failed, return error
         return {
           found: false,
           error: error.message,
@@ -159,13 +177,8 @@ async function fetchAdsTxtWithBrowser(domain, page = null, timeout = 10000) {
     }
   }
 
-  return {
-    found: false,
-    error: 'Failed to fetch ads.txt from all protocols via browser',
-    content: null,
-    method: 'browser',
-    skipped: true,
-  };
+  logger.info(`Falling back to HTTP fetch for ads.txt after browser attempts failed for ${domain}`);
+  return await fetchAdsTxt(domain, timeout);
 }
 
 function parseAdsTxt(content) {

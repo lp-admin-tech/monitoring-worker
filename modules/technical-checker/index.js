@@ -25,6 +25,14 @@ async function runTechnicalHealthCheck(crawlData, domain, options = {}) {
     skipViewportOcclusion = false,
   } = options;
 
+  logger.info('Starting technical health check', {
+    domain,
+    hasPage: !!options.page,
+    hasCrawlData: !!crawlData,
+    skipSSL,
+    skipAdsTxt
+  });
+
   const startTime = Date.now();
   const results = {
     timestamp: new Date().toISOString(),
@@ -41,6 +49,13 @@ async function runTechnicalHealthCheck(crawlData, domain, options = {}) {
     checks.push(
       validateSSL(domain)
         .then(result => {
+          logger.info('SSL validation result', {
+            domain,
+            valid: result.valid,
+            daysToExpiry: result.daysToExpiry,
+            issuer: result.issuer,
+            error: result.error
+          });
           results.components.ssl = {
             ...result,
             score: normalizeSSLScore(result),
@@ -74,6 +89,16 @@ async function runTechnicalHealthCheck(crawlData, domain, options = {}) {
     checks.push(
       validateAdsTxt(domain, options.page || null)
         .then(result => {
+          logger.info('ads.txt validation result', {
+            domain,
+            found: result.found,
+            valid: result.valid,
+            score: result.score,
+            quality: result.quality,
+            entriesCount: result.entries?.length || 0,
+            error: result.error,
+            skipped: result.skipped
+          });
           results.components.adsTxt = result;
         })
         .catch(error => {

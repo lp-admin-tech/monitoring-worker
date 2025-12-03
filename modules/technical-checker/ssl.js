@@ -13,24 +13,51 @@ const ISSUER_REPUTATION = {
 };
 
 async function validateSSL(domain, timeout = 10000) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const timeoutHandle = setTimeout(() => {
-      reject(new Error(`SSL validation timeout for ${domain}`));
+      logger.warn('SSL validation timeout', { domain });
+      resolve({
+        valid: false,
+        error: 'SSL validation timeout',
+        daysToExpiry: 0,
+        chainValid: false,
+        issuer: 'Unknown',
+        issuerReputation: 0,
+        riskScore: 100,
+      });
     }, timeout);
 
     try {
       const options = {
-        hostname: domain,
+        host: domain,
         port: 443,
-        method: 'HEAD',
+        servername: domain,
         rejectUnauthorized: true,
       };
 
-      const req = tls.connect(options, (socket) => {
+      const socket = tls.connect(options);
+
+      socket.on('secureConnect', () => {
         clearTimeout(timeoutHandle);
 
         try {
+          const authorized = socket.authorized;
+          const authorizationError = socket.authorizationError;
           const cert = socket.getPeerCertificate(false);
+          
+          if (!cert || Object.keys(cert).length === 0) {
+            socket.destroy();
+            return resolve({
+              valid: false,
+              error: 'No certificate returned',
+              daysToExpiry: 0,
+              chainValid: false,
+              issuer: 'Unknown',
+              issuerReputation: 0,
+              riskScore: 100,
+            });
+          }
+
           const issuer = cert.issuer?.O || 'Unknown';
 
           if (!cert.valid_from || !cert.valid_to) {
@@ -48,46 +75,103 @@ async function validateSSL(domain, timeout = 10000) {
 
           const now = new Date();
           const expiryDate = new Date(cert.valid_to);
-          const daysToExpiry = Math.max(
-            0,
-            Math.floor((expiryDate - now) / (1000 * 60 * 60 * 24))
-          );
+          const startDate = new Date(cert.valid_from);
+          const daysToExpiry = Math.floor((expiryDate - now) / (1000 * 60 * 60 * 24));
 
-          const chainValid = validateCertificateChain(socket);
+          const isExpired = daysToExpiry < 0;
+          const isNotYetValid = now < startDate;
+          const chainValid = authorized && !authorizationError;
           const issuerRep = ISSUER_REPUTATION[issuer] || 0.65;
 
-          let riskScore = 0;
-          if (daysToExpiry < 7) riskScore += 40;
-          else if (daysToExpiry < 30) riskScore += 20;
-          else if (daysToExpiry < 90) riskScore += 5;
+          const certValid = !isExpired && !isNotYetValid && chainValid;
 
-          if (!chainValid) riskScore += 35;
-          if (issuerRep < 0.7) riskScore += 15;
+          let riskScore = 0;
+          if (isExpired) {
+            riskScore = 100;
+          } else if (isNotYetValid) {
+            riskScore = 100;
+          } else {
+            if (daysToExpiry < 7) riskScore += 40;
+            else if (daysToExpiry < 30) riskScore += 20;
+            else if (daysToExpiry < 90) riskScore += 5;
+
+            if (!chainValid) riskScore += 35;
+            if (issuerRep < 0.7) riskScore += 15;
+          }
 
           socket.destroy();
 
+          logger.info('SSL validation completed', {
+            domain,
+            valid: certValid,
+            authorized,
+            authorizationError: authorizationError || null,
+            daysToExpiry,
+            isExpired,
+            issuer,
+            chainValid
+          });
+
           resolve({
-            valid: true,
-            daysToExpiry: daysToExpiry,
+            valid: certValid,
+            daysToExpiry: Math.max(0, daysToExpiry),
             expiryDate: cert.valid_to,
             chainValid: chainValid,
             issuer: issuer,
             issuerReputation: issuerRep,
             subject: cert.subject?.CN || 'Unknown',
             riskScore: Math.min(100, riskScore),
-            warnings: generateSSLWarnings(daysToExpiry, !chainValid, issuerRep),
+            warnings: generateSSLWarnings(daysToExpiry, !chainValid, issuerRep, isExpired),
+            isExpired,
+            isNotYetValid,
+            authorized,
+            authorizationError: authorizationError || null,
           });
         } catch (error) {
           socket.destroy();
-          reject(error);
+          logger.warn('SSL certificate parsing failed', { domain, error: error.message });
+          resolve({
+            valid: false,
+            error: error.message,
+            daysToExpiry: 0,
+            chainValid: false,
+            issuer: 'Unknown',
+            issuerReputation: 0,
+            riskScore: 100,
+          });
         }
       });
 
-      req.on('error', (error) => {
+      socket.on('error', (error) => {
         clearTimeout(timeoutHandle);
+        logger.warn('SSL connection error', { domain, error: error.message });
+        
+        const isCertError = error.message.includes('certificate') || 
+                           error.code === 'CERT_HAS_EXPIRED' ||
+                           error.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
+                           error.code === 'SELF_SIGNED_CERT_IN_CHAIN' ||
+                           error.code === 'DEPTH_ZERO_SELF_SIGNED_CERT';
+        
         resolve({
           valid: false,
           error: error.message,
+          errorCode: error.code || null,
+          daysToExpiry: 0,
+          chainValid: false,
+          issuer: 'Unknown',
+          issuerReputation: 0,
+          riskScore: 100,
+          isCertificateError: isCertError,
+        });
+      });
+
+      socket.on('timeout', () => {
+        clearTimeout(timeoutHandle);
+        socket.destroy();
+        logger.warn('SSL socket timeout', { domain });
+        resolve({
+          valid: false,
+          error: 'SSL connection timeout',
           daysToExpiry: 0,
           chainValid: false,
           issuer: 'Unknown',
@@ -96,44 +180,29 @@ async function validateSSL(domain, timeout = 10000) {
         });
       });
 
-      req.on('timeout', () => {
-        clearTimeout(timeoutHandle);
-        req.destroy();
-        reject(new Error('SSL connection timeout'));
-      });
+      socket.setTimeout(timeout);
     } catch (error) {
       clearTimeout(timeoutHandle);
-      reject(error);
+      logger.warn('SSL validation failed', { domain, error: error.message });
+      resolve({
+        valid: false,
+        error: error.message,
+        daysToExpiry: 0,
+        chainValid: false,
+        issuer: 'Unknown',
+        issuerReputation: 0,
+        riskScore: 100,
+      });
     }
   });
 }
 
-function validateCertificateChain(socket) {
-  try {
-    const cert = socket.getPeerCertificate(true);
-    if (!cert || !cert.issuer) return false;
-
-    let current = cert;
-    let depth = 0;
-    const maxDepth = 5;
-
-    while (current && depth < maxDepth) {
-      if (!current.issuer) return depth > 0;
-      current = current.issuerCertificate;
-      depth++;
-    }
-
-    return depth > 0;
-  } catch (error) {
-    logger.warn('Failed to validate certificate chain', { error: error.message });
-    return false;
-  }
-}
-
-function generateSSLWarnings(daysToExpiry, chainInvalid, issuerReputation) {
+function generateSSLWarnings(daysToExpiry, chainInvalid, issuerReputation, isExpired = false) {
   const warnings = [];
 
-  if (daysToExpiry < 7) {
+  if (isExpired) {
+    warnings.push('Certificate has expired');
+  } else if (daysToExpiry < 7) {
     warnings.push('Certificate expires within 7 days');
   } else if (daysToExpiry < 30) {
     warnings.push('Certificate expires within 30 days');
