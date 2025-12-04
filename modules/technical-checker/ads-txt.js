@@ -1,3 +1,4 @@
+// modules/technical-checker/ads-txt.js
 const logger = require('../logger');
 const axios = require('axios');
 
@@ -24,105 +25,147 @@ const KNOWN_NETWORKS = {
   'smartyads.com': 'SmartyAds',
 };
 
-async function fetchAdsTxt(domain, timeout = 8000) {
-  // Normalize domain - remove protocol, trailing chars, port
-  const originalDomain = domain;
-  domain = domain
-    .replace(/^https?:\/\//, '') // Remove protocol
-    .replace(/:\d+$/, '')         // Remove port number
-    .replace(/[:\\/]+$/, '')      // Remove trailing colons or slashes
-    .trim();
+/**
+ * Lightweight in-memory cache hook (optional)
+ * Replace with redis/memcached if needed.
+ */
+const _simpleCache = new Map();
+function cacheSet(key, value, ttl = 60) {
+  _simpleCache.set(key, { value, expires: Date.now() + ttl * 1000 });
+}
+function cacheGet(key) {
+  const v = _simpleCache.get(key);
+  if (!v) return null;
+  if (Date.now() > v.expires) {
+    _simpleCache.delete(key);
+    return null;
+  }
+  return v.value;
+}
 
-  if (!domain || domain.length === 0) {
-    logger.warn('Invalid domain for ads.txt fetch after normalization', { original: originalDomain });
-    return {
-      found: false,
-      error: 'Invalid domain',
-      content: null,
-      skipped: true
-    };
+/**
+ * Normalize domain string safely:
+ * - remove protocol
+ * - remove trailing port
+ * - remove trailing slashes
+ * - DO NOT strip subdomains other than `www.` when it's a prefix
+ */
+function normalizeDomain(input) {
+  if (!input || typeof input !== 'string') return '';
+  let domain = input.trim();
+
+  // remove protocol
+  domain = domain.replace(/^https?:\/\//i, '');
+
+  // remove path after first slash (we only want host)
+  if (domain.includes('/')) domain = domain.split('/')[0];
+
+  // remove :port
+  domain = domain.replace(/:\d+$/, '');
+
+  // remove trailing dots/slashes
+  domain = domain.replace(/[\/\s]+$/g, '');
+
+  // keep subdomains except strip single leading "www."
+  if (domain.toLowerCase().startsWith('www.')) domain = domain.slice(4);
+
+  return domain;
+}
+
+/**
+ * Basic "is likely valid seller id" check.
+ * We allow letters, numbers, dashes, underscores, dots.
+ * This covers "pub-1234567890123456", numeric IDs, and other provider IDs.
+ */
+function isLikelySellerId(id) {
+  if (!id || typeof id !== 'string') return false;
+  return /^[a-zA-Z0-9\-\_\.]+$/.test(id);
+}
+
+/**
+ * Try multiple url variants to fetch ads.txt
+ * Returns { found, url, statusCode, content, error, method }
+ */
+async function fetchAdsTxt(domain, timeout = 8000) {
+  const normalized = normalizeDomain(domain);
+  if (!normalized) {
+    logger.warn('Invalid domain for ads.txt fetch after normalization', { original: domain });
+    return { found: false, error: 'Invalid domain', content: null, skipped: true };
   }
 
-  logger.info('Fetching ads.txt for domain', { original: originalDomain, normalized: domain });
+  const cacheKey = `ads:${normalized}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) {
+    logger.debug('ads.txt cache hit', { domain: normalized });
+    return cached;
+  }
 
-  // Only strip www if it's the prefix (not for subdomains like ads.example.com)
-  const cleanDomain = domain.startsWith('www.') ? domain.slice(4) : domain;
+  logger.info('Fetching ads.txt for domain', { original: domain, normalized });
 
-  // Try all combinations: https/http with/without www
   const candidates = [
-    `https://${cleanDomain}/ads.txt`,
-    `http://${cleanDomain}/ads.txt`,
-    `https://www.${cleanDomain}/ads.txt`,
-    `http://www.${cleanDomain}/ads.txt`,
+    `https://${normalized}/ads.txt`,
+    `http://${normalized}/ads.txt`,
+    `https://www.${normalized}/ads.txt`,
+    `http://www.${normalized}/ads.txt`,
   ];
 
   for (const url of candidates) {
     try {
       logger.debug(`Trying ads.txt at ${url}`);
-
       const response = await axios.get(url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
           'Accept': 'text/plain, */*',
         },
-        timeout: timeout,
+        timeout,
         maxRedirects: 5,
-        validateStatus: () => true, // Don't throw on any status code
+        validateStatus: () => true,
       });
 
-      // Success: 200-299 with non-empty content
-      if (response.status >= 200 && response.status < 300) {
-        const content = response.data;
-        if (content && content.trim().length > 0) {
-          logger.info(`✓ Successfully fetched ads.txt from ${url}`, {
-            contentLength: content.length,
-            statusCode: response.status,
-          });
-          return {
-            found: true,
-            statusCode: response.status,
-            content: content,
-            url: url,
-          };
-        } else {
-          logger.warn(`ads.txt found but empty at ${url}`);
+      const status = response.status || 0;
+
+      if (status >= 200 && status < 300) {
+        let content = response.data;
+
+        // strip BOM if present
+        if (typeof content === 'string' && content.charCodeAt(0) === 0xFEFF) {
+          content = content.slice(1);
         }
-      } else if (response.status === 404) {
+
+        if (content && String(content).trim().length > 0) {
+          const result = { found: true, url, statusCode: status, content: String(content), method: 'http' };
+          cacheSet(cacheKey, result, 120); // cache for 2 minutes
+          logger.info('✓ Successfully fetched ads.txt', { url, statusCode: status, contentLength: result.content.length });
+          return result;
+        } else {
+          logger.warn('ads.txt found but empty', { url, statusCode: status });
+        }
+      } else if (status === 404) {
         logger.debug(`ads.txt not found at ${url} (404)`);
       } else {
-        logger.debug(`Unexpected status ${response.status} for ${url}`);
+        logger.debug(`Unexpected status ${status} for ${url}`);
       }
-    } catch (error) {
-      // Log but continue to next candidate
-      if (error.code === 'ECONNABORTED') {
+    } catch (err) {
+      if (err && err.code === 'ECONNABORTED') {
         logger.debug(`Timeout fetching ${url}`);
-      } else if (error.code === 'ENOTFOUND') {
+      } else if (err && err.code === 'ENOTFOUND') {
         logger.debug(`DNS failed for ${url}`);
       } else {
-        logger.debug(`Error fetching ${url}: ${error.message}`);
+        logger.debug(`Error fetching ${url}: ${err && err.message ? err.message : String(err)}`);
       }
+      // continue to next candidate
     }
   }
 
-  logger.warn(`ads.txt not found after trying all variants`, {
-    domain: originalDomain,
-    candidatesTried: candidates.length,
-  });
-
-  return {
-    found: false,
-    error: 'ads.txt not found at any URL variant',
-    content: null,
-    skipped: false,
-  };
+  logger.warn('ads.txt not found after trying all variants', { domain: normalized, candidatesTried: candidates.length });
+  const res = { found: false, error: 'ads.txt not found', content: null, statusCode: 404, method: 'http' };
+  cacheSet(cacheKey, res, 30); // cache misses short
+  return res;
 }
 
 /**
- * Fetch ads.txt using browser (bypasses bot detection)
- * @param {string} domain - Domain to fetch ads.txt from
- * @param {object} page - Playwright page instance (optional)
- * @param {number} timeout - Timeout in milliseconds
- * @returns {Promise<{found: boolean, statusCode: number, content: string|null, method: string}>}
+ * Browser-based fetch fallback (use sparingly).
+ * If page is null or navigation fails, falls back to fetchAdsTxt.
  */
 async function fetchAdsTxtWithBrowser(domain, page = null, timeout = 10000) {
   if (!page) {
@@ -130,179 +173,165 @@ async function fetchAdsTxtWithBrowser(domain, page = null, timeout = 10000) {
     return await fetchAdsTxt(domain, timeout);
   }
 
-  // Normalize domain - remove protocol, trailing chars, port
-  const originalDomain = domain;
-  domain = domain
-    .replace(/^https?:\/\//, '') // Remove protocol
-    .replace(/:\d+$/, '')         // Remove port number
-    .replace(/[:\\/]+$/, '')      // Remove trailing colons or slashes
-    .replace(/^www\./, '')        // Remove www prefix for consistency
-    .trim();
-
-  if (!domain || domain.length === 0) {
-    logger.warn('Invalid domain for ads.txt fetch after normalization', { original: originalDomain });
-    return {
-      found: false,
-      error: 'Invalid domain',
-      content: null,
-      method: 'browser',
-      skipped: true
-    };
+  const normalized = normalizeDomain(domain);
+  if (!normalized) {
+    logger.warn('Invalid domain for browser ads.txt fetch', { domain });
+    return { found: false, error: 'Invalid domain', method: 'browser', skipped: true };
   }
 
-  logger.info('Normalized domain for ads.txt', { original: originalDomain, normalized: domain });
+  // Only attempt https then http; let fetchAdsTxt handle other variants if browser fails
+  const urls = [`https://${normalized}/ads.txt`, `http://${normalized}/ads.txt`];
 
-  const protocols = ['https://', 'http://'];
-
-  for (const protocol of protocols) {
+  for (const url of urls) {
     try {
-      const url = `${protocol}${domain}/ads.txt`;
-      logger.info(`Fetching ads.txt via browser from ${url}`);
-
-      const response = await page.goto(url, {
-        waitUntil: 'networkidle',
-        timeout: timeout
-      }).catch(err => {
-        logger.warn(`Browser navigation failed for ${url}: ${err.message}`);
+      logger.debug(`Browser navigating to ${url}`);
+      const response = await page.goto(url, { waitUntil: 'networkidle', timeout }).catch(e => {
+        logger.debug(`Browser navigation failed: ${e && e.message}`);
         return null;
       });
 
-      if (!response) {
-        if (protocol === 'https://') continue;
-        return {
-          found: false,
-          statusCode: 0,
-          content: null,
-          method: 'browser',
-          error: 'Navigation failed'
-        };
-      }
+      if (!response) continue;
 
-      const statusCode = response.status();
-
-      if (statusCode === 200) {
+      const status = response.status && typeof response.status === 'function' ? response.status() : (response.status || 0);
+      if (status >= 200 && status < 300) {
+        // Attempt to read raw text from page
         let content = null;
-
         try {
+          // prefer raw text content from body or pre tags
           content = await page.evaluate(() => {
             const pre = document.querySelector('pre');
-            if (pre) return pre.textContent;
+            if (pre) return pre.innerText || pre.textContent;
             const body = document.body;
             if (body) return body.innerText || body.textContent;
-            return document.documentElement.textContent;
+            return document.documentElement ? document.documentElement.textContent : null;
           });
-        } catch (evalError) {
-          logger.warn('Page evaluate failed, trying textContent', { error: evalError.message });
-          content = await page.textContent('body').catch(() => null);
+        } catch (e) {
+          logger.debug('Page evaluate failed', { error: e && e.message });
+          // fallback to Playwright textContent if available
+          try {
+            content = await page.textContent('body');
+          } catch (_) {
+            content = null;
+          }
         }
 
-        if (content && content.trim().length > 0) {
-          logger.info(`Successfully fetched ads.txt via browser from ${url}`, {
-            contentLength: content.length,
-            preview: content.substring(0, 100)
-          });
-          return {
-            found: true,
-            statusCode: 200,
-            content: content.trim(),
-            method: 'browser'
-          };
+        if (content && String(content).trim().length > 0) {
+          const result = { found: true, url, statusCode: status, content: String(content).trim(), method: 'browser' };
+          logger.info('✓ Successfully fetched ads.txt via browser', { url, contentLength: result.content.length });
+          return result;
         } else {
-          logger.warn('ads.txt response was empty or could not be parsed', { url });
+          logger.warn('Browser fetched ads.txt but content empty', { url });
         }
-      } else if (statusCode === 404) {
-        logger.info(`ads.txt not found (404) at ${url}`);
-        if (protocol === 'https://') continue;
-        return {
-          found: false,
-          statusCode: 404,
-          content: null,
-          method: 'browser'
-        };
       } else {
-        logger.warn(`Unexpected status code for ads.txt: ${statusCode}`, { url });
+        logger.debug('Browser response code', { url, status });
       }
-    } catch (error) {
-      logger.warn(`Failed to fetch ads.txt via browser from ${protocol}${domain}: ${error.message}`);
-      if (protocol === 'http://') {
-        return {
-          found: false,
-          error: error.message,
-          content: null,
-          method: 'browser',
-          skipped: false
-        };
-      }
+    } catch (err) {
+      logger.warn('Browser attempt to fetch ads.txt failed', { domain: normalized, error: err && err.message });
+      // continue to next url
     }
   }
 
-  logger.info(`Falling back to HTTP fetch for ads.txt after browser attempts failed for ${domain}`);
+  // fallback to HTTP fetch
+  logger.info('Falling back to HTTP fetch after browser attempts failed', { domain: normalized });
   return await fetchAdsTxt(domain, timeout);
 }
 
+/**
+ * Parse ads.txt content robustly:
+ * - Normalize CRLF
+ * - Remove inline comments
+ * - Support multiple separators (comma, tab)
+ */
 function parseAdsTxt(content) {
-  if (!content) return [];
+  if (!content || typeof content !== 'string') return [];
 
-  const lines = content.split('\n');
+  // Normalize
+  let text = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  // Remove BOM if present
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+
+  const lines = text.split('\n');
   const entries = [];
 
-  for (const line of lines) {
-    const trimmed = line.trim();
+  for (let raw of lines) {
+    if (!raw) continue;
+    // strip leading/trailing whitespace
+    let line = raw.trim();
 
-    if (!trimmed || trimmed.startsWith('#')) continue;
+    // skip comments & empty
+    if (!line || line.startsWith('#')) continue;
 
-    const parts = trimmed.split(',').map(p => p.trim());
-
-    if (parts.length >= 3) {
-      entries.push({
-        domain: parts[0],
-        sellerId: parts[1],
-        accountType: parts[2],
-        certId: parts[3] || null,
-        raw: trimmed,
-      });
+    // remove inline comments (anything after unescaped '#')
+    const commentIdx = line.indexOf('#');
+    if (commentIdx >= 0) {
+      line = line.substring(0, commentIdx).trim();
+      if (!line) continue;
     }
+
+    // split by comma or tab (ads.txt spec uses comma but some sites use tabs)
+    const parts = line.split(/\s*,\s*|\t+/).map(p => p.trim()).filter(Boolean);
+
+    if (parts.length < 3) {
+      // ignore malformed lines but record them as raw for diagnostics
+      entries.push({ raw: raw.trim(), malformed: true });
+      continue;
+    }
+
+    entries.push({
+      domain: parts[0],
+      sellerId: parts[1],
+      accountType: parts[2],
+      certId: parts[3] || null,
+      raw: line
+    });
   }
 
   return entries;
 }
 
+/**
+ * Validate seller ids and match known networks by suffix (not only exact).
+ */
 function validateSellerIds(entries) {
-  const results = {
-    valid: [],
-    unknown: [],
-    invalid: [],
-  };
+  const results = { valid: [], unknown: [], invalid: [] };
 
   for (const entry of entries) {
-    if (!entry.sellerId || !entry.domain) {
-      results.invalid.push({
-        entry: entry,
-        reason: 'Missing seller ID or domain',
-      });
+    if (!entry || entry.malformed) {
+      results.invalid.push({ entry, reason: 'malformed' });
       continue;
     }
 
-    const domainKey = entry.domain.toLowerCase();
-    const networkName = KNOWN_NETWORKS[domainKey];
+    const sellerId = entry.sellerId;
+    const domain = entry.domain;
+    if (!sellerId || !domain) {
+      results.invalid.push({ entry, reason: 'Missing seller ID or domain' });
+      continue;
+    }
 
-    if (networkName) {
-      results.valid.push({
-        entry: entry,
-        networkName: networkName,
-      });
-    } else {
-      const isValidFormat = /^[a-zA-Z0-9-]+$/.test(entry.sellerId);
-      if (isValidFormat) {
-        results.unknown.push({
-          entry: entry,
-          reason: 'Unknown domain',
-        });
+    // match known network by checking if domain endsWith a known key
+    const domainKey = domain.toLowerCase();
+    let matchedNetwork = null;
+    for (const k of Object.keys(KNOWN_NETWORKS)) {
+      if (domainKey === k || domainKey.endsWith('.' + k) || k.endsWith('.' + domainKey)) {
+        matchedNetwork = KNOWN_NETWORKS[k];
+        break;
+      }
+    }
+
+    if (matchedNetwork) {
+      // if known network, accept it if sellerId looks like a plausible id
+      if (isLikelySellerId(sellerId)) {
+        results.valid.push({ entry, networkName: matchedNetwork });
       } else {
-        results.invalid.push({
-          entry: entry,
-          reason: 'Invalid seller ID format',
-        });
+        results.invalid.push({ entry, reason: 'Invalid seller ID format for known network' });
+      }
+    } else {
+      // unknown network: accept any plausible format as unknown (not invalid)
+      if (isLikelySellerId(sellerId)) {
+        results.unknown.push({ entry, reason: 'Unknown network but plausible seller id' });
+      } else {
+        results.invalid.push({ entry, reason: 'Invalid seller ID format' });
       }
     }
   }
@@ -310,132 +339,136 @@ function validateSellerIds(entries) {
   return results;
 }
 
+/**
+ * Analyze supply chain: count DIRECT vs RESELLER entries
+ */
 function analyzeSupplyChain(entries) {
   let directCount = 0;
   let resellerCount = 0;
+  let otherCount = 0;
 
   for (const entry of entries) {
-    if (entry.accountType && entry.accountType.toUpperCase() === 'DIRECT') {
-      directCount++;
-    } else if (entry.accountType && entry.accountType.toUpperCase() === 'RESELLER') {
-      resellerCount++;
-    }
+    if (!entry || entry.malformed) continue;
+    const t = entry.accountType ? String(entry.accountType).toUpperCase().trim() : '';
+    if (t === 'DIRECT') directCount++;
+    else if (t === 'RESELLER') resellerCount++;
+    else otherCount++;
   }
 
-  const total = directCount + resellerCount;
-  const rawRatio = total > 0 ? directCount / total : 0;
-  const directRatio = Number.isNaN(rawRatio) ? 0 : rawRatio;
+  const total = directCount + resellerCount + otherCount;
+  const directRatio = total > 0 ? directCount / total : 0;
 
-  logger.info(`Supply Chain Analysis: Found ${directCount} DIRECT and ${resellerCount} RESELLER entries. Direct Ratio: ${(directRatio * 100).toFixed(1)}%`);
+  logger.info('Supply Chain Analysis', { directCount, resellerCount, otherCount, directRatio });
 
   return {
     directCount,
     resellerCount,
+    otherCount,
     directRatio,
-    isArbitrageRisk: total > 5 && directCount === 0, // High risk if many partners but ZERO direct relationships
+    isArbitrageRisk: total > 5 && directCount === 0
   };
 }
 
+/**
+ * Calculate ads.txt score - safer math and clearer boundaries
+ */
 function calculateAdsTxtScore(validation, supplyChain) {
-  if (validation.valid.length === 0 && validation.unknown.length === 0) {
+  const validCount = validation.valid.length;
+  const unknownCount = validation.unknown.length;
+  const invalidCount = validation.invalid.length;
+  const totalEntries = validCount + unknownCount + invalidCount;
+
+  // if no entries at all, consider poor but not catastrophic (site might rely on other monetization)
+  if (totalEntries === 0) {
     return {
       score: 30,
       quality: 'poor',
-      reason: 'No valid entries or likely malformed ads.txt',
+      reason: 'No entries',
+      validCount,
+      unknownCount,
+      invalidCount
     };
   }
 
-  const totalEntries = validation.valid.length + validation.unknown.length + validation.invalid.length;
-  const validRatio = (validation.valid.length + validation.unknown.length) / totalEntries;
+  // weight valid higher than unknown
+  const weightedValid = validCount + (unknownCount * 0.5);
+  const validRatio = Math.max(0, Math.min(1, weightedValid / totalEntries));
 
   let score = 100;
+  // penalty scale
+  if (validRatio < 0.2) score -= 50;
+  else if (validRatio < 0.5) score -= 30;
+  else if (validRatio < 0.8) score -= 10;
 
-  // Penalty for invalid formatting
-  if (validRatio < 0.5) score -= 40;
-  else if (validRatio < 0.8) score -= 20;
+  score -= invalidCount * 5; // small penalty per invalid line
 
-  if (validation.invalid.length > 0) score -= 10;
-  if (validation.valid.length === 0) score -= 15;
-
-  // Supply Chain Penalties (Phase 3)
+  // supply chain penalties
   if (supplyChain && supplyChain.isArbitrageRisk) {
-    score -= 30; // Heavy penalty for pure arbitrage sites
-    logger.info('Penalty applied: Site identified as Arbitrage (0 DIRECT entries)');
+    score -= 30;
   } else if (supplyChain && supplyChain.directRatio < 0.1) {
-    score -= 10; // Minor penalty for very low direct relationships
+    score -= 8;
   }
 
+  score = Math.round(Math.max(20, score));
+
+  const quality = score >= 80 ? 'excellent' : score >= 60 ? 'good' : score >= 40 ? 'fair' : 'poor';
+
   return {
-    score: Math.max(20, Math.round(score)),
-    quality: score >= 80 ? 'excellent' : score >= 60 ? 'good' : score >= 40 ? 'fair' : 'poor',
-    validCount: validation.valid.length,
-    unknownCount: validation.unknown.length,
-    invalidCount: validation.invalid.length,
-    supplyChain: supplyChain,
+    score,
+    quality,
+    reason: null,
+    validCount,
+    unknownCount,
+    invalidCount,
   };
 }
 
+/**
+ * Main validator function
+ */
 async function validateAdsTxt(domain, page = null) {
   try {
-    // Use browser-based fetching if page is provided
+    // try browser only if page is provided; browser may bypass bot protections
     let fetchResult = null;
     if (page) {
       try {
         fetchResult = await fetchAdsTxtWithBrowser(domain, page);
       } catch (e) {
-        logger.warn('Browser fetch for ads.txt threw error, falling back to standard fetch', { error: e.message });
+        logger.warn('Browser fetch threw, falling back to HTTP', { error: e && e.message });
       }
     }
 
-    // Fallback to standard fetch if browser fetch failed or wasn't attempted
-    if (!fetchResult || (!fetchResult.found && fetchResult.error === 'Navigation failed')) {
-      logger.info('Using standard HTTP fetch for ads.txt (fallback or primary)');
+    if (!fetchResult || !fetchResult.found) {
       fetchResult = await fetchAdsTxt(domain);
     }
 
-    if (!fetchResult.found) {
-      if (fetchResult.skipped) {
-        logger.warn('ads.txt validation skipped', {
-          domain,
-          reason: fetchResult.error,
-        });
-        return {
-          found: false,
-          valid: null,
-          statusCode: fetchResult.statusCode || 0,
-          error: fetchResult.error,
-          entries: [],
-          validation: null,
-          score: 50,
-          quality: 'skipped',
-          skipped: true,
-        };
-      }
-
+    if (!fetchResult || !fetchResult.found) {
+      // Not found
       return {
         found: false,
         valid: false,
-        statusCode: fetchResult.statusCode || 404,
-        error: fetchResult.error,
+        statusCode: fetchResult ? fetchResult.statusCode || 404 : 404,
+        error: fetchResult ? fetchResult.error : 'not_found',
         entries: [],
         validation: null,
         score: 0,
         quality: 'missing',
+        url: fetchResult ? fetchResult.url : null
       };
     }
 
     const entries = parseAdsTxt(fetchResult.content);
     const validation = validateSellerIds(entries);
-    const supplyChain = analyzeSupplyChain(entries); // Phase 3
+    const supplyChain = analyzeSupplyChain(entries);
     const scoreResult = calculateAdsTxtScore(validation, supplyChain);
 
     return {
       found: true,
       valid: validation.invalid.length === 0,
-      statusCode: 200,
-      entries: entries,
-      validation: validation,
-      supplyChain: supplyChain, // Return this data
+      statusCode: fetchResult.statusCode || 200,
+      entries,
+      validation,
+      supplyChain,
       score: scoreResult.score,
       quality: scoreResult.quality,
       summary: {
@@ -445,28 +478,21 @@ async function validateAdsTxt(domain, page = null) {
         invalidEntries: validation.invalid.length,
         directEntries: supplyChain.directCount,
         resellerEntries: supplyChain.resellerCount,
-        directRatio: entries.length > 0
-          ? Math.round((supplyChain.directCount / entries.length) * 100)
-          : 0,
-        resellerRatio: entries.length > 0
-          ? Math.round((supplyChain.resellerCount / entries.length) * 100)
-          : 0,
+        directRatio: entries.length > 0 ? Math.round((supplyChain.directCount / entries.length) * 100) : 0,
+        resellerRatio: entries.length > 0 ? Math.round((supplyChain.resellerCount / entries.length) * 100) : 0,
       },
+      url: fetchResult.url || null
     };
   } catch (error) {
-    logger.warn('ads.txt validation error, audit will continue', {
-      domain,
-      error: error.message,
-    });
+    logger.warn('ads.txt validation error', { domain, error: error && error.message });
     return {
       found: false,
       valid: null,
-      error: error.message,
+      error: error && error.message,
       entries: [],
       validation: null,
       score: 50,
-      quality: 'error',
-      skipped: true,
+      quality: 'error'
     };
   }
 }
@@ -474,6 +500,7 @@ async function validateAdsTxt(domain, page = null) {
 module.exports = {
   validateAdsTxt,
   fetchAdsTxt,
+  fetchAdsTxtWithBrowser,
   parseAdsTxt,
   validateSellerIds,
   calculateAdsTxtScore,
