@@ -24,6 +24,27 @@ const KNOWN_NETWORKS = {
 };
 
 async function fetchAdsTxt(domain, timeout = 10000) {
+  // Normalize domain - remove protocol, trailing chars, port
+  const originalDomain = domain;
+  domain = domain
+    .replace(/^https?:\/\//, '') // Remove protocol
+    .replace(/:\d+$/, '')         // Remove port number
+    .replace(/[:\\/]+$/, '')      // Remove trailing colons or slashes
+    .replace(/^www\./, '')        // Remove www prefix for consistency
+    .trim();
+
+  if (!domain || domain.length === 0) {
+    logger.warn('Invalid domain for ads.txt fetch after normalization', { original: originalDomain });
+    return {
+      found: false,
+      error: 'Invalid domain',
+      content: null,
+      skipped: true
+    };
+  }
+
+  logger.debug('Normalized domain for ads.txt HTTP fetch', { original: originalDomain, normalized: domain });
+
   const protocols = ['https://', 'http://'];
 
   for (const protocol of protocols) {
@@ -93,6 +114,28 @@ async function fetchAdsTxtWithBrowser(domain, page = null, timeout = 10000) {
     return await fetchAdsTxt(domain, timeout);
   }
 
+  // Normalize domain - remove protocol, trailing chars, port
+  const originalDomain = domain;
+  domain = domain
+    .replace(/^https?:\/\//, '') // Remove protocol
+    .replace(/:\d+$/, '')         // Remove port number
+    .replace(/[:\\/]+$/, '')      // Remove trailing colons or slashes
+    .replace(/^www\./, '')        // Remove www prefix for consistency
+    .trim();
+
+  if (!domain || domain.length === 0) {
+    logger.warn('Invalid domain for ads.txt fetch after normalization', { original: originalDomain });
+    return {
+      found: false,
+      error: 'Invalid domain',
+      content: null,
+      method: 'browser',
+      skipped: true
+    };
+  }
+
+  logger.info('Normalized domain for ads.txt', { original: originalDomain, normalized: domain });
+
   const protocols = ['https://', 'http://'];
 
   for (const protocol of protocols) {
@@ -123,7 +166,7 @@ async function fetchAdsTxtWithBrowser(domain, page = null, timeout = 10000) {
 
       if (statusCode === 200) {
         let content = null;
-        
+
         try {
           content = await page.evaluate(() => {
             const pre = document.querySelector('pre');

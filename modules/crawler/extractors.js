@@ -2,10 +2,25 @@ const logger = require('../logger');
 
 async function extractAdElements(page) {
   try {
+    // Check if page is already closed
+    if (page.isClosed()) {
+      logger.warn('Cannot extract ad elements: page is already closed');
+      return [];
+    }
+
     logger.info('Waiting for ads to load...');
-    
+
     // Wait for page to be more stable before looking for ads
-    await page.waitForTimeout(3000);
+    // Use waitForLoadState instead of waitForTimeout when possible
+    await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {
+      logger.debug('Network idle timeout, continuing with extraction');
+    });
+
+    // Check if page is still open
+    if (page.isClosed()) {
+      logger.warn('Page closed during initial load wait');
+      return [];
+    }
 
     // Wait for GPT to be ready if it exists
     try {
@@ -17,7 +32,17 @@ async function extractAdElements(page) {
       );
       logger.info('Google Publisher Tag detected and ready');
     } catch (e) {
+      if (e.message && e.message.includes('closed')) {
+        logger.warn('Page closed while waiting for GPT');
+        return [];
+      }
       logger.warn('GPT not detected or timeout waiting for readiness');
+    }
+
+    // Check if page is still open
+    if (page.isClosed()) {
+      logger.warn('Page closed after GPT check');
+      return [];
     }
 
     // Wait for Prebid if present
@@ -27,11 +52,29 @@ async function extractAdElements(page) {
         { timeout: 3000 }
       );
     } catch (e) {
+      if (e.message && e.message.includes('closed')) {
+        logger.warn('Page closed while waiting for Prebid');
+        return [];
+      }
       // Prebid not present or not ready, continue
     }
 
+    // Check if page is still open before final wait
+    if (page.isClosed()) {
+      logger.warn('Page closed before final ad load wait');
+      return [];
+    }
+
     // Additional wait for ad slots to render after auction completes
-    await page.waitForTimeout(3000);
+    await page.waitForLoadState('load', { timeout: 3000 }).catch(() => {
+      logger.debug('Load state timeout, continuing with extraction');
+    });
+
+    // Final check before evaluation
+    if (page.isClosed()) {
+      logger.warn('Page closed before ad element evaluation');
+      return [];
+    }
 
     const adElements = await page.evaluate(() => {
       const ads = [];
@@ -58,7 +101,7 @@ async function extractAdElements(page) {
 
         // 2. Class Patterns (comprehensive)
         const classPatterns = [
-          /adsbygoogle/i, /ad[-_]?slot/i, /ad[-_]?unit/i, 
+          /adsbygoogle/i, /ad[-_]?slot/i, /ad[-_]?unit/i,
           /ad[-_]?container/i, /ad[-_]?wrapper/i, /ad[-_]?block/i,
           /google[-_]?ad/i, /dfp[-_]?ad/i, /gpt[-_]?ad/i,
           /sponsored/i, /advertisement/i, /promo[-_]?banner/i,
@@ -71,7 +114,7 @@ async function extractAdElements(page) {
 
         // 3. Data Attribute Patterns (Strong signals)
         const dataAttrs = [
-          'data-google-query-id', 'data-ad-slot', 'data-ad-unit', 
+          'data-google-query-id', 'data-ad-slot', 'data-ad-unit',
           'data-ad-client', 'data-adsbygoogle-status', 'data-ad-format',
           'data-full-width-responsive', 'data-matched-content-ui-type',
           'data-taboola-widget-id', 'data-outbrain-widget-id'
@@ -213,6 +256,11 @@ async function extractAdElements(page) {
 
     return adElements;
   } catch (error) {
+    // Handle browser closure errors gracefully
+    if (error.message && (error.message.includes('closed') || error.message.includes('Target page'))) {
+      logger.warn('Failed to extract ad elements: page or browser was closed', { error: error.message });
+      return [];
+    }
     logger.error('Failed to extract ad elements', error);
     return [];
   }
@@ -220,6 +268,12 @@ async function extractAdElements(page) {
 
 async function extractIframes(page) {
   try {
+    // Check if page is closed before extraction
+    if (page.isClosed()) {
+      logger.warn('Cannot extract iframes: page is already closed');
+      return [];
+    }
+
     const iframes = await page.evaluate(() => {
       const frames = [];
 
@@ -279,6 +333,11 @@ async function extractIframes(page) {
 
     return iframes;
   } catch (error) {
+    // Handle browser closure errors gracefully
+    if (error.message && (error.message.includes('closed') || error.message.includes('Target page'))) {
+      logger.warn('Failed to extract iframes: page or browser was closed', { error: error.message });
+      return [];
+    }
     logger.error('Failed to extract iframes', error);
     return [];
   }

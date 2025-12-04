@@ -48,6 +48,14 @@ class DirectoryAuditOrchestrator {
             // Ensure browser is available (auto-recover if needed)
             await this.crawler.ensureBrowser();
 
+            // Normalize URL at entry point to catch trailing colons and other issues
+            const normalizedUrl = this.normalizeUrl(publisher.site_url);
+            if (!normalizedUrl) {
+                throw new Error(`Invalid site URL: ${publisher.site_url}`);
+            }
+            publisher.site_url = normalizedUrl;
+            logger.info('Normalized publisher site URL', { original: publisher.site_url, normalized: normalizedUrl });
+
             // 1. Directory Discovery (Use Desktop)
             context = await this.crawler.browser.newContext({
                 userAgent: this.crawler.getRandomUserAgent(),
@@ -183,6 +191,36 @@ class DirectoryAuditOrchestrator {
     }
 
     /**
+     * Normalize and validate URL
+     * Removes trailing colons, slashes, ensures protocol
+     */
+    normalizeUrl(url) {
+        if (!url) {
+            logger.warn('normalizeUrl called with empty URL');
+            return null;
+        }
+
+        let normalized = url.trim();
+
+        // Remove trailing colons and slashes
+        normalized = normalized.replace(/[:\\/]+$/, '');
+
+        // Ensure protocol exists
+        if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
+            normalized = `https://${normalized}`;
+        }
+
+        try {
+            const urlObj = new URL(normalized);
+            logger.debug('URL normalized successfully', { original: url, normalized: urlObj.href });
+            return urlObj.href;
+        } catch (e) {
+            logger.warn('URL normalization failed', { url, error: e.message });
+            return null;
+        }
+    }
+
+    /**
      * Run all analysis modules on a single URL
      */
     async runFullAudit(url, publisherId, siteAuditId, page, location = 'main', viewport = { width: 1920, height: 1080, name: 'desktop' }) {
@@ -275,22 +313,17 @@ class DirectoryAuditOrchestrator {
                 modulePromises.push(
                     this.runModule('technicalChecker', async () => {
                         // Extract domain from URL for technical checks (ads.txt, SSL, etc.)
+                        // URL is already normalized at entry point, so this should be safe
                         let domain = url;
                         try {
-                            // Handle potential trailing characters or malformed URLs
-                            let cleanUrl = url.trim();
-                            // Remove trailing colon if present (common copy-paste error)
-                            if (cleanUrl.endsWith(':')) cleanUrl = cleanUrl.slice(0, -1);
-
-                            const urlObj = new URL(cleanUrl.startsWith('http') ? cleanUrl : `https://${cleanUrl}`);
+                            const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
                             domain = urlObj.hostname;
                         } catch (e) {
-                            // Fallback: regex extraction to get hostname
+                            logger.warn('Failed to parse URL for domain extraction', { url, error: e.message });
+                            // Fallback: regex extraction
                             const match = url.match(/^(?:https?:\/\/)?([^\/:]+)/i);
                             if (match && match[1]) {
                                 domain = match[1];
-                            } else {
-                                logger.warn('Failed to parse URL for domain extraction, using as-is', { url });
                             }
                         }
                         return await this.technicalChecker.runTechnicalHealthCheck(crawlData, domain, {
