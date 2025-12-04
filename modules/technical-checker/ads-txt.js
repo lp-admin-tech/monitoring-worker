@@ -1,4 +1,5 @@
 const logger = require('../logger');
+const axios = require('axios');
 
 const KNOWN_NETWORKS = {
   'google.com': 'Google Ad Manager',
@@ -30,7 +31,6 @@ async function fetchAdsTxt(domain, timeout = 10000) {
     .replace(/^https?:\/\//, '') // Remove protocol
     .replace(/:\d+$/, '')         // Remove port number
     .replace(/[:\\/]+$/, '')      // Remove trailing colons or slashes
-    .replace(/^www\./, '')        // Remove www prefix for consistency
     .trim();
 
   if (!domain || domain.length === 0) {
@@ -45,59 +45,76 @@ async function fetchAdsTxt(domain, timeout = 10000) {
 
   logger.debug('Normalized domain for ads.txt HTTP fetch', { original: originalDomain, normalized: domain });
 
-  const protocols = ['https://', 'http://'];
+  // Only strip www if domain starts with it (don't strip from subdomains)
+  const cleanDomain = domain.startsWith('www.') ? domain.slice(4) : domain;
 
-  for (const protocol of protocols) {
+  // Try multiple URL candidates
+  const candidates = [
+    `https://${cleanDomain}/ads.txt`,
+    `http://${cleanDomain}/ads.txt`,
+    `https://www.${cleanDomain}/ads.txt`,
+    `http://www.${cleanDomain}/ads.txt`,
+  ];
+
+  logger.info(`Attempting to fetch ads.txt from ${candidates.length} URL variants`, { domain: cleanDomain });
+
+  for (const url of candidates) {
     try {
-      const url = `${protocol}${domain}/ads.txt`;
-      logger.info(`Fetching ads.txt from ${url}`);
+      logger.debug(`Trying ads.txt URL: ${url}`);
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeout);
+      const response = await axios.get(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/plain, */*',
+        },
+        timeout: timeout,
+        maxRedirects: 5,
+        validateStatus: () => true, // Don't throw on any status code
+      });
 
-      try {
-        const response = await fetch(url, {
-          signal: controller.signal,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          },
-        });
-
-        clearTimeout(timeoutId);
-
-        if (response.ok) {
-          const content = await response.text();
+      // Success: 2xx status with non-empty content
+      if (response.status >= 200 && response.status < 300) {
+        const content = response.data;
+        if (content && typeof content === 'string' && content.trim().length > 0) {
+          logger.info(`Successfully fetched ads.txt from ${url}`, {
+            contentLength: content.length,
+            statusCode: response.status,
+          });
           return {
             found: true,
-            statusCode: 200,
-            content: content,
-          };
-        } else if (response.status === 404) {
-          // If 404, no need to try other protocols usually, but maybe mixed content issues?
-          // Let's continue to next protocol only if it was HTTPS and we want to try HTTP
-          if (protocol === 'https://') continue;
-
-          return {
-            found: false,
             statusCode: response.status,
-            content: null,
+            content: content,
+            url: url,
           };
+        } else {
+          logger.warn(`ads.txt found but empty at ${url}`);
         }
-      } catch (error) {
-        clearTimeout(timeoutId);
-        logger.warn(`Failed to fetch ads.txt from ${url}: ${error.message}`);
-        // Continue to next protocol
+      } else if (response.status === 404) {
+        logger.debug(`ads.txt not found at ${url} (404)`);
+      } else {
+        logger.debug(`Unexpected status ${response.status} for ${url}`);
       }
-    } catch (e) {
-      // Ignore setup errors
+    } catch (error) {
+      // Log but continue to next candidate
+      if (error.code === 'ECONNABORTED') {
+        logger.debug(`Timeout fetching ${url}`);
+      } else if (error.code === 'ENOTFOUND') {
+        logger.debug(`DNS resolution failed for ${url}`);
+      } else {
+        logger.debug(`Error fetching ${url}: ${error.message}`);
+      }
     }
   }
 
+  logger.warn(`ads.txt not found after trying all ${candidates.length} URL variants`, {
+    domain: originalDomain,
+  });
+
   return {
     found: false,
-    error: 'Failed to fetch ads.txt from all protocols',
+    error: 'ads.txt not found at any URL variant',
     content: null,
-    skipped: true,
+    skipped: false,
   };
 }
 
