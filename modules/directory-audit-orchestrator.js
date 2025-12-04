@@ -239,11 +239,11 @@ class DirectoryAuditOrchestrator {
             logger.info(`Running full audit for ${location} on ${viewport.name}`, { url });
 
             // Simulate human behavior (scrolling) to trigger lazy loading
-            // Reduced to 15s to prevent worker hangs
+            // Reduced to 5s to prevent timeouts while still triggering lazy-loaded content
             try {
                 await Promise.race([
-                    this.crawler.simulateHumanBehavior(page, 15000),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Human behavior timeout')), 20000))
+                    this.crawler.simulateHumanBehavior(page, 5000),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Human behavior timeout')), 8000))
                 ]);
                 logger.info('Human behavior simulation completed successfully');
             } catch (err) {

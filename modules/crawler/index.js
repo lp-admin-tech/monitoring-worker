@@ -1,4 +1,5 @@
 const { chromium } = require('playwright');
+const axios = require('axios');
 const logger = require('../logger');
 const { extractMetrics } = require('./metrics');
 const { captureHAR, setupNetworkLogging } = require('./har-capture');
@@ -40,19 +41,35 @@ class Crawler {
 
   async initialize() {
     try {
-      logger.info('Initializing Playwright browser');
+      logger.info('Initializing Playwright browser with stealth mode');
       this.browser = await chromium.launch({
         headless: true,
         args: [
+          // Security & Sandbox
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
+
+          // Stealth Mode - Hide Automation
+          '--disable-blink-features=AutomationControlled',
+          '--disable-features=IsolateOrigins,site-per-process',
+
+          // Performance
           '--disable-accelerated-2d-canvas',
           '--disable-gpu',
+          '--disable-web-security', // For CORS issues
+
+          // Window & Display
           '--window-size=1920,1080',
+          '--start-maximized',
+
+          // Additional stealth
+          '--disable-infobars',
+          '--disable-notifications',
+          '--disable-popup-blocking',
         ],
       });
-      logger.info('Browser initialized successfully');
+      logger.info('Browser initialized successfully with stealth configuration');
     } catch (error) {
       logger.error('Failed to initialize browser', error);
       throw error;
@@ -136,6 +153,32 @@ class Crawler {
       });
 
       // 2. Performance: Smart Resource Blocking (FIXED: Allow ad-related resources)
+      // Track resources for debugging and metrics
+      const resources = {
+        js: [],
+        css: [],
+        images: [],
+        xhr: [],
+        fonts: [],
+        total: 0,
+      };
+
+      page.on('response', async (response) => {
+        try {
+          const url = response.url();
+          const type = response.request().resourceType();
+          resources.total++;
+
+          if (type === 'script') resources.js.push(url);
+          else if (type === 'stylesheet') resources.css.push(url);
+          else if (type === 'image') resources.images.push(url);
+          else if (type === 'xhr' || type === 'fetch') resources.xhr.push(url);
+          else if (type === 'font') resources.fonts.push(url);
+        } catch (err) {
+          // Ignore response tracking errors
+        }
+      });
+
       await page.route('**/*', (route) => {
         const type = route.request().resourceType();
         const url = route.request().url().toLowerCase();
@@ -254,6 +297,16 @@ class Crawler {
 
       const har = harRecorder.getHAR();
 
+      // Log resource tracking
+      logger.info('Resources loaded:', {
+        total: resources.total,
+        js: resources.js.length,
+        css: resources.css.length,
+        images: resources.images.length,
+        xhr: resources.xhr.length,
+        fonts: resources.fonts.length,
+      });
+
       // Validation: Log warnings if critical data is missing
       const validationIssues = [];
       if (!content || content.length < 100) {
@@ -268,6 +321,9 @@ class Crawler {
       if (har.log.adAnalysis && har.log.adAnalysis.adRequestCount === 0) {
         validationIssues.push('No ad network requests detected');
       }
+      if (resources.total < 10) {
+        validationIssues.push('Very few resources loaded - page may not have loaded properly');
+      }
 
       if (validationIssues.length > 0) {
         logger.warn('Crawl data validation issues detected:', {
@@ -276,7 +332,8 @@ class Crawler {
           contentLength: content?.length || 0,
           adElementCount: adElements?.length || 0,
           networkRequestCount: har.log?.entries?.length || 0,
-          adRequestCount: har.log?.adAnalysis?.adRequestCount || 0
+          adRequestCount: har.log?.adAnalysis?.adRequestCount || 0,
+          resourcesLoaded: resources.total,
         });
       }
 
@@ -291,6 +348,14 @@ class Crawler {
         metrics: {
           ...metrics,
           timingMarks,
+        },
+        resources: {
+          total: resources.total,
+          js: resources.js.length,
+          css: resources.css.length,
+          images: resources.images.length,
+          xhr: resources.xhr.length,
+          fonts: resources.fonts.length,
         },
         adElements,
         iframes,
@@ -435,39 +500,63 @@ class Crawler {
     return results;
   }
 
-  async navigateToPage(page, url) {
-    const navigate = async (waitUntil, timeout) => {
+  async navigateToPage(page, url, maxRetries = 3) {
+    const navigate = async (waitUntil, timeout, attempt) => {
       try {
+        logger.info(`Navigation attempt ${attempt}/${maxRetries}: ${url} (${waitUntil}, ${timeout}ms)`);
         await page.goto(url, { waitUntil, timeout });
-        return true;
+        return { success: true };
       } catch (e) {
-        return false;
+        logger.warn(`Navigation attempt ${attempt} failed: ${e.message}`);
+        return { success: false, error: e.message };
       }
     };
 
     try {
-      // Attempt 1: Standard load (90s timeout)
-      logger.info(`Navigating to ${url} (Attempt 1: domcontentloaded)`);
-      let success = await navigate('domcontentloaded', 90000);
+      let success = false;
+      let lastError = null;
 
-      // Attempt 2: Relaxed load if first failed
-      if (!success) {
-        logger.warn(`Initial navigation timed out for ${url}, retrying with 'commit' event`);
-        success = await navigate('commit', 60000);
+      // Attempt 1: Standard load with domcontentloaded (90s timeout)
+      let result = await navigate('domcontentloaded', 90000, 1);
+      success = result.success;
+      lastError = result.error;
+
+      // Attempt 2: Retry with exponential backoff if first failed
+      if (!success && maxRetries > 1) {
+        await new Promise(resolve => setTimeout(resolve, 2000)); // 2s delay
+        logger.info(`Retrying navigation with 'commit' event after 2s delay`);
+        result = await navigate('commit', 60000, 2);
+        success = result.success;
+        lastError = result.error;
+      }
+
+      // Attempt 3: Final retry with longer delay if still failing
+      if (!success && maxRetries > 2) {
+        await new Promise(resolve => setTimeout(resolve, 4000)); // 4s delay
+        logger.info(`Final retry with 'load' event after 4s delay`);
+        result = await navigate('load', 45000, 3);
+        success = result.success;
+        lastError = result.error;
       }
 
       if (!success) {
-        throw new Error('Navigation failed after retries');
+        throw new Error(`Navigation failed after ${maxRetries} attempts: ${lastError}`);
       }
+
+      logger.info(`Navigation successful for ${url}`);
 
       // Wait for network idle if possible, but don't fail the crawl
       try {
         await page.waitForLoadState('networkidle', { timeout: 15000 });
+        logger.info('Network idle state reached');
       } catch (e) {
         logger.warn(`Network idle timeout for ${url}, proceeding with available content`);
       }
+
+      return { success: true };
     } catch (error) {
-      logger.warn(`Navigation failed for ${url}, continuing with partial load`, error);
+      logger.error(`Navigation completely failed for ${url}`, { error: error.message });
+      return { success: false, error: error.message };
     }
   }
 
@@ -594,7 +683,7 @@ class Crawler {
     return extractIframes(page);
   }
 
-  async simulateHumanBehavior(page, minDuration = 120000) {
+  async simulateHumanBehavior(page, minDuration = 5000) {
     try {
       // Check if page is closed before starting
       if (page.isClosed()) {
@@ -795,6 +884,82 @@ class Crawler {
     } catch (error) {
       logger.warn('Error extracting page content', { error: error.message });
       return "Error extracting content";
+    }
+  }
+
+  /**
+   * Fallback crawl method using Axios (HTML-only, no JS execution)
+   * Used when Playwright fails completely
+   */
+  async crawlWithAxios(url, publisher) {
+    try {
+      logger.info(`Attempting fallback crawl with Axios for ${url}`);
+
+      const response = await axios.get(url, {
+        headers: {
+          'User-Agent': this.getRandomUserAgent(),
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        timeout: 30000,
+        maxRedirects: 5,
+      });
+
+      const html = response.data;
+      const headers = response.headers;
+
+      logger.info(`Axios fallback successful for ${url}`, {
+        htmlLength: html.length,
+        statusCode: response.status,
+        contentType: headers['content-type'],
+      });
+
+      // Basic content extraction from HTML (without DOM parsing)
+      const extractBasicContent = (htmlString) => {
+        // Remove script and style tags
+        let text = htmlString.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+        text = text.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+        // Remove HTML tags
+        text = text.replace(/<[^>]+>/g, ' ');
+        // Clean up whitespace
+        text = text.replace(/\s+/g, ' ').trim();
+        return text.substring(0, 5000); // Limit to 5000 chars
+      };
+
+      const content = extractBasicContent(html);
+
+      return {
+        publisherId: publisher.id,
+        publisherName: publisher.site_name,
+        url,
+        timestamp: new Date().toISOString(),
+        fallbackMode: true,
+        html,
+        headers: {
+          contentType: headers['content-type'],
+          server: headers['server'],
+          statusCode: response.status,
+        },
+        content,
+        metrics: {
+          htmlLength: html.length,
+          contentLength: content.length,
+        },
+        dataQuality: {
+          hasContent: content.length >= 100,
+          hasHTML: html.length > 0,
+          jsExecuted: false,
+          screenshotCaptured: false,
+        },
+        validationIssues: [
+          'Fallback mode: No JS execution',
+          'Fallback mode: No ad detection',
+          'Fallback mode: No screenshots',
+        ],
+      };
+    } catch (error) {
+      logger.error(`Axios fallback failed for ${url}`, { error: error.message });
+      throw new Error(`All crawl methods failed: ${error.message}`);
     }
   }
 }
