@@ -154,7 +154,7 @@ class Crawler {
           'taboola.com', 'outbrain.com', 'mgid.com', 'revcontent.com',
           'teads.tv', 'sharethrough.com', 'triplelift.com', 'indexexchange.com'
         ];
-        
+
         if (adDomains.some(domain => url.includes(domain))) {
           return route.continue();
         }
@@ -596,57 +596,94 @@ class Crawler {
 
   async simulateHumanBehavior(page, minDuration = 120000) {
     try {
+      // Check if page is closed before starting
+      if (page.isClosed()) {
+        logger.warn('Cannot simulate human behavior: page is already closed');
+        return;
+      }
+
       logger.info(`Simulating human behavior for ${minDuration / 1000}s (scrolling & mouse movements)`);
       const startTime = Date.now();
 
       // 1. Initial Mouse movements
       for (let i = 0; i < 5; i++) {
+        // Check if page is still open
+        if (page.isClosed()) {
+          logger.warn('Page closed during mouse movements');
+          return;
+        }
+
         const x = Math.floor(Math.random() * 500);
         const y = Math.floor(Math.random() * 500);
-        await page.mouse.move(x, y, { steps: 10 });
-        await page.waitForTimeout(Math.random() * 200 + 100);
+        await page.mouse.move(x, y, { steps: 10 }).catch(() => {
+          logger.debug('Mouse move failed, page may be closing');
+        });
+
+        // Use shorter timeout and check for page closure
+        await new Promise(resolve => setTimeout(resolve, Math.random() * 200 + 100));
+      }
+
+      // Check if page is still open before scrolling
+      if (page.isClosed()) {
+        logger.warn('Page closed before scrolling simulation');
+        return;
       }
 
       // 2. Long-duration Scrolling (Trigger lazy loading & infinite scroll)
-      await page.evaluate(async (duration) => {
-        await new Promise((resolve) => {
-          let totalHeight = 0;
-          const distance = 100;
-          const startTime = Date.now();
+      // Wrap in timeout to prevent hanging
+      await Promise.race([
+        page.evaluate(async (duration) => {
+          await new Promise((resolve) => {
+            let totalHeight = 0;
+            const distance = 100;
+            const startTime = Date.now();
 
-          const timer = setInterval(() => {
-            const scrollHeight = document.body.scrollHeight;
-            const currentScroll = window.scrollY + window.innerHeight;
+            const timer = setInterval(() => {
+              const scrollHeight = document.body.scrollHeight;
+              const currentScroll = window.scrollY + window.innerHeight;
 
-            // Scroll down
-            window.scrollBy(0, distance);
-            totalHeight += distance;
+              // Scroll down
+              window.scrollBy(0, distance);
+              totalHeight += distance;
 
-            // If we reached the bottom
-            if (currentScroll >= scrollHeight) {
-              // If we haven't met the time requirement, scroll back up a bit to keep activity alive
-              // or wait for infinite scroll to trigger
-              if (Date.now() - startTime < duration) {
-                // Scroll up a bit to simulate reading/re-checking
-                window.scrollBy(0, -300);
-              } else {
+              // If we reached the bottom
+              if (currentScroll >= scrollHeight) {
+                // If we haven't met the time requirement, scroll back up a bit to keep activity alive
+                // or wait for infinite scroll to trigger
+                if (Date.now() - startTime < duration) {
+                  // Scroll up a bit to simulate reading/re-checking
+                  window.scrollBy(0, -300);
+                } else {
+                  clearInterval(timer);
+                  resolve();
+                }
+              }
+
+              // Check time limit
+              if (Date.now() - startTime >= duration) {
                 clearInterval(timer);
                 resolve();
               }
-            }
-
-            // Check time limit
-            if (Date.now() - startTime >= duration) {
-              clearInterval(timer);
-              resolve();
-            }
-          }, 200); // Scroll every 200ms (slower, more human-like)
-        });
-      }, minDuration);
+            }, 200); // Scroll every 200ms (slower, more human-like)
+          });
+        }, minDuration),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Scroll timeout')), minDuration + 5000))
+      ]).catch(err => {
+        if (err.message && err.message.includes('closed')) {
+          logger.warn('Page closed during scrolling simulation');
+        } else {
+          logger.warn('Scrolling simulation timed out or failed', { error: err.message });
+        }
+      });
 
       logger.info('Human behavior simulation completed');
     } catch (error) {
-      logger.warn('Error simulating human behavior', error);
+      // Handle closed browser gracefully
+      if (error.message && (error.message.includes('closed') || error.message.includes('Target page'))) {
+        logger.warn('Human behavior simulation failed: page or browser was closed');
+      } else {
+        logger.warn('Error simulating human behavior', error);
+      }
     }
   }
 

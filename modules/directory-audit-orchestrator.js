@@ -240,16 +240,43 @@ class DirectoryAuditOrchestrator {
 
             // Simulate human behavior (scrolling) to trigger lazy loading
             // Reduced to 15s to prevent worker hangs
-            await Promise.race([
-                this.crawler.simulateHumanBehavior(page, 15000),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Human behavior timeout')), 20000))
-            ]).catch(err => logger.warn('Human behavior simulation timed out', { error: err.message }));
+            try {
+                await Promise.race([
+                    this.crawler.simulateHumanBehavior(page, 15000),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Human behavior timeout')), 20000))
+                ]);
+                logger.info('Human behavior simulation completed successfully');
+            } catch (err) {
+                logger.warn('Human behavior simulation failed or timed out', { error: err.message });
+                // Check if page is still usable
+                if (page.isClosed()) {
+                    logger.error('Page was closed during human behavior simulation, cannot continue');
+                    results.success = false;
+                    results.errors.push({ error: 'Page closed during simulation' });
+                    return results;
+                }
+            }
+
+            // Verify page is still responsive before continuing
+            try {
+                await page.evaluate(() => document.title).catch(() => {
+                    throw new Error('Page is unresponsive');
+                });
+            } catch (pageCheckError) {
+                logger.error('Page became unresponsive after human behavior simulation', { error: pageCheckError.message });
+                results.success = false;
+                results.errors.push({ error: 'Page unresponsive after simulation' });
+                return results;
+            }
 
             // Extract data needed for modules with timeout protection
             const textContent = await Promise.race([
                 this.crawler.extractPageContent(page),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Content extraction timeout')), 30000))
-            ]).catch(() => 'No content extracted');
+            ]).catch((err) => {
+                logger.warn('Content extraction failed', { error: err.message });
+                return 'No content extracted';
+            });
 
             const metrics = await Promise.race([
                 this.crawler.extractPageMetrics(page),
