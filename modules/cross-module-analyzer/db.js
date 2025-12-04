@@ -37,7 +37,7 @@ class CrossModuleAnalyzerDb {
                 .from('site_audits')
                 .select('*')
                 .eq('id', auditId)
-                .single();
+                .maybeSingle();
 
             if (error) throw error;
             return data;
@@ -63,7 +63,7 @@ class CrossModuleAnalyzerDb {
                     comparison_data: resultData.comparisonData
                 })
                 .select()
-                .single();
+                .maybeSingle();
 
             if (error) throw error;
             return data;

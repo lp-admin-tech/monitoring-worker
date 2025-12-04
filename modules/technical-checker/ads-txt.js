@@ -24,7 +24,7 @@ const KNOWN_NETWORKS = {
   'smartyads.com': 'SmartyAds',
 };
 
-async function fetchAdsTxt(domain, timeout = 10000) {
+async function fetchAdsTxt(domain, timeout = 8000) {
   // Normalize domain - remove protocol, trailing chars, port
   const originalDomain = domain;
   domain = domain
@@ -43,12 +43,12 @@ async function fetchAdsTxt(domain, timeout = 10000) {
     };
   }
 
-  logger.debug('Normalized domain for ads.txt HTTP fetch', { original: originalDomain, normalized: domain });
+  logger.info('Fetching ads.txt for domain', { original: originalDomain, normalized: domain });
 
-  // Only strip www if domain starts with it (don't strip from subdomains)
+  // Only strip www if it's the prefix (not for subdomains like ads.example.com)
   const cleanDomain = domain.startsWith('www.') ? domain.slice(4) : domain;
 
-  // Try multiple URL candidates
+  // Try all combinations: https/http with/without www
   const candidates = [
     `https://${cleanDomain}/ads.txt`,
     `http://${cleanDomain}/ads.txt`,
@@ -56,11 +56,9 @@ async function fetchAdsTxt(domain, timeout = 10000) {
     `http://www.${cleanDomain}/ads.txt`,
   ];
 
-  logger.info(`Attempting to fetch ads.txt from ${candidates.length} URL variants`, { domain: cleanDomain });
-
   for (const url of candidates) {
     try {
-      logger.debug(`Trying ads.txt URL: ${url}`);
+      logger.debug(`Trying ads.txt at ${url}`);
 
       const response = await axios.get(url, {
         headers: {
@@ -72,11 +70,11 @@ async function fetchAdsTxt(domain, timeout = 10000) {
         validateStatus: () => true, // Don't throw on any status code
       });
 
-      // Success: 2xx status with non-empty content
+      // Success: 200-299 with non-empty content
       if (response.status >= 200 && response.status < 300) {
         const content = response.data;
-        if (content && typeof content === 'string' && content.trim().length > 0) {
-          logger.info(`Successfully fetched ads.txt from ${url}`, {
+        if (content && content.trim().length > 0) {
+          logger.info(`✓ Successfully fetched ads.txt from ${url}`, {
             contentLength: content.length,
             statusCode: response.status,
           });
@@ -99,15 +97,16 @@ async function fetchAdsTxt(domain, timeout = 10000) {
       if (error.code === 'ECONNABORTED') {
         logger.debug(`Timeout fetching ${url}`);
       } else if (error.code === 'ENOTFOUND') {
-        logger.debug(`DNS resolution failed for ${url}`);
+        logger.debug(`DNS failed for ${url}`);
       } else {
         logger.debug(`Error fetching ${url}: ${error.message}`);
       }
     }
   }
 
-  logger.warn(`ads.txt not found after trying all ${candidates.length} URL variants`, {
+  logger.warn(`ads.txt not found after trying all variants`, {
     domain: originalDomain,
+    candidatesTried: candidates.length,
   });
 
   return {
