@@ -242,8 +242,8 @@ class DirectoryAuditOrchestrator {
             // Reduced to 5s to prevent timeouts while still triggering lazy-loaded content
             try {
                 await Promise.race([
-                    this.crawler.simulateHumanBehavior(page, 5000),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Human behavior timeout')), 8000))
+                    this.crawler.simulateHumanBehavior(page, 2000),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Human behavior timeout')), 5000))
                 ]);
                 logger.info('Human behavior simulation completed successfully');
             } catch (err) {
@@ -270,28 +270,31 @@ class DirectoryAuditOrchestrator {
             }
 
             // Extract data needed for modules with timeout protection
-            const textContent = await Promise.race([
-                this.crawler.extractPageContent(page),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Content extraction timeout')), 30000))
-            ]).catch((err) => {
-                logger.warn('Content extraction failed', { error: err.message });
-                return 'No content extracted';
-            });
+            // Extract data needed for modules with timeout protection - Parallelized
+            const [textContent, metrics, adElements, iframes] = await Promise.all([
+                Promise.race([
+                    this.crawler.extractPageContent(page),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Content extraction timeout')), 30000))
+                ]).catch((err) => {
+                    logger.warn('Content extraction failed', { error: err.message });
+                    return 'No content extracted';
+                }),
 
-            const metrics = await Promise.race([
-                this.crawler.extractPageMetrics(page),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Metrics extraction timeout')), 10000))
-            ]).catch(() => ({}));
+                Promise.race([
+                    this.crawler.extractPageMetrics(page),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Metrics extraction timeout')), 10000))
+                ]).catch(() => ({})),
 
-            const adElements = await Promise.race([
-                this.crawler.extractPageAdElements(page),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Ad elements timeout')), 10000))
-            ]).catch(() => []);
+                Promise.race([
+                    this.crawler.extractPageAdElements(page),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Ad elements timeout')), 10000))
+                ]).catch(() => []),
 
-            const iframes = await Promise.race([
-                this.crawler.extractPageIframes(page),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Iframes timeout')), 10000))
-            ]).catch(() => []);
+                Promise.race([
+                    this.crawler.extractPageIframes(page),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Iframes timeout')), 10000))
+                ]).catch(() => [])
+            ]);
 
             // Construct crawlData object expected by modules
             const crawlData = {

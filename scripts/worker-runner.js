@@ -192,7 +192,7 @@ function calculateDataQuality(modules, crawlData) {
 }
 
 const WORKER_SECRET = process.env.WORKER_SECRET;
-const BATCH_CONCURRENCY_LIMIT = parseInt(process.env.BATCH_CONCURRENCY_LIMIT || '3');
+const BATCH_CONCURRENCY_LIMIT = parseInt(process.env.BATCH_CONCURRENCY_LIMIT || '5');
 const MODULE_TIMEOUT = parseInt(process.env.MODULE_TIMEOUT || '30000');
 const RETRY_ENABLED = process.env.RETRY_ENABLED !== 'false';
 const MAX_RETRIES = 3;
@@ -594,12 +594,8 @@ async function processAuditJob(job) {
         }
       }
 
-      // Trigger Cross-Module Comparison
-      try {
-        await crossModuleAnalyzer.runComparison(siteAuditId, publisherId);
-      } catch (comparisonError) {
-        logger.error(`[${requestId}] Error triggering cross-module comparison`, comparisonError, { requestId });
-      }
+      // Cross-Module Comparison is already handled in moduleDataOrchestrator.saveAllModuleResults
+      // Removing redundant call to prevent double execution
 
     } catch (updateErr) {
       logger.error(`[${requestId}] Failed to update site audit with final results`, updateErr, { requestId });
