@@ -454,12 +454,33 @@ async function processAuditJob(job) {
       'AIAssistance',
       async () => {
         try {
+          // Construct context data for robust fallback
+          const contextData = {
+            url: siteAudit.site_name,
+            networkFindings: modules.adAnalyzer.data?.adNetworks || [],
+            adBehavior: {
+              popups: modules.adAnalyzer.data?.popups || false,
+              redirects: modules.adAnalyzer.data?.redirects || false
+            },
+            contentIndicators: {
+              textEntropy: modules.contentAnalyzer.data?.entropy?.score || 0,
+              aiLikelihood: modules.contentAnalyzer.data?.aiLikelihood?.percentage || 0
+            },
+            performance: {
+              lcp: modules.crawler.data?.metrics?.coreLWP?.lcp || 0
+            },
+            seo: {
+              title: modules.contentAnalyzer.data?.seo?.title || ''
+            }
+          };
+
           const result = await aiAssistance.generateComprehensiveReport(
             { domain: siteAudit.site_name },
             { ...scorerResult.data, directoryContext: aggregatedResults },
             modules.policyChecker.data?.issues || [],
             siteAuditId,
-            publisherId
+            publisherId,
+            contextData
           );
           return result;
         } catch (err) {
