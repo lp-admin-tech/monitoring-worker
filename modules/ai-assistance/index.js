@@ -271,7 +271,118 @@ class AIAssistanceModule {
     return this.generateFallbackAnalysis(userPrompt, contextData);
   }
 
-  // ... (callAlibabaLLM, callOpenRouterLLM, callBackupLLM, performOpenRouterCall remain unchanged)
+  async callAlibabaLLM(systemPrompt, userPrompt) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout
+
+    try {
+      const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+          'X-DashScope-Async': 'enable'
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          parameters: {
+            temperature: 0.3,
+            top_p: 0.9,
+            max_tokens: 8192
+          }
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        throw new Error(`Alibaba LLM API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      if (data.code && data.code !== 'Success') {
+        throw new Error(`Alibaba LLM returned error: ${data.message}`);
+      }
+
+      return data.output?.text || '';
+    } catch (error) {
+      clearTimeout(timeout);
+      throw error;
+    }
+  }
+
+  async callOpenRouterLLM(systemPrompt, userPrompt) {
+    return this.performOpenRouterCall(this.model, this.apiKey, systemPrompt, userPrompt);
+  }
+
+  async callBackupLLM(systemPrompt, userPrompt, apiKey) {
+    const backupModel = 'deepseek/deepseek-r1-distill-llama-70b:free';
+    logger.info('Calling Backup LLM (DeepSeek)', { model: backupModel });
+    return this.performOpenRouterCall(backupModel, apiKey, systemPrompt, userPrompt);
+  }
+
+  async performOpenRouterCall(model, apiKey, systemPrompt, userPrompt) {
+    const makeRequest = async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout
+
+      try {
+        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'HTTP-Referer': 'https://compliance-monitor.local',
+            'X-Title': 'Compliance AI Assistant'
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt }
+            ],
+            temperature: 0.3,
+            top_p: 0.9,
+            max_tokens: 8192
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          const error = new Error(`OpenRouter API error: ${response.status} ${response.statusText}`);
+          error.status = response.status;
+          error.data = errorData;
+          throw error;
+        }
+
+        const data = await response.json();
+
+        if (data.error) {
+          throw new Error(`OpenRouter returned error: ${JSON.stringify(data.error)}`);
+        }
+
+        return data.choices?.[0]?.message?.content || '';
+      } catch (error) {
+        clearTimeout(timeout);
+        throw error;
+      }
+    };
+
+    const result = await this.rateLimiter.executeWithRetry(makeRequest, 3);
+
+    if (!result.success) {
+      throw result.error || new Error('OpenRouter request failed after retries');
+    }
+
+    return result.data;
+  }
 
   generateFallbackAnalysis(userPrompt, contextData = {}) {
     logger.info('Generating fallback analysis using Reviewer Summary logic');
@@ -285,6 +396,138 @@ class AIAssistanceModule {
     logger.warn('No context data provided for fallback, using legacy regex extraction');
     const analysisHints = this.extractAnalysisHints(userPrompt);
     return this.generateLegacyFallbackReport(analysisHints);
+  }
+
+  extractAnalysisHints(userPrompt) {
+    const mfaProbabilityMatch = userPrompt.match(/Overall MFA Probability[:\s]+([0-9.]+)%/);
+    const mfaProbability = mfaProbabilityMatch ? parseFloat(mfaProbabilityMatch[1]) / 100 : 0.5;
+
+    const adDensityMatch = userPrompt.match(/Ad Density[:\s]+([0-9.]+)%/);
+    const adDensity = adDensityMatch ? parseFloat(adDensityMatch[1]) : 25;
+
+    const aiLikelihoodMatch = userPrompt.match(/AI-Generated Likelihood[:\s]+([0-9.]+)%/);
+    const aiLikelihood = aiLikelihoodMatch ? parseFloat(aiLikelihoodMatch[1]) : 30;
+
+    const scrollJackingMatch = userPrompt.match(/Scroll Jacking Detected[:\s]+(Yes|No)/i);
+    const scrollJacking = scrollJackingMatch ? scrollJackingMatch[1].toLowerCase() === 'yes' : false;
+
+    const entropyMatch = userPrompt.match(/Text Entropy Score[:\s]+([0-9.]+)/);
+    const entropy = entropyMatch ? parseFloat(entropyMatch[1]) : 50;
+
+    const readabilityMatch = userPrompt.match(/Readability Score[:\s]+([0-9.]+)/);
+    const readability = readabilityMatch ? parseFloat(readabilityMatch[1]) : 70;
+
+    let category = 'REVIEW_REQUIRED';
+    let riskLevel = 'MEDIUM';
+    let confidence = 60;
+
+    if (mfaProbability > 0.75) {
+      category = 'SUSPECTED_MFA';
+      riskLevel = 'CRITICAL';
+      confidence = 85;
+    } else if (mfaProbability > 0.55) {
+      category = 'POTENTIAL_ISSUES';
+      riskLevel = 'HIGH';
+      confidence = 75;
+    } else if (mfaProbability < 0.25) {
+      category = 'COMPLIANT';
+      riskLevel = 'LOW';
+      confidence = 80;
+    }
+
+    const contentQuality = [];
+    if (aiLikelihood > 70) {
+      contentQuality.push('- Likelihood of AI-generated content is elevated');
+    }
+    if (entropy < 40) {
+      contentQuality.push('- Content shows low variety, suggesting template reuse');
+    }
+    if (readability < 50) {
+      contentQuality.push('- Readability scores indicate comprehension challenges');
+    }
+    if (contentQuality.length === 0) {
+      contentQuality.push('- Content quality metrics are within acceptable ranges');
+    }
+
+    const adBehavior = [];
+    if (adDensity > 35) {
+      adBehavior.push('- Ad density exceeds typical publisher benchmarks');
+    }
+    if (scrollJacking) {
+      adBehavior.push('- Scroll jacking behavior detected - indicates manipulative practices');
+    }
+    if (adDensity > 30 && entropy < 40) {
+      adBehavior.push('- Ad density is inconsistent with content quantity');
+    }
+    if (adBehavior.length === 0) {
+      adBehavior.push('- Ad behavior appears within normal parameters');
+    }
+
+    const recommendations = [];
+    if (mfaProbability > 0.7) {
+      recommendations.push('1. [CRITICAL] Initiate immediate investigation into publisher compliance');
+      recommendations.push('2. [CRITICAL] Review account for policy violations');
+    } else if (mfaProbability > 0.5) {
+      recommendations.push('1. [HIGH] Enhanced monitoring of this property');
+      recommendations.push('2. [HIGH] Request additional documentation from publisher');
+    } else {
+      recommendations.push('1. [MEDIUM] Continue routine monitoring');
+      recommendations.push('2. [MEDIUM] Schedule periodic compliance review');
+    }
+
+    return {
+      mfaProbability,
+      adDensity,
+      aiLikelihood,
+      scrollJacking,
+      entropy,
+      readability,
+      category,
+      riskLevel,
+      confidence,
+      contentQuality,
+      adBehavior,
+      recommendations
+    };
+  }
+
+  generateFallbackFindings(hints) {
+    const findings = [];
+
+    if (hints.mfaProbability > 0.75) {
+      findings.push('- Strong MFA probability detected based on metric analysis');
+    } else if (hints.mfaProbability > 0.5) {
+      findings.push('- Moderate MFA indicators present requiring investigation');
+    }
+
+    if (hints.adDensity > 40) {
+      findings.push('- Exceptional ad density far exceeds industry benchmarks');
+    } else if (hints.adDensity > 30) {
+      findings.push('- Ad density is elevated compared to compliant publishers');
+    }
+
+    if (hints.scrollJacking) {
+      findings.push('- Scroll jacking behavior indicates intentional user manipulation');
+    }
+
+    if (hints.aiLikelihood > 80) {
+      findings.push('- Very high likelihood of AI-generated or heavily templated content');
+    }
+
+    if (hints.entropy < 35) {
+      findings.push('- Extremely low text entropy suggests significant content recycling');
+    }
+
+    if (hints.readability < 45) {
+      findings.push('- Very poor readability suggests content may be auto-generated');
+    }
+
+    if (findings.length === 0) {
+      findings.push('- Site appears to meet baseline compliance metrics');
+      findings.push('- No critical red flags identified in initial assessment');
+    }
+
+    return findings;
   }
 
   generateReviewerSummary(results) {
