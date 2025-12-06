@@ -286,6 +286,7 @@ async function processAuditJob(job) {
       audit_queue_id: jobId,
       publisher_id: publisherId,
       site_name: siteAudit.site_name,
+      site_url: siteAudit.site_url || siteAudit.site_name, // Ensure site_url is populated
       status: 'processing',
       started_at: new Date().toISOString(),
     };
@@ -345,11 +346,59 @@ async function processAuditJob(job) {
       requestId,
     });
 
+    // Check if site is reachable before attempting full crawl
+    const siteUrl = siteAudit.site_url || siteAudit.site_name;
+    const normalizedUrl = siteUrl.startsWith('http') ? siteUrl : `https://${siteUrl}`;
+
+    try {
+      const axios = require('axios');
+      const reachabilityCheck = await axios.head(normalizedUrl, {
+        timeout: 10000,
+        maxRedirects: 5,
+        validateStatus: (status) => status < 500, // Accept any status < 500
+      });
+      logger.info(`[${requestId}] Site reachability check passed`, {
+        url: normalizedUrl,
+        status: reachabilityCheck.status,
+      });
+    } catch (reachError) {
+      const isNotLive = reachError.code === 'ENOTFOUND' ||
+        reachError.code === 'ECONNREFUSED' ||
+        reachError.code === 'ETIMEDOUT' ||
+        reachError.code === 'ECONNRESET' ||
+        reachError.response?.status >= 500;
+
+      if (isNotLive) {
+        logger.warn(`[${requestId}] Site is NOT LIVE: ${siteUrl}`, {
+          error: reachError.message,
+          code: reachError.code,
+        });
+
+        // Update audit record with site_not_live status
+        await supabase.supabaseClient
+          .from('site_audits')
+          .update({
+            status: 'site_not_live',
+            error_message: `Site is not reachable: ${reachError.code || reachError.message}`,
+            risk_level: 'unknown',
+            completed_at: new Date().toISOString(),
+          })
+          .eq('id', siteAuditId);
+
+        logger.info(`[${requestId}] Marked site as not live in database`, { siteAuditId, siteUrl });
+        return { success: false, reason: 'site_not_live', siteUrl };
+      }
+      // For other errors (like redirects), continue with crawl
+      logger.warn(`[${requestId}] Reachability check had non-fatal error, continuing`, {
+        error: reachError.message,
+      });
+    }
+
     // Use DirectoryAuditOrchestrator to run the audit
     const orchestratorResult = await directoryAuditOrchestrator.runDirectoryAwareAudit(
       {
         id: publisherId,
-        site_url: siteAudit.site_name,
+        site_url: siteUrl,
         subdirectories: []
       },
       siteAuditId
