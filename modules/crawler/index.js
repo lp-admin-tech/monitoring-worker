@@ -58,10 +58,9 @@ class CrawleeCrawler {
   async initialize() {
     logger.info('[Crawler] Initializing Crawlee PlaywrightCrawler with MFA detection features');
 
-    // Launch browser for directory-audit-orchestrator compatibility
-    await this.ensureBrowser();
-
-    logger.info('[Crawler] Crawler initialized successfully');
+    // Don't block initialization - browser will be launched on first use
+    // This prevents startup failures if Playwright isn't ready yet
+    logger.info('[Crawler] Crawler initialized (browser will launch on first audit)');
   }
 
   /**
