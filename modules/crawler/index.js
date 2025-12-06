@@ -92,6 +92,16 @@ class CrawleeCrawler {
           '--disable-infobars',
           '--disable-notifications',
           '--disable-popup-blocking',
+          // Memory optimizations for free tier hosting
+          '--single-process',
+          '--no-zygote',
+          '--disable-software-rasterizer',
+          '--js-flags=--max-old-space-size=256',
+          '--disable-extensions',
+          '--disable-background-networking',
+          '--disable-sync',
+          '--disable-translate',
+          '--mute-audio',
         ],
       });
 
