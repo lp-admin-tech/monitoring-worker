@@ -101,7 +101,7 @@ class Crawler {
 
   async crawlPublisher(publisher, options = {}) {
     const {
-      sessionDuration = 120000, // Default 120s (2 minutes)
+      sessionDuration = 60000, // 60s per site for thorough crawling
       viewport = this.viewports[0],
       captureScreenshots = true,
       uploadResults = true,

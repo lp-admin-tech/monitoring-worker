@@ -258,15 +258,15 @@ class DirectoryAuditOrchestrator {
             }
 
             // Verify page is still responsive before continuing
+            let pageResponsive = true;
             try {
                 await page.evaluate(() => document.title).catch(() => {
                     throw new Error('Page is unresponsive');
                 });
             } catch (pageCheckError) {
-                logger.error('Page became unresponsive after human behavior simulation', { error: pageCheckError.message });
-                results.success = false;
-                results.errors.push({ error: 'Page unresponsive after simulation' });
-                return results;
+                logger.warn('Page became unresponsive after human behavior simulation, continuing with partial data', { error: pageCheckError.message });
+                pageResponsive = false;
+                // Don't return - try to extract what we can
             }
 
             // Extract data needed for modules with timeout protection

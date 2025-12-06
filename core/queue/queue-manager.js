@@ -22,10 +22,15 @@ class QueueManager {
         };
 
         this.queue.push(job);
-        logger.info(`[Queue:${this.queueName}] Added job ${job.id} to in-memory queue`);
+        logger.info(`[Queue:${this.queueName}] ✅ Added job ${job.id} to queue (length: ${this.queue.length})`, { name });
 
-        // Trigger processing asynchronously
-        this.processNext();
+        // Trigger processing in the NEXT event loop tick to ensure job is fully queued
+        setImmediate(() => {
+            logger.info(`[Queue:${this.queueName}] ⏰ setImmediate triggered, calling processNext`);
+            this.processNext().catch(err => {
+                logger.error(`[Queue:${this.queueName}] processNext error:`, { error: err.message });
+            });
+        });
 
         return job;
     }
