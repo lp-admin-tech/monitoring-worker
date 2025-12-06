@@ -36,8 +36,29 @@ class RiskEngine {
     const stickyVideo = Math.min(data.stickyVideoCount || 0, 1) * (weights.sticky_video || 0.05);
     const scrollAdInjection = Math.min(data.scrollAdInjectionScore || 0, 1) * (weights.scroll_ad_injection || 0.10);
 
+    // NEW: Above-fold clutter and content-to-ad ratio (ML-ready metrics)
+    const isCluttered = (data.isCluttered ? 1 : 0) * (weights.ad_clutter || 0.08);
+    const aboveFoldDensity = Math.min((data.aboveFoldDensityPercent || 0) / 100, 1) * (weights.above_fold_density || 0.10);
+    // Content-to-ad ratio: lower ratio = more ads, more risk (invert and normalize)
+    // Ratio < 2 means more than 33% ads, very suspicious
+    const contentToAdRatio = data.contentToAdRatio || 999;
+    const contentAdRisk = contentToAdRatio < 2
+      ? Math.min(1 - (contentToAdRatio / 10), 1) * (weights.content_to_ad_ratio || 0.12)
+      : 0;
+
+    // NEW: Third-party tracker signals
+    const trackerRisk = Math.min((data.totalTrackerCount || 0) / 20, 1) * (weights.tracker_overload || 0.10);
+    const contentRecRisk = Math.min((data.contentRecCount || 0) / 3, 1) * (weights.content_rec_abuse || 0.15);
+
+    // NEW: Commercial intent signals
+    const commercialRisk = Math.min(data.commercialIntentScore || 0, 1) * (weights.commercial_intent || 0.12);
+    const affiliateRisk = Math.min((data.affiliateLinkCount || 0) / 10, 1) * (weights.affiliate_abuse || 0.10);
+    const popupRisk = (data.hasPopupAds ? 1 : 0) * (weights.popup_ads || 0.15);
+
     const rawScore = adDensity + autoRefresh + viewportOcclusion + userPatterns + scrollJacking +
-      videoStuffing + mutedAutoplay + stickyVideo + scrollAdInjection;
+      videoStuffing + mutedAutoplay + stickyVideo + scrollAdInjection +
+      isCluttered + aboveFoldDensity + contentAdRisk +
+      trackerRisk + contentRecRisk + commercialRisk + affiliateRisk + popupRisk;
     const normalizedScore = Math.min(rawScore, 1);
 
     return {
@@ -50,7 +71,14 @@ class RiskEngine {
       videoStuffing: { detected: data.videoStuffingDetected || false, weight: videoStuffing },
       mutedAutoplay: { count: data.mutedAutoplayCount || 0, weight: mutedAutoplay },
       stickyVideo: { count: data.stickyVideoCount || 0, weight: stickyVideo },
-      scrollAdInjection: { score: data.scrollAdInjectionScore || 0, weight: scrollAdInjection }
+      scrollAdInjection: { score: data.scrollAdInjectionScore || 0, weight: scrollAdInjection },
+      // ML-ready metrics
+      aboveFoldClutter: { isCluttered: data.isCluttered || false, adsCount: data.adsAboveFoldCount || 0, weight: isCluttered },
+      aboveFoldDensity: { percent: data.aboveFoldDensityPercent || 0, weight: aboveFoldDensity },
+      contentToAdRatio: { ratio: contentToAdRatio, risk: contentAdRisk, weight: contentAdRisk },
+      // NEW: Tracker and commercial signals
+      trackers: { count: data.totalTrackerCount || 0, contentRec: data.contentRecCount || 0, weight: trackerRisk + contentRecRisk },
+      commercial: { score: data.commercialIntentScore || 0, affiliates: data.affiliateLinkCount || 0, popups: data.hasPopupAds, weight: commercialRisk + affiliateRisk + popupRisk },
     };
   }
 

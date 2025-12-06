@@ -1,14 +1,22 @@
 {
   "behavioral": {
-    "ad_density": 0.12,
-    "auto_refresh": 0.12,
-    "viewport_occlusion": 0.08,
-    "user_interaction_patterns": 0.06,
+    "ad_density": 0.10,
+    "auto_refresh": 0.10,
+    "viewport_occlusion": 0.06,
+    "user_interaction_patterns": 0.05,
     "scroll_jacking": 0.05,
-    "video_stuffing": 0.10,
-    "muted_autoplay": 0.08,
-    "sticky_video": 0.05,
-    "scroll_ad_injection": 0.10
+    "video_stuffing": 0.08,
+    "muted_autoplay": 0.06,
+    "sticky_video": 0.04,
+    "scroll_ad_injection": 0.08,
+    "ad_clutter": 0.06,
+    "above_fold_density": 0.08,
+    "content_to_ad_ratio": 0.10,
+    "tracker_overload": 0.10,
+    "content_rec_abuse": 0.15,
+    "commercial_intent": 0.10,
+    "affiliate_abuse": 0.08,
+    "popup_ads": 0.15
   },
   "content": {
     "entropy_score": 0.18,

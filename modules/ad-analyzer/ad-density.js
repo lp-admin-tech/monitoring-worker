@@ -323,7 +323,15 @@ class AdDensityCalculator {
           stickyAdDensity: parseFloat(stickyDensity.toFixed(4)),
           stickyAdCount: stickyAds.length,
           benchmark,
-          adsAboveFold: adsAboveFold, // New metric
+          adsAboveFold: adsAboveFold, // Count of ads in initial viewport
+          // NEW: Content-to-Ad Ratio (key ML feature)
+          contentToAdRatio: adPixels > 0
+            ? parseFloat(((viewportPixels - adPixels) / adPixels).toFixed(2))
+            : 999, // High value if no ads
+          // NEW: Above-fold density percentage (key MFA indicator)
+          aboveFoldDensityPercent: parseFloat((distribution.densityAboveTheFold * 100).toFixed(2)),
+          // NEW: Is cluttered flag
+          isCluttered: isCluttered,
         },
         sizeDistribution: {
           large: {

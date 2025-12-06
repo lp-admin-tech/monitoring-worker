@@ -22,6 +22,8 @@
     "@supabase/supabase-js": "^2.57.4",
     "dotenv": "^17.2.3",
     "playwright": "^1.44.0",
+    "crawlee": "^3.11.0",
+    "@crawlee/playwright": "^3.11.0",
     "axios": "^1.6.0",
     "uuid": "^9.0.0",
     "node-cron": "^3.0.3",

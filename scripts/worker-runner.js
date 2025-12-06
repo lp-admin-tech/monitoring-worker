@@ -730,6 +730,112 @@ async function processAuditJob(job) {
           logger.info(`[${requestId}] ✅ Successfully updated publisher ${publisherId} MFA score to ${mfaScore}%`);
         }
 
+        // 🚨 Send Email Alert if MFA probability exceeds threshold (70%)
+        const MFA_ALERT_THRESHOLD = 0.70;
+        if (completedAudit.mfa_probability >= MFA_ALERT_THRESHOLD) {
+          try {
+            logger.info(`[${requestId}] 🚨 MFA detected above ${MFA_ALERT_THRESHOLD * 100}% threshold, triggering email alerts`);
+
+            const notificationDispatcher = require('../modules/alert-engine/notification-dispatcher');
+
+            // Get publisher details including partner
+            const { data: publisherData } = await supabase.supabaseClient
+              .from('publishers')
+              .select('partner_id, primary_domain, name, contact_email')
+              .eq('id', publisherId)
+              .single();
+
+            // Collect all recipients (partner + admins)
+            const recipients = [];
+
+            // 1. Get partner email (the partner assigned to this publisher)
+            if (publisherData?.partner_id) {
+              const { data: partnerData } = await supabase.supabaseClient
+                .from('app_users')
+                .select('email, full_name, role')
+                .eq('id', publisherData.partner_id)
+                .eq('status', 'active')
+                .single();
+
+              if (partnerData?.email) {
+                recipients.push({
+                  email: partnerData.email,
+                  name: partnerData.full_name,
+                  role: partnerData.role,
+                  type: 'partner'
+                });
+              }
+            }
+
+            // 2. Get all admin and super_admin users
+            const { data: adminUsers } = await supabase.supabaseClient
+              .from('app_users')
+              .select('email, full_name, role')
+              .in('role', ['admin', 'super_admin'])
+              .eq('status', 'active');
+
+            if (adminUsers && adminUsers.length > 0) {
+              for (const admin of adminUsers) {
+                if (admin.email && !recipients.find(r => r.email === admin.email)) {
+                  recipients.push({
+                    email: admin.email,
+                    name: admin.full_name,
+                    role: admin.role,
+                    type: 'admin'
+                  });
+                }
+              }
+            }
+
+            if (recipients.length > 0) {
+              const alertData = {
+                id: `mfa-alert-${siteAuditId}`,
+                alert_type: 'MFA_DETECTED',
+                severity: mfaScore >= 90 ? 'critical' : mfaScore >= 80 ? 'high' : 'medium',
+                message: `MFA detected with ${mfaScore}% probability on ${siteAudit.site_name}`,
+                metadata: {
+                  mfa_probability: completedAudit.mfa_probability,
+                  risk_score: completedAudit.risk_score,
+                  risk_level: completedAudit.risk_level,
+                  site_url: siteAudit.site_name,
+                  audit_id: siteAuditId,
+                  primary_causes: completedAudit.primary_causes,
+                  safe_browsing: modules.technicalChecker?.data?.components?.safeBrowsing?.status || 'unknown'
+                },
+                created_at: new Date().toISOString()
+              };
+
+              const publisherInfo = {
+                name: publisherData?.name || 'Unknown Publisher',
+                primary_domain: publisherData?.primary_domain || siteAudit.site_name
+              };
+
+              // Send email to each recipient
+              let successCount = 0;
+              for (const recipient of recipients) {
+                try {
+                  const emailResult = await notificationDispatcher.dispatchEmail(alertData, publisherInfo, recipient.email);
+                  if (emailResult.success) {
+                    successCount++;
+                    logger.info(`[${requestId}] ✅ MFA alert sent to ${recipient.type} (${recipient.role}): ${recipient.email}`);
+                  } else {
+                    logger.warn(`[${requestId}] Failed to send MFA alert to ${recipient.email}: ${emailResult.error}`);
+                  }
+                } catch (emailErr) {
+                  logger.warn(`[${requestId}] Error sending to ${recipient.email}:`, emailErr.message);
+                }
+              }
+
+              logger.info(`[${requestId}] 📧 MFA alerts sent: ${successCount}/${recipients.length} recipients`);
+            } else {
+              logger.warn(`[${requestId}] No recipients found for MFA alert (no partner or admins configured)`);
+            }
+          } catch (alertError) {
+            logger.error(`[${requestId}] Failed to send MFA alert emails`, alertError);
+            // Don't fail the audit if email notification fails
+          }
+        }
+
       } catch (pubUpdateErr) {
         logger.error(`[${requestId}] Failed to update publisher MFA score`, pubUpdateErr, { requestId });
         // Don't fail the job if just this update fails

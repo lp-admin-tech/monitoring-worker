@@ -127,6 +127,12 @@ class ContentAnalyzer {
   }
 
   aggregateResults(text, metrics) {
+    // NEW: Thin content detection
+    const thinContent = this.detectThinContent(text, metrics);
+
+    // NEW: Content quality score
+    const contentQualityScore = this.calculateContentQualityScore(metrics, thinContent);
+
     const fingerprint = {
       textLength: text.length,
       analysisTimestamp: new Date().toISOString(),
@@ -138,6 +144,10 @@ class ContentAnalyzer {
       freshness: this.freshness.mergeResults(text, metrics.freshness),
       riskAssessment: this.calculateRiskAssessment(metrics),
       flagStatus: this.determineFlagStatus(metrics),
+      // NEW: ML-ready metrics
+      thinContent,
+      wordDiversity: metrics.entropy.wordDiversity || {},
+      contentQualityScore,
     };
 
     return fingerprint;
@@ -300,6 +310,119 @@ class ContentAnalyzer {
         recommendedAction: 'auto_approve',
       },
       flagStatus: 'clean',
+      // NEW: ML-ready metrics
+      thinContent: {
+        wordCount: 0,
+        uniqueWords: 0,
+        uniqueWordRatio: 0,
+        isThin: true,
+        isVeryThin: true,
+        isMfaThinContent: true,
+        severity: 'critical',
+      },
+      wordDiversity: {
+        uniqueWords: 0,
+        totalWords: 0,
+        typeTokenRatio: 0,
+        vocabularyRichness: 0,
+        isLowDiversity: true,
+      },
+      contentQualityScore: {
+        overall: 0,
+        qualityLevel: 'low',
+        isMfaRisk: true,
+      },
+    };
+  }
+
+  // NEW: Detect thin/low-value content (major MFA indicator)
+  detectThinContent(text, metrics) {
+    const words = text.split(/\s+/).filter(w => w.length > 0);
+    const wordCount = words.length;
+    const uniqueWords = new Set(words.map(w => w.toLowerCase())).size;
+    const uniqueWordRatio = wordCount > 0 ? uniqueWords / wordCount : 0;
+
+    // Thresholds based on industry standards
+    const THIN_WORD_COUNT = 300;
+    const VERY_THIN_WORD_COUNT = 100;
+    const LOW_UNIQUE_RATIO = 0.3;
+
+    const isThin = wordCount < THIN_WORD_COUNT;
+    const isVeryThin = wordCount < VERY_THIN_WORD_COUNT;
+    const hasLowDiversity = uniqueWordRatio < LOW_UNIQUE_RATIO;
+
+    return {
+      wordCount,
+      uniqueWords,
+      uniqueWordRatio: Math.round(uniqueWordRatio * 1000) / 1000,
+      isThin,
+      isVeryThin,
+      hasLowDiversity,
+      // Combined thin content flag
+      isMfaThinContent: isVeryThin || (isThin && hasLowDiversity),
+      severity: isVeryThin ? 'critical' : (isThin ? 'warning' : 'normal'),
+    };
+  }
+
+  // NEW: Aggregate content quality score (0-1, higher = better)
+  calculateContentQualityScore(metrics, thinContent) {
+    const weights = {
+      depth: 0.25,         // Word count & complexity
+      originality: 0.30,   // Entropy & AI likelihood
+      readability: 0.20,   // Readability level
+      engagement: 0.15,    // Not clickbait
+      freshness: 0.10,     // Content freshness
+    };
+
+    // Depth score (based on word count)
+    const wordCount = thinContent?.wordCount || 0;
+    const depthScore = Math.min(1, wordCount / 800); // 800+ words = max score
+
+    // Originality score (high entropy, low AI likelihood)
+    const entropyScore = metrics.entropy?.entropyScore || 0;
+    const aiScore = metrics.ai?.aiScore || 0;
+    const originalityScore = Math.max(0, (entropyScore - aiScore) * 0.5 + 0.5);
+
+    // Readability score (moderate is best)
+    const readabilityLevel = metrics.readability?.readabilityLevel || 'unknown';
+    const readabilityScoreMap = {
+      'very_easy': 0.4,    // Too simple = suspicious
+      'easy': 0.7,
+      'moderate': 1.0,     // Ideal
+      'difficult': 0.8,
+      'very_difficult': 0.5,
+      'unknown': 0.5,
+    };
+    const readabilityScore = readabilityScoreMap[readabilityLevel] || 0.5;
+
+    // Engagement score (not clickbait)
+    const clickbaitScore = metrics.clickbait?.clickbaitScore || 0;
+    const engagementScore = Math.max(0, 1 - clickbaitScore);
+
+    // Freshness score
+    const staleness = metrics.freshness?.staleness || 0;
+    const freshnessScore = Math.max(0, 1 - (staleness / 365));
+
+    // Weighted average
+    const overall = (
+      (depthScore * weights.depth) +
+      (originalityScore * weights.originality) +
+      (readabilityScore * weights.readability) +
+      (engagementScore * weights.engagement) +
+      (freshnessScore * weights.freshness)
+    );
+
+    return {
+      overall: Math.round(overall * 1000) / 1000,
+      components: {
+        depth: Math.round(depthScore * 100),
+        originality: Math.round(originalityScore * 100),
+        readability: Math.round(readabilityScore * 100),
+        engagement: Math.round(engagementScore * 100),
+        freshness: Math.round(freshnessScore * 100),
+      },
+      qualityLevel: overall >= 0.7 ? 'high' : (overall >= 0.4 ? 'medium' : 'low'),
+      isMfaRisk: overall < 0.35,
     };
   }
 }

@@ -5,14 +5,18 @@ const { validateAdsTxt } = require('./ads-txt');
 const { analyzeBrokenLinks } = require('./broken-links');
 const { checkDomainIntelligence } = require('./domain-intel');
 const { analyzeViewportOcclusion } = require('./viewport-occlusion');
+const SafeBrowsingChecker = require('./safe-browsing');
+const TrackerDetector = require('./tracker-detector');
 
 const COMPONENT_WEIGHTS = {
-  ssl: 0.15,
-  performance: 0.20,
-  adsTxt: 0.15,
-  brokenLinks: 0.15,
-  domainIntel: 0.20,
-  viewportOcclusion: 0.15,
+  ssl: 0.10,
+  performance: 0.16,
+  adsTxt: 0.10,
+  brokenLinks: 0.10,
+  domainIntel: 0.16,
+  viewportOcclusion: 0.10,
+  safeBrowsing: 0.13,
+  trackers: 0.15, // NEW: Third-party tracker analysis
 };
 
 async function runTechnicalHealthCheck(crawlData, domain, options = {}) {
@@ -23,6 +27,8 @@ async function runTechnicalHealthCheck(crawlData, domain, options = {}) {
     skipBrokenLinks = false,
     skipDomainIntel = false,
     skipViewportOcclusion = false,
+    skipSafeBrowsing = false,
+    skipTrackers = false, // NEW
   } = options;
 
   logger.info('Starting technical health check', {
@@ -146,6 +152,72 @@ async function runTechnicalHealthCheck(crawlData, domain, options = {}) {
     );
   }
 
+  // NEW: Safe Browsing check
+  if (!skipSafeBrowsing) {
+    checks.push(
+      Promise.resolve().then(async () => {
+        const safeBrowsingChecker = new SafeBrowsingChecker();
+        const checkResult = await safeBrowsingChecker.checkUrl(`https://${domain}`);
+        const summary = safeBrowsingChecker.getSummary(checkResult);
+
+        results.components.safeBrowsing = {
+          ...checkResult,
+          ...summary,
+          score: checkResult.safe === true ? 100 : checkResult.safe === false ? 0 : 50,
+        };
+
+        if (!checkResult.safe && checkResult.checked) {
+          logger.warn('Unsafe site detected by Safe Browsing', {
+            domain,
+            threats: checkResult.threats,
+          });
+        }
+      }).catch(error => {
+        logger.warn('Safe Browsing check failed', { error: error.message, domain });
+        results.components.safeBrowsing = {
+          checked: false,
+          safe: null,
+          score: 50, // Neutral score on error
+          error: error.message,
+        };
+      })
+    );
+  }
+
+  // NEW: Third-party tracker analysis
+  if (!skipTrackers && crawlData) {
+    checks.push(
+      Promise.resolve().then(async () => {
+        const trackerDetector = new TrackerDetector();
+        const networkRequests = crawlData.networkRequests || crawlData.requests || [];
+        const trackerResult = trackerDetector.analyze(networkRequests, `https://${domain}`);
+
+        results.components.trackers = {
+          ...trackerResult.summary,
+          metrics: trackerResult.metrics,
+          problems: trackerResult.problems,
+          score: Math.round((1 - trackerResult.summary.riskScore) * 100),
+        };
+
+        if (trackerResult.summary.isMfaSignal) {
+          logger.warn('MFA tracker signal detected', {
+            domain,
+            totalTrackers: trackerResult.summary.totalTrackers,
+            adNetworks: trackerResult.metrics.advertisingCount,
+          });
+        }
+      }).catch(error => {
+        logger.warn('Tracker detection failed', { error: error.message, domain });
+        results.components.trackers = {
+          totalTrackers: 0,
+          riskScore: 0,
+          score: 100,
+          error: error.message,
+        };
+      })
+    );
+  }
+
   await Promise.all(checks);
 
   results.technicalHealthScore = aggregateScores(results.components);
@@ -202,6 +274,7 @@ function aggregateScores(components) {
     brokenLinks: getComponentScore(components.brokenLinks),
     domainIntel: getComponentScore(components.domainIntel),
     viewportOcclusion: getComponentScore(components.viewportOcclusion),
+    safeBrowsing: getComponentScore(components.safeBrowsing), // NEW
   };
 
   const activeWeights = {};
@@ -309,6 +382,20 @@ function generateSummary(components) {
 
     if (components.viewportOcclusion.reasoning) {
       summary.recommendations.push(components.viewportOcclusion.reasoning);
+    }
+  }
+
+  // NEW: Safe Browsing status
+  if (components.safeBrowsing) {
+    summary.componentStatus.safeBrowsing = components.safeBrowsing.status || 'unknown';
+
+    if (components.safeBrowsing.safe === false) {
+      summary.totalIssues++;
+      summary.criticalIssues.push(`CRITICAL: Google Safe Browsing detected threats: ${components.safeBrowsing.message}`);
+    }
+
+    if (components.safeBrowsing.riskLevel === 'critical' || components.safeBrowsing.riskLevel === 'high') {
+      summary.warnings.push(`Safe Browsing risk level: ${components.safeBrowsing.riskLevel}`);
     }
   }
 

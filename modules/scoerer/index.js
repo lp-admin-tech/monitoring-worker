@@ -34,6 +34,7 @@ class ScoringEngine {
       hasGamMetrics: !!auditData.gamMetrics
     });
 
+
     if (auditData.contentAnalysis) {
       flattened.entropyScore = auditData.contentAnalysis.entropy?.score || auditData.contentAnalysis.entropyScore || 0;
       flattened.aiLikelihood = auditData.contentAnalysis.aiLikelihood?.percentage || auditData.contentAnalysis.aiLikelihood || 0;
@@ -41,6 +42,22 @@ class ScoringEngine {
       flattened.readabilityScore = auditData.contentAnalysis.readability?.score || auditData.contentAnalysis.readabilityScore || 0;
       flattened.freshnessScore = auditData.contentAnalysis.freshness?.score || auditData.contentAnalysis.freshnessScore || 0;
       flattened.similarityScore = auditData.contentAnalysis.similarity?.score || auditData.contentAnalysis.similarityScore || 0;
+
+      // NEW: ML-ready content metrics
+      const thinContent = auditData.contentAnalysis.thinContent || {};
+      flattened.thinContentWordCount = thinContent.wordCount || 0;
+      flattened.isThinContent = thinContent.isThin || false;
+      flattened.isMfaThinContent = thinContent.isMfaThinContent || false;
+
+      const wordDiversity = auditData.contentAnalysis.wordDiversity || {};
+      flattened.typeTokenRatio = wordDiversity.typeTokenRatio || 0;
+      flattened.vocabularyRichness = wordDiversity.vocabularyRichness || 0;
+      flattened.isLowDiversity = wordDiversity.isLowDiversity || false;
+
+      const qualityScore = auditData.contentAnalysis.contentQualityScore || {};
+      flattened.contentQualityScore = qualityScore.overall || 0;
+      flattened.contentQualityLevel = qualityScore.qualityLevel || 'unknown';
+      flattened.isContentMfaRisk = qualityScore.isMfaRisk || false;
     }
 
     if (auditData.adAnalysis) {
@@ -88,6 +105,14 @@ class ScoringEngine {
         arbitrage.summary?.riskScore || 0;
       flattened.hasNativeWidgets = arbitrage.summary?.hasNativeWidgets || false;
       flattened.hasContentRecBlocks = arbitrage.summary?.hasContentRecBlocks || false;
+
+      // NEW: ML-ready metrics for data quality
+      const densityMetrics = analysis.density?.metrics || {};
+      flattened.contentToAdRatio = densityMetrics.contentToAdRatio || 0;
+      flattened.adsAboveFoldCount = densityMetrics.adsAboveFold || 0;
+      flattened.aboveFoldDensityPercent = densityMetrics.aboveFoldDensityPercent || 0;
+      flattened.isCluttered = densityMetrics.isCluttered || false;
+      flattened.stickyAdCount = densityMetrics.stickyAdCount || 0;
     }
 
     if (auditData.policyCheck) {
@@ -122,6 +147,27 @@ class ScoringEngine {
         flattened.domainAgeMonths = domainData ? Math.round(domainData.days / 30) : 0;
         flattened.whoisPrivate = tech.components.domainIntel.whoisPrivate || false;
       }
+
+      // NEW: Third-party tracker metrics
+      if (tech.components?.trackers) {
+        const trackers = tech.components.trackers;
+        flattened.totalTrackerCount = trackers.totalTrackers || 0;
+        flattened.trackerRiskScore = trackers.riskScore || 0;
+        flattened.adNetworkCount = trackers.metrics?.advertisingCount || 0;
+        flattened.contentRecCount = trackers.metrics?.contentRecCount || 0;
+        flattened.fingerprintingCount = trackers.metrics?.fingerprintingCount || 0;
+        flattened.isMfaTrackerSignal = trackers.isMfaSignal || false;
+      }
+    }
+
+    // NEW: Commercial intent metrics (from ad analysis or separate module)
+    if (auditData.commercialIntent) {
+      const ci = auditData.commercialIntent;
+      flattened.commercialIntentScore = ci.summary?.commercialScore || 0;
+      flattened.affiliateLinkCount = ci.affiliateLinks?.totalAffiliateLinks || 0;
+      flattened.hasPopupAds = ci.aggressiveMonetization?.hasPopups || false;
+      flattened.adNetworkDiversityCount = ci.adNetworkDiversity?.networkCount || 0;
+      flattened.isMfaCommercialSignal = ci.summary?.isMfaSignal || false;
     }
 
     if (auditData.policyCheck) {
