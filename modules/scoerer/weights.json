@@ -1,25 +1,30 @@
 {
   "behavioral": {
-    "ad_density": 0.15,
+    "ad_density": 0.12,
     "auto_refresh": 0.12,
-    "viewport_occlusion": 0.10,
-    "user_interaction_patterns": 0.08,
-    "scroll_jacking": 0.05
+    "viewport_occlusion": 0.08,
+    "user_interaction_patterns": 0.06,
+    "scroll_jacking": 0.05,
+    "video_stuffing": 0.10,
+    "muted_autoplay": 0.08,
+    "sticky_video": 0.05,
+    "scroll_ad_injection": 0.10
   },
   "content": {
-    "entropy_score": 0.20,
-    "ai_likelihood": 0.12,
-    "clickbait_score": 0.10,
-    "readability": 0.08,
+    "entropy_score": 0.18,
+    "ai_likelihood": 0.14,
+    "clickbait_score": 0.12,
+    "readability": 0.06,
     "freshness": 0.05,
     "semantic_similarity": 0.08
   },
   "technical": {
     "performance_score": 0.10,
     "ssl_validity": 0.05,
-    "broken_links": 0.08,
+    "broken_links": 0.06,
     "domain_age": 0.06,
-    "whois_privacy": 0.04
+    "whois_privacy": 0.04,
+    "ads_txt_missing": 0.08
   },
   "layout": {
     "viewport_consistency": 0.08,
@@ -28,10 +33,11 @@
     "aggressive_positioning": 0.07
   },
   "gam_correlation": {
-    "ctr_deviation": 0.15,
-    "ecpm_deviation": 0.12,
+    "ctr_deviation": 0.12,
+    "ecpm_deviation": 0.10,
     "fill_rate_inconsistency": 0.08,
-    "impression_spike": 0.10
+    "impression_spike": 0.10,
+    "traffic_arbitrage": 0.15
   },
   "policy": {
     "policy_violations": 0.10,
@@ -39,12 +45,12 @@
     "jurisdiction_compliance": 0.06
   },
   "componentWeights": {
-    "behavioral": 0.25,
-    "content": 0.25,
-    "technical": 0.15,
-    "layout": 0.15,
-    "gam_correlation": 0.15,
-    "policy": 0.05
+    "behavioral": 0.28,
+    "content": 0.22,
+    "technical": 0.12,
+    "layout": 0.10,
+    "gamCorrelation": 0.20,
+    "policy": 0.08
   },
   "riskFactors": {
     "critical": 0.95,
@@ -55,9 +61,10 @@
   },
   "bayesianPriors": {
     "baselineRate": 0.15,
-    "behavioralPrior": 0.30,
+    "behavioralPrior": 0.35,
     "contentPrior": 0.25,
-    "technicalPrior": 0.20,
+    "technicalPrior": 0.15,
+    "gamCorrelationPrior": 0.25,
     "positiveResultLikelihood": 0.85,
     "negativeResultLikelihood": 0.10
   },

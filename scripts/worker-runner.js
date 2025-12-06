@@ -5,8 +5,9 @@ const logger = require('../modules/logger');
 const supabase = require('../modules/supabase-client');
 const gamFetcher = require('../modules/gam-fetcher');
 const QueueManager = require('../core/queue/queue-manager');
+const DataQualityDB = require('../modules/data-quality-db');
 
-let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker, technicalCheckerDb, contentAnalyzerDb, adAnalyzerDb, policyCheckerDb, aiAssistanceDb, crawlerDb, moduleDataOrchestrator, directoryAuditOrchestrator, crossModuleAnalyzer;
+let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker, technicalCheckerDb, contentAnalyzerDb, adAnalyzerDb, policyCheckerDb, aiAssistanceDb, crawlerDb, moduleDataOrchestrator, directoryAuditOrchestrator, crossModuleAnalyzer, dataQualityDb;
 let server = null;
 const activeProcesses = new Set();
 
@@ -70,6 +71,9 @@ try {
   });
 
   crossModuleAnalyzer = crossModuleAnalyzerModule;
+
+  // Initialize DataQualityDB for audit_data_quality table
+  dataQualityDb = supabaseClient ? new DataQualityDB(supabaseClient) : null;
 } catch (err) {
   console.error('Failed to initialize analysis modules:', err.message);
   console.error('Stack:', err.stack);
@@ -612,6 +616,16 @@ async function processAuditJob(job) {
               logger.error(`[${requestId}] Failed to persist directory data for ${dirResult.url}`, dirPersistErr, { requestId });
             }
           }
+        }
+      }
+
+      // ✅ Save to audit_data_quality table for detailed per-module tracking
+      if (dataQualityDb) {
+        try {
+          await dataQualityDb.saveDataQuality(siteAuditId, publisherId, dataQuality, modules);
+          logger.info(`[${requestId}] ✅ Saved to audit_data_quality table`);
+        } catch (dqErr) {
+          logger.warn(`[${requestId}] Failed to save to audit_data_quality table`, { error: dqErr.message });
         }
       }
 

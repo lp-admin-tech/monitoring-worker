@@ -24,13 +24,20 @@ class RiskEngine {
   calculateBehavioralRisk(data) {
     const weights = this.weights.behavioral || {};
 
-    const adDensity = Math.min(data.adDensity || 0, 1) * (weights.ad_density || 0.15);
+    const adDensity = Math.min(data.adDensity || 0, 1) * (weights.ad_density || 0.12);
     const autoRefresh = Math.min(data.autoRefreshRate || 0, 1) * (weights.auto_refresh || 0.12);
-    const viewportOcclusion = Math.min(data.viewportOcclusionPercent || 0, 1) * (weights.viewport_occlusion || 0.10);
-    const userPatterns = Math.min(data.suspiciousInteractionRatio || 0, 1) * (weights.user_interaction_patterns || 0.08);
+    const viewportOcclusion = Math.min(data.viewportOcclusionPercent || 0, 1) * (weights.viewport_occlusion || 0.08);
+    const userPatterns = Math.min(data.suspiciousInteractionRatio || 0, 1) * (weights.user_interaction_patterns || 0.06);
     const scrollJacking = Math.min(data.scrollJackingDetected ? 1 : 0, 1) * (weights.scroll_jacking || 0.05);
 
-    const rawScore = adDensity + autoRefresh + viewportOcclusion + userPatterns + scrollJacking;
+    // Phase 3: Video and scroll injection signals
+    const videoStuffing = Math.min(data.videoStuffingDetected ? 1 : 0, 1) * (weights.video_stuffing || 0.10);
+    const mutedAutoplay = Math.min(data.mutedAutoplayCount || 0, 1) * (weights.muted_autoplay || 0.08);
+    const stickyVideo = Math.min(data.stickyVideoCount || 0, 1) * (weights.sticky_video || 0.05);
+    const scrollAdInjection = Math.min(data.scrollAdInjectionScore || 0, 1) * (weights.scroll_ad_injection || 0.10);
+
+    const rawScore = adDensity + autoRefresh + viewportOcclusion + userPatterns + scrollJacking +
+      videoStuffing + mutedAutoplay + stickyVideo + scrollAdInjection;
     const normalizedScore = Math.min(rawScore, 1);
 
     return {
@@ -39,7 +46,11 @@ class RiskEngine {
       autoRefresh: { value: data.autoRefreshRate || 0, weight: autoRefresh },
       viewportOcclusion: { value: data.viewportOcclusionPercent || 0, weight: viewportOcclusion },
       userPatterns: { value: data.suspiciousInteractionRatio || 0, weight: userPatterns },
-      scrollJacking: { detected: data.scrollJackingDetected || false, weight: scrollJacking }
+      scrollJacking: { detected: data.scrollJackingDetected || false, weight: scrollJacking },
+      videoStuffing: { detected: data.videoStuffingDetected || false, weight: videoStuffing },
+      mutedAutoplay: { count: data.mutedAutoplayCount || 0, weight: mutedAutoplay },
+      stickyVideo: { count: data.stickyVideoCount || 0, weight: stickyVideo },
+      scrollAdInjection: { score: data.scrollAdInjectionScore || 0, weight: scrollAdInjection }
     };
   }
 
@@ -112,12 +123,15 @@ class RiskEngine {
   calculateGamCorrelationRisk(data) {
     const weights = this.weights.gam_correlation || {};
 
-    const ctrDeviation = Math.min(Math.abs(data.ctrDeviation || 0), 1) * (weights.ctr_deviation || 0.15);
-    const ecpmDeviation = Math.min(Math.abs(data.ecpmDeviation || 0), 1) * (weights.ecpm_deviation || 0.12);
+    const ctrDeviation = Math.min(Math.abs(data.ctrDeviation || 0), 1) * (weights.ctr_deviation || 0.12);
+    const ecpmDeviation = Math.min(Math.abs(data.ecpmDeviation || 0), 1) * (weights.ecpm_deviation || 0.10);
     const fillRate = Math.min(Math.abs(data.fillRateInconsistency || 0), 1) * (weights.fill_rate_inconsistency || 0.08);
     const impression = Math.min(data.impressionSpike || 0, 1) * (weights.impression_spike || 0.10);
 
-    const rawScore = ctrDeviation + ecpmDeviation + fillRate + impression;
+    // Phase 3: Traffic arbitrage signal
+    const trafficArbitrage = Math.min(data.trafficArbitrageScore || 0, 1) * (weights.traffic_arbitrage || 0.15);
+
+    const rawScore = ctrDeviation + ecpmDeviation + fillRate + impression + trafficArbitrage;
     const normalizedScore = Math.min(rawScore, 1);
 
     return {
@@ -125,15 +139,20 @@ class RiskEngine {
       ctrDeviation: { value: data.ctrDeviation || 0, weight: ctrDeviation },
       ecpmDeviation: { value: data.ecpmDeviation || 0, weight: ecpmDeviation },
       fillRate: { value: data.fillRateInconsistency || 0, weight: fillRate },
-      impression: { value: data.impressionSpike || 0, weight: impression }
+      impression: { value: data.impressionSpike || 0, weight: impression },
+      trafficArbitrage: { value: data.trafficArbitrageScore || 0, weight: trafficArbitrage }
     };
   }
 
   calculatePolicyRisk(data) {
     const weights = this.weights.policy || {};
 
-    const violations = Math.min(data.policyViolationCount || 0 / 5, 1) * (weights.policy_violations || 0.10);
-    const keywords = Math.min(data.restrictedKeywordMatches || 0 / 10, 1) * (weights.restricted_keywords || 0.08);
+    // BUG FIX: Fixed operator precedence - division should happen before multiplication
+    const violationCount = data.policyViolationCount || 0;
+    const keywordCount = data.restrictedKeywordMatches || 0;
+
+    const violations = Math.min(violationCount / 5, 1) * (weights.policy_violations || 0.10);
+    const keywords = Math.min(keywordCount / 10, 1) * (weights.restricted_keywords || 0.08);
     const jurisdiction = Math.min(data.jurisdictionViolations || 0, 1) * (weights.jurisdiction_compliance || 0.06);
 
     const rawScore = violations + keywords + jurisdiction;
@@ -141,8 +160,8 @@ class RiskEngine {
 
     return {
       score: normalizedScore,
-      violations: { count: data.policyViolationCount || 0, weight: violations },
-      keywords: { count: data.restrictedKeywordMatches || 0, weight: keywords },
+      violations: { count: violationCount, weight: violations },
+      keywords: { count: keywordCount, weight: keywords },
       jurisdiction: { value: data.jurisdictionViolations || 0, weight: jurisdiction }
     };
   }

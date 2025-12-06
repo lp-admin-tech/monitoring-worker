@@ -18,9 +18,21 @@ class ScoringEngine {
   }
 
   flattenAuditData(auditData) {
-    if (!auditData) return {};
+    if (!auditData) {
+      logger.warn('[Scorer] flattenAuditData received null/undefined auditData');
+      return {};
+    }
 
     const flattened = { ...auditData };
+
+    // Log what modules we have data for
+    logger.debug('[Scorer] flattenAuditData input modules:', {
+      hasContentAnalysis: !!auditData.contentAnalysis,
+      hasAdAnalysis: !!auditData.adAnalysis,
+      hasPolicyCheck: !!auditData.policyCheck,
+      hasTechnicalCheck: !!auditData.technicalCheck,
+      hasGamMetrics: !!auditData.gamMetrics
+    });
 
     if (auditData.contentAnalysis) {
       flattened.entropyScore = auditData.contentAnalysis.entropy?.score || auditData.contentAnalysis.entropyScore || 0;
@@ -56,6 +68,26 @@ class ScoringEngine {
       flattened.suspiciousInteractionRatio = auditData.adAnalysis.suspiciousInteractionRatio || 0;
       flattened.scrollJackingDetected = auditData.adAnalysis.scrollJackingDetected || false;
       flattened.visualDensity = analysis.density?.metrics?.weightedDensity || auditData.adAnalysis.visualDensity || 0;
+
+      // Phase 3: Video MFA signals
+      const videoAnalysis = analysis.video || {};
+      flattened.videoStuffingDetected = videoAnalysis.summary?.videoStuffingDetected || false;
+      flattened.mutedAutoplayCount = videoAnalysis.metrics?.mutedAutoplayCount ||
+        (videoAnalysis.summary?.mutedAutoplayDetected ? 1 : 0);
+      flattened.stickyVideoCount = videoAnalysis.metrics?.stickyVideoCount || 0;
+      flattened.videoMfaRiskScore = videoAnalysis.summary?.mfaVideoRiskScore || 0;
+
+      // Phase 3: Scroll injection signals
+      const scrollInjection = analysis.scrollInjection || {};
+      flattened.scrollAdInjectionScore = scrollInjection.summary?.riskScore || 0;
+      flattened.scrollInjectedAdCount = scrollInjection.metrics?.scrollInjectedAdCount || 0;
+
+      // Phase 3: Traffic arbitrage signals
+      const arbitrage = analysis.trafficArbitrage || {};
+      flattened.trafficArbitrageScore = arbitrage.summary?.combinedRiskScore ||
+        arbitrage.summary?.riskScore || 0;
+      flattened.hasNativeWidgets = arbitrage.summary?.hasNativeWidgets || false;
+      flattened.hasContentRecBlocks = arbitrage.summary?.hasContentRecBlocks || false;
     }
 
     if (auditData.policyCheck) {
@@ -123,6 +155,15 @@ class ScoringEngine {
     } else {
       flattened.impressionSpike = auditData.impressionSpike || 0;
     }
+
+    // Debug: Log key flattened values
+    logger.debug('[Scorer] flattenAuditData output:', {
+      adDensity: flattened.adDensity,
+      entropyScore: flattened.entropyScore,
+      aiLikelihood: flattened.aiLikelihood,
+      performanceScore: flattened.performanceScore,
+      autoRefreshRate: flattened.autoRefreshRate
+    });
 
     return flattened;
   }

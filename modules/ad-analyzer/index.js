@@ -5,6 +5,8 @@ const VisibilityChecker = require('./visibility');
 const AdDensityCalculator = require('./ad-density');
 const AdAnalyzerDB = require('./db');
 const VideoAnalyzer = require('./video-analyzer');
+const ScrollInjectionDetector = require('./scroll-injection');
+const TrafficArbitrageDetector = require('./traffic-arbitrage');
 
 class AdBehaviorAggregator {
   constructor(config = {}) {
@@ -13,6 +15,8 @@ class AdBehaviorAggregator {
     this.visibilityChecker = new VisibilityChecker(config.visibility);
     this.adDensityCalculator = new AdDensityCalculator(config.density);
     this.videoAnalyzer = new VideoAnalyzer(config.video);
+    this.scrollInjectionDetector = new ScrollInjectionDetector(config.scrollInjection);
+    this.trafficArbitrageDetector = new TrafficArbitrageDetector(config.arbitrage);
     this.config = config;
 
     if (config.supabaseUrl && config.supabaseServiceKey) {
@@ -93,6 +97,12 @@ class AdBehaviorAggregator {
     const densityReport = this.adDensityCalculator.generateReport(crawlData, viewport);
     const videoReport = this.videoAnalyzer.analyze(crawlData);
 
+    // Phase 3: Scroll injection detection
+    const scrollInjectionReport = this.scrollInjectionDetector.analyzeScrollInjection(crawlData);
+
+    // Phase 3: Traffic arbitrage detection (sync version - async GAM analysis done separately)
+    const trafficArbitrageReport = this.trafficArbitrageDetector.analyzeArbitrageSignals(crawlData);
+
     const aggregated = {
       timestamp,
       publisherId: crawlData.publisherId,
@@ -107,6 +117,9 @@ class AdBehaviorAggregator {
         visibility: visibilityReport,
         density: densityReport,
         video: videoReport,
+        // Phase 3: Include new MFA signals
+        scrollInjection: scrollInjectionReport,
+        trafficArbitrage: trafficArbitrageReport,
       },
       correlations: merged.correlations,
       riskAssessment: this.calculateRiskScore(
@@ -114,7 +127,9 @@ class AdBehaviorAggregator {
         refreshReport,
         visibilityReport,
         densityReport,
-        videoReport
+        videoReport,
+        scrollInjectionReport,
+        trafficArbitrageReport
       ),
       adElements: merged.adElements || [],
     };
@@ -122,24 +137,28 @@ class AdBehaviorAggregator {
     logger.info('Ad behavior aggregation completed', {
       publisherId: crawlData.publisherId,
       riskScore: aggregated.riskAssessment.overallRiskScore,
+      hasScrollInjection: !!scrollInjectionReport?.summary?.scrollInjectionDetected,
+      hasArbitrage: !!trafficArbitrageReport?.summary?.arbitrageDetected,
     });
 
     return aggregated;
   }
 
-  calculateRiskScore(patternReport, refreshReport, visibilityReport, densityReport, videoReport) {
+  calculateRiskScore(patternReport, refreshReport, visibilityReport, densityReport, videoReport, scrollInjectionReport, trafficArbitrageReport) {
     let totalRisk = 0;
     const factors = {};
 
+    // Pattern Risk (15%)
     if (patternReport.summary) {
       const patternRisk = Math.min(
         patternReport.summary.mfaRiskScore || 0,
         1
       );
       factors.patternRisk = patternRisk;
-      totalRisk += patternRisk * 0.20;
+      totalRisk += patternRisk * 0.15;
     }
 
+    // Refresh Risk (15%)
     if (refreshReport.summary) {
       let refreshRisk = refreshReport.summary.autoRefreshDetected ? 0.2 : 0;
       if (refreshReport.summary.criticalRefreshCount > 0) {
@@ -148,16 +167,18 @@ class AdBehaviorAggregator {
         refreshRisk = 0.6;
       }
       factors.refreshRisk = refreshRisk;
-      totalRisk += refreshRisk * 0.20;
+      totalRisk += refreshRisk * 0.15;
     }
 
+    // Visibility Risk (15%)
     if (visibilityReport.summary) {
       const visibilityRisk =
         visibilityReport.summary.complianceStatus === 'non_compliant' ? 0.4 : 0.1;
       factors.visibilityRisk = visibilityRisk;
-      totalRisk += visibilityRisk * 0.20;
+      totalRisk += visibilityRisk * 0.15;
     }
 
+    // Density Risk (15%)
     if (densityReport.summary) {
       let densityRisk =
         densityReport.summary.complianceStatus === 'non_compliant'
@@ -170,13 +191,29 @@ class AdBehaviorAggregator {
       }
 
       factors.densityRisk = densityRisk;
-      totalRisk += densityRisk * 0.20;
+      totalRisk += densityRisk * 0.15;
     }
 
+    // Video Risk (15%)
     if (videoReport && videoReport.summary) {
       const videoRisk = videoReport.summary.riskScore || 0;
       factors.videoRisk = videoRisk;
-      totalRisk += videoRisk * 0.20;
+      totalRisk += videoRisk * 0.15;
+    }
+
+    // Phase 3: Scroll Injection Risk (10%)
+    if (scrollInjectionReport && scrollInjectionReport.summary) {
+      const scrollRisk = scrollInjectionReport.summary.riskScore || 0;
+      factors.scrollInjectionRisk = scrollRisk;
+      totalRisk += scrollRisk * 0.10;
+    }
+
+    // Phase 3: Traffic Arbitrage Risk (15%)
+    if (trafficArbitrageReport && trafficArbitrageReport.summary) {
+      const arbitrageRisk = trafficArbitrageReport.summary.riskScore ||
+        trafficArbitrageReport.summary.combinedRiskScore || 0;
+      factors.trafficArbitrageRisk = arbitrageRisk;
+      totalRisk += arbitrageRisk * 0.15;
     }
 
     return {
@@ -188,7 +225,9 @@ class AdBehaviorAggregator {
         refreshReport,
         visibilityReport,
         densityReport,
-        videoReport
+        videoReport,
+        scrollInjectionReport,
+        trafficArbitrageReport
       ),
     };
   }
@@ -201,7 +240,7 @@ class AdBehaviorAggregator {
     return 'minimal';
   }
 
-  getRecommendations(patternReport, refreshReport, visibilityReport, densityReport, videoReport) {
+  getRecommendations(patternReport, refreshReport, visibilityReport, densityReport, videoReport, scrollInjectionReport, trafficArbitrageReport) {
     const recommendations = [];
 
     if (
@@ -251,7 +290,27 @@ class AdBehaviorAggregator {
       recommendations.push(...videoReport.recommendations);
     }
 
-    return recommendations.slice(0, 5);
+    // Phase 3: Scroll Injection recommendations
+    if (scrollInjectionReport?.summary?.scrollInjectionDetected) {
+      recommendations.push(
+        'Review scroll-triggered ad injection behavior - excessive injection may indicate MFA'
+      );
+    }
+
+    // Phase 3: Traffic Arbitrage recommendations
+    if (trafficArbitrageReport?.summary?.arbitrageDetected || trafficArbitrageReport?.summary?.trafficArbitrageDetected) {
+      recommendations.push(
+        'CRITICAL: Traffic arbitrage detected - review content recommendation widgets and paid traffic sources'
+      );
+    }
+
+    if (trafficArbitrageReport?.summary?.hasNativeWidgets) {
+      recommendations.push(
+        'Audit native ad widgets (Taboola, Outbrain, etc.) for compliance with MFA policies'
+      );
+    }
+
+    return recommendations.slice(0, 7);
   }
 
   async persistAnalysisResults(publisherId, siteAuditId, aggregatedAnalysis) {

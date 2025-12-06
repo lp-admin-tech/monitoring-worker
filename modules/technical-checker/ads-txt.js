@@ -86,7 +86,7 @@ function isLikelySellerId(id) {
  * Try multiple url variants to fetch ads.txt
  * Returns { found, url, statusCode, content, error, method }
  */
-async function fetchAdsTxt(domain, timeout = 8000) {
+async function fetchAdsTxt(domain, timeout = 15000) {
   const normalized = normalizeDomain(domain);
   if (!normalized) {
     logger.warn('Invalid domain for ads.txt fetch after normalization', { original: domain });
@@ -102,46 +102,72 @@ async function fetchAdsTxt(domain, timeout = 8000) {
 
   logger.info('Fetching ads.txt for domain', { original: domain, normalized });
 
+  // Try multiple URL variants - order matters (most common first)
   const candidates = [
     `https://${normalized}/ads.txt`,
-    `http://${normalized}/ads.txt`,
     `https://www.${normalized}/ads.txt`,
+    `http://${normalized}/ads.txt`,
     `http://www.${normalized}/ads.txt`,
+    // Some sites serve from app subdomain or different paths
+    `https://${normalized}/Ads.txt`,
+    `https://www.${normalized}/Ads.txt`,
   ];
 
   for (const url of candidates) {
     try {
-      logger.debug(`Trying ads.txt at ${url}`);
+      logger.debug(`[ads.txt] Trying: ${url}`);
       const response = await axios.get(url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-          'Accept': 'text/plain, */*',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/plain, text/html, */*',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Cache-Control': 'no-cache',
         },
         timeout,
-        maxRedirects: 5,
+        maxRedirects: 10,
         validateStatus: () => true,
       });
 
       const status = response.status || 0;
+      const contentType = response.headers['content-type'] || '';
+
+      logger.debug(`[ads.txt] Response from ${url}`, {
+        status,
+        contentType,
+        dataLength: response.data ? String(response.data).length : 0
+      });
 
       if (status >= 200 && status < 300) {
         let content = response.data;
+
+        // Handle case where response is HTML (bot protection page)
+        if (contentType.includes('text/html') && String(content).includes('<html')) {
+          logger.debug(`[ads.txt] Got HTML response, likely bot protection at ${url}`);
+          continue; // Try next URL
+        }
 
         // strip BOM if present
         if (typeof content === 'string' && content.charCodeAt(0) === 0xFEFF) {
           content = content.slice(1);
         }
 
-        if (content && String(content).trim().length > 0) {
-          const result = { found: true, url, statusCode: status, content: String(content), method: 'http' };
+        const contentStr = String(content).trim();
+
+        // Validate it looks like ads.txt (should have comma-separated values)
+        if (contentStr.length > 0 && (contentStr.includes(',') || contentStr.includes('google.com') || contentStr.includes('DIRECT') || contentStr.includes('RESELLER'))) {
+          const result = { found: true, url, statusCode: status, content: contentStr, method: 'http' };
           cacheSet(cacheKey, result, 120); // cache for 2 minutes
           logger.info('✓ Successfully fetched ads.txt', { url, statusCode: status, contentLength: result.content.length });
           return result;
+        } else if (contentStr.length > 0) {
+          logger.debug(`[ads.txt] Content doesn't look like ads.txt`, { url, preview: contentStr.substring(0, 100) });
         } else {
           logger.warn('ads.txt found but empty', { url, statusCode: status });
         }
       } else if (status === 404) {
         logger.debug(`ads.txt not found at ${url} (404)`);
+      } else if (status === 403 || status === 401) {
+        logger.debug(`ads.txt access denied at ${url} (${status}) - may need browser`);
       } else {
         logger.debug(`Unexpected status ${status} for ${url}`);
       }
@@ -157,8 +183,8 @@ async function fetchAdsTxt(domain, timeout = 8000) {
     }
   }
 
-  logger.warn('ads.txt not found after trying all variants', { domain: normalized, candidatesTried: candidates.length });
-  const res = { found: false, error: 'ads.txt not found', content: null, statusCode: 404, method: 'http' };
+  logger.warn('ads.txt not found after trying all HTTP variants', { domain: normalized, candidatesTried: candidates.length });
+  const res = { found: false, error: 'ads.txt not found via HTTP', content: null, statusCode: 404, method: 'http' };
   cacheSet(cacheKey, res, 30); // cache misses short
   return res;
 }

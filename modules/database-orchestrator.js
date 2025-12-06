@@ -39,76 +39,154 @@ class ModuleDataPersistence {
           'adAnalyzer',
           async () => {
             const startTime = Date.now();
-            const result = await this.adAnalyzerDb.saveDensityAnalysis(
-              publisherId,
-              siteAuditId,
-              modules.adAnalyzer.data?.densityAnalysis || {}
-            );
+            const adData = modules.adAnalyzer.data;
+            const saveResults = {};
 
-            const saveResults = { density: result };
+            // Extract from either old structure (densityAnalysis) or new structure (analysis.density)
+            const densityData = adData.densityAnalysis || adData.analysis?.density || {};
+            if (densityData.metrics || densityData.summary) {
+              try {
+                const result = await this.adAnalyzerDb.saveDensityAnalysis(
+                  publisherId,
+                  siteAuditId,
+                  {
+                    density_percentage: densityData.metrics?.adDensity || densityData.density_percentage || 0,
+                    total_viewport_pixels: densityData.metrics?.totalViewportPixels || 0,
+                    total_ad_pixels: densityData.metrics?.totalAdPixels || 0,
+                    compliance_status: densityData.summary?.complianceStatus || 'unknown',
+                    viewport_width: adData.metadata?.viewport?.width,
+                    viewport_height: adData.metadata?.viewport?.height,
+                  }
+                );
+                saveResults.density = result;
+              } catch (err) {
+                this.logger.warn(`[${requestId}] Failed to save density analysis`, { error: err.message });
+              }
+            }
 
-            if (modules.adAnalyzer.data?.autoRefreshDetection) {
+            // Auto-refresh detection
+            const refreshData = adData.autoRefreshDetection || adData.analysis?.autoRefresh || {};
+            if (refreshData.summary || refreshData.auto_refresh_detected !== undefined) {
               try {
                 const refreshResult = await this.adAnalyzerDb.saveAutoRefreshDetection(
                   publisherId,
                   siteAuditId,
-                  modules.adAnalyzer.data.autoRefreshDetection
+                  {
+                    auto_refresh_detected: refreshData.summary?.autoRefreshDetected || refreshData.auto_refresh_detected || false,
+                    refresh_count: refreshData.detectedPatterns?.length || refreshData.refresh_count || 0,
+                    refresh_intervals: refreshData.intervals || [],
+                    affected_ad_slots: refreshData.affectedSlots || 0,
+                    risk_level: refreshData.summary?.criticalRefreshCount > 0 ? 'critical' :
+                      refreshData.summary?.warningRefreshCount > 0 ? 'high' : 'low'
+                  }
                 );
                 saveResults.autoRefresh = refreshResult;
               } catch (err) {
-                this.logger.warn(`[${requestId}] Failed to save auto-refresh detection`, {
-                  error: err.message,
-                  requestId,
-                });
+                this.logger.warn(`[${requestId}] Failed to save auto-refresh detection`, { error: err.message });
               }
             }
 
-            if (modules.adAnalyzer.data?.visibilityCompliance) {
+            // Visibility compliance
+            const visibilityData = adData.visibilityCompliance || adData.analysis?.visibility || {};
+            if (visibilityData.metrics || visibilityData.summary) {
               try {
                 const visibilityResult = await this.adAnalyzerDb.saveVisibilityCompliance(
                   publisherId,
                   siteAuditId,
-                  modules.adAnalyzer.data.visibilityCompliance
+                  {
+                    compliance_status: visibilityData.summary?.complianceStatus || 'unknown',
+                    visible_ads_percentage: visibilityData.metrics?.visiblePercentage || 0,
+                    visible_ads_count: visibilityData.metrics?.visibleCount || 0,
+                    hidden_ads_count: visibilityData.metrics?.hiddenCount || 0,
+                    total_ads_count: (visibilityData.metrics?.visibleCount || 0) + (visibilityData.metrics?.hiddenCount || 0),
+                    recommendations: visibilityData.recommendations || []
+                  }
                 );
                 saveResults.visibility = visibilityResult;
               } catch (err) {
-                this.logger.warn(`[${requestId}] Failed to save visibility compliance`, {
-                  error: err.message,
-                  requestId,
-                });
+                this.logger.warn(`[${requestId}] Failed to save visibility compliance`, { error: err.message });
               }
             }
 
-            if (modules.adAnalyzer.data?.patternData) {
+            // Pattern detection
+            const patternData = adData.patternData || adData.analysis?.patterns?.summary || {};
+            if (patternData.networkAnalysis || patternData.mfaRiskScore !== undefined) {
               try {
                 const patternResult = await this.adAnalyzerDb.savePatternDetection(
                   publisherId,
                   siteAuditId,
-                  modules.adAnalyzer.data.patternData
+                  {
+                    network_diversity: patternData.networkAnalysis?.networkDiversity || 0,
+                    detected_networks: patternData.networkAnalysis?.detectedNetworks || [],
+                    suspicious_patterns: patternData.networkAnalysis?.suspiciousPatterns?.length || 0,
+                    mfa_risk_score: patternData.mfaIndicators?.riskScore || patternData.mfaRiskScore || 0,
+                    mfa_indicators: patternData.mfaIndicators || {},
+                    detected_anomalies: adData.analysis?.patterns?.anomalies || [],
+                    correlation_data: adData.correlations || {}
+                  }
                 );
                 saveResults.pattern = patternResult;
               } catch (err) {
-                this.logger.warn(`[${requestId}] Failed to save pattern detection`, {
-                  error: err.message,
-                  requestId,
-                });
+                this.logger.warn(`[${requestId}] Failed to save pattern detection`, { error: err.message });
               }
             }
 
-            if (modules.adAnalyzer.data?.adElements && Array.isArray(modules.adAnalyzer.data.adElements)) {
+            // Ad elements batch
+            const adElements = adData.adElements || [];
+            if (Array.isArray(adElements) && adElements.length > 0) {
               try {
                 const elementsResult = await this.adAnalyzerDb.saveBatchAdElements(
                   publisherId,
                   siteAuditId,
-                  modules.adAnalyzer.data.adElements
+                  adElements
                 );
                 saveResults.elements = elementsResult;
               } catch (err) {
-                this.logger.warn(`[${requestId}] Failed to save batch ad elements`, {
-                  error: err.message,
-                  requestId,
-                });
+                this.logger.warn(`[${requestId}] Failed to save batch ad elements`, { error: err.message });
               }
+            }
+
+            // ✅ Video detection to video_detection_history table
+            const videoAnalysis = adData.analysis?.video;
+            if (videoAnalysis?.summary || videoAnalysis?.metrics) {
+              try {
+                const videoResult = await this.adAnalyzerDb.saveVideoDetection(
+                  publisherId,
+                  siteAuditId,
+                  {
+                    video_player_count: videoAnalysis.metrics?.videoPlayerCount || 0,
+                    autoplay_count: videoAnalysis.metrics?.autoplayCount || 0,
+                    video_stuffing_detected: videoAnalysis.summary?.videoStuffingDetected || false,
+                    risk_score: videoAnalysis.summary?.riskScore || 0,
+                    video_players_data: videoAnalysis.metrics?.videoPlayers || []
+                  }
+                );
+                saveResults.video = videoResult;
+                this.logger.info(`[${requestId}] ✅ Saved video detection`);
+              } catch (err) {
+                this.logger.warn(`[${requestId}] Failed to save video detection`, { error: err.message });
+              }
+            }
+
+            // Log Phase 3 metrics (saved to site_audits.ad_analysis JSONB)
+            const scrollInjection = adData.analysis?.scrollInjection;
+            const trafficArbitrage = adData.analysis?.trafficArbitrage;
+
+            if (scrollInjection?.summary) {
+              this.logger.info(`[${requestId}] 📊 Scroll Injection Metrics:`, {
+                detected: scrollInjection.summary?.scrollInjectionDetected,
+                riskScore: scrollInjection.summary?.riskScore,
+                injectedCount: scrollInjection.metrics?.scrollInjectedAdCount
+              });
+            }
+
+            if (trafficArbitrage?.summary) {
+              this.logger.info(`[${requestId}] 📊 Traffic Arbitrage Metrics:`, {
+                detected: trafficArbitrage.summary?.trafficArbitrageDetected || trafficArbitrage.summary?.arbitrageDetected,
+                hasNativeWidgets: trafficArbitrage.summary?.hasNativeWidgets,
+                riskScore: trafficArbitrage.summary?.riskScore,
+                detectedSources: trafficArbitrage.metrics?.detectedSources
+              });
             }
 
             return {
