@@ -373,7 +373,7 @@ async function processAuditJob(job) {
     const aggregatedResults = directoryAuditOrchestrator.aggregateResults(orchestratorResult);
 
     // ✅ Calculate Data Quality Metrics
-    const dataQuality = calculateDataQuality(modules, mainSiteCrawlData);
+    let dataQuality = calculateDataQuality(modules, mainSiteCrawlData);
     logger.info(`[${requestId}] Data Quality Assessment:`, {
       score: dataQuality.score,
       level: dataQuality.level,
@@ -381,6 +381,72 @@ async function processAuditJob(job) {
       metricsCollected: dataQuality.metricsCollected,
       failures: dataQuality.failures
     });
+
+    // 🔄 Retry failed modules if data quality is critical (3+ failures)
+    if (dataQuality.level === 'critical' && dataQuality.failures.length >= 3) {
+      logger.warn(`[${requestId}] Critical data quality detected, attempting module recovery...`, {
+        failureCount: dataQuality.failures.length,
+        failedModules: dataQuality.failures.map(f => f.module)
+      });
+
+      try {
+        // Re-run technical check if it failed (most common failure)
+        if (!dataQuality.metricsCollected.technical && modules.technicalChecker?.data) {
+          const domain = new URL(siteAudit.site_name.startsWith('http') ? siteAudit.site_name : `https://${siteAudit.site_name}`).hostname;
+          logger.info(`[${requestId}] Retrying technical check for ${domain}`);
+
+          const retryTechnical = await technicalChecker.runTechnicalHealthCheck(
+            mainSiteCrawlData,
+            domain,
+            { enableLighthouse: true, lighthouseThreshold: 40 }
+          );
+
+          if (retryTechnical?.performance?.performanceScore > 0 || retryTechnical?.technicalHealthScore > 0) {
+            modules.technicalChecker.data = retryTechnical;
+            modules.technicalChecker.retried = true;
+            logger.info(`[${requestId}] Technical check retry successful`, {
+              performanceScore: retryTechnical.performance?.performanceScore,
+              healthScore: retryTechnical.technicalHealthScore
+            });
+          }
+        }
+
+        // Re-run content analysis if it failed and we have content
+        if (!dataQuality.metricsCollected.content && mainSiteCrawlData?.content) {
+          const contentText = Array.isArray(mainSiteCrawlData.content)
+            ? mainSiteCrawlData.content.join(' ')
+            : mainSiteCrawlData.content;
+
+          if (contentText && contentText.length > 50) {
+            logger.info(`[${requestId}] Retrying content analysis with ${contentText.length} chars`);
+
+            const retryContent = await contentAnalyzer.analyzeContent(contentText);
+
+            if (retryContent && (retryContent.textLength > 50 || retryContent.entropy?.entropyScore > 0)) {
+              modules.contentAnalyzer.data = retryContent;
+              modules.contentAnalyzer.retried = true;
+              logger.info(`[${requestId}] Content analysis retry successful`, {
+                textLength: retryContent.textLength,
+                entropyScore: retryContent.entropy?.entropyScore
+              });
+            }
+          }
+        }
+
+        // Recalculate data quality after retries
+        const updatedQuality = calculateDataQuality(modules, mainSiteCrawlData);
+        logger.info(`[${requestId}] Data quality after retry:`, {
+          before: { score: dataQuality.score, level: dataQuality.level },
+          after: { score: updatedQuality.score, level: updatedQuality.level }
+        });
+
+        dataQuality = updatedQuality;
+
+      } catch (retryError) {
+        logger.error(`[${requestId}] Module retry failed`, retryError);
+        // Continue with original data quality assessment
+      }
+    }
 
     // DEBUG: Log content analysis data
     logger.info('[DEBUG] Content Analysis Data:', {

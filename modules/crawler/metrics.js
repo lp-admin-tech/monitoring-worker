@@ -46,19 +46,34 @@ async function extractMetrics(page) {
       let lcp = 0;
       let fcp = 0;
       let dcp = 0;
+      let usedFallback = false;
 
       if (navigationTiming) {
         ttfb = navigationTiming.responseStart - navigationTiming.requestStart;
         dcp = navigationTiming.domContentLoadedEventEnd - navigationTiming.navigationStart;
+      } else if (window.performance.timing) {
+        // Fallback to legacy timing API if navigation entries are empty
+        const timing = window.performance.timing;
+        ttfb = timing.responseStart - timing.requestStart;
+        dcp = timing.domContentLoadedEventEnd - timing.navigationStart;
+        usedFallback = true;
       }
 
+      // Fallback LCP estimation if not captured
       if (largestContentfulPaint) {
         lcp = largestContentfulPaint.renderTime || largestContentfulPaint.loadTime;
+      } else if (usedFallback && window.performance.timing) {
+        // Estimate LCP from domContentLoadedEventEnd when real LCP unavailable
+        const timing = window.performance.timing;
+        lcp = timing.domContentLoadedEventEnd - timing.navigationStart;
       }
 
       const fcpEntry = paintEntries.find(entry => entry.name === 'first-contentful-paint');
       if (fcpEntry) {
         fcp = fcpEntry.startTime;
+      } else if (usedFallback && dcp > 0) {
+        // Estimate FCP as slightly before DCP
+        fcp = Math.max(dcp - 100, ttfb + 50);
       }
 
       return {

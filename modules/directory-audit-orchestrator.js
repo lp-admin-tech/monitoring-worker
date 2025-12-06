@@ -259,14 +259,27 @@ class DirectoryAuditOrchestrator {
 
             // Verify page is still responsive before continuing
             let pageResponsive = true;
+            let pageRecovered = false;
             try {
                 await page.evaluate(() => document.title).catch(() => {
                     throw new Error('Page is unresponsive');
                 });
             } catch (pageCheckError) {
-                logger.warn('Page became unresponsive after human behavior simulation, continuing with partial data', { error: pageCheckError.message });
+                logger.warn('Page became unresponsive after human behavior simulation, attempting recovery...', { error: pageCheckError.message });
                 pageResponsive = false;
-                // Don't return - try to extract what we can
+
+                // Try to recover by reloading the page
+                try {
+                    await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
+                    // Verify page is now responsive
+                    await page.evaluate(() => document.title);
+                    pageRecovered = true;
+                    pageResponsive = true;
+                    logger.info('Page recovery successful after reload');
+                } catch (reloadError) {
+                    logger.error('Page recovery failed, continuing with partial data', { error: reloadError.message });
+                    // Don't return - try to extract what we can
+                }
             }
 
             // Extract data needed for modules with timeout protection

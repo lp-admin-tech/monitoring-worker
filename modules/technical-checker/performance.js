@@ -86,19 +86,61 @@ function analyzePerformanceFast(crawlData) {
   try {
     if (!crawlData) {
       logger.warn('No crawl data provided for performance analysis');
+      // Return neutral estimate instead of zero when data unavailable
       return {
         lcp: null,
         cls: null,
         fid: null,
         tbt: null,
-        performanceScore: 0,
-        recommendations: ['Unable to analyze - no metrics available'],
-        method: 'custom',
+        performanceScore: 50, // Neutral estimate
+        estimated: true,
+        recommendations: ['Unable to analyze - no metrics available, using neutral estimate'],
+        method: 'estimated',
       };
     }
 
     const vitals = extractWebVitals(crawlData.metrics);
     const tbt = calculateTotalBlockingTime(crawlData.metrics);
+
+    // Check if we have any real vitals data
+    const hasRealVitals = vitals?.lcp || vitals?.cls || vitals?.fid || tbt;
+
+    // If no real vitals, estimate from resource patterns
+    if (!hasRealVitals && crawlData.metrics) {
+      const resourceCount = crawlData.metrics.resourceCount || 0;
+      const jsWeight = crawlData.metrics.jsWeight || 0;
+
+      // Heuristic: fewer resources and less JS = better performance
+      let estimatedScore = 70; // Start with decent baseline
+
+      // Penalize for excessive resources
+      if (resourceCount > 100) estimatedScore -= 20;
+      else if (resourceCount > 50) estimatedScore -= 10;
+
+      // Penalize for heavy JS
+      if (jsWeight > 500000) estimatedScore -= 15;
+      else if (jsWeight > 200000) estimatedScore -= 8;
+
+      estimatedScore = Math.max(25, Math.min(85, estimatedScore));
+
+      logger.info('Estimating performance from resource patterns', {
+        resourceCount,
+        jsWeight,
+        estimatedScore
+      });
+
+      return {
+        lcp: null,
+        cls: null,
+        fid: null,
+        tbt: null,
+        performanceScore: Math.round(estimatedScore),
+        estimated: true,
+        resourceMetrics: { resourceCount, jsWeight },
+        recommendations: ['Performance estimated from resource patterns - core web vitals unavailable'],
+        method: 'estimated',
+      };
+    }
 
     const scores = {
       lcp: vitals?.lcp ? calculateMetricScore(vitals.lcp.value, vitals.lcp.status) : 0,
@@ -130,10 +172,11 @@ function analyzePerformanceFast(crawlData) {
       cls: null,
       fid: null,
       tbt: null,
-      performanceScore: 0,
-      recommendations: ['Performance analysis failed'],
+      performanceScore: 40, // Low but non-zero on error
+      estimated: true,
+      recommendations: ['Performance analysis failed, using conservative estimate'],
       error: error.message,
-      method: 'custom',
+      method: 'estimated',
     };
   }
 }

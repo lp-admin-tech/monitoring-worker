@@ -813,78 +813,103 @@ class Crawler {
 
 
   async extractPageContent(page) {
-    try {
-      // Wait for body to be available
+    const maxAttempts = 2;
+    let lastContent = { source: 'none', text: '' };
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        await page.waitForSelector('body', { timeout: 5000 });
-        // Wait for some content to render (simple heuristic)
-        await page.waitForFunction(() => document.body && document.body.innerText.length > 100, { timeout: 5000 }).catch(() => { });
-      } catch (e) {
-        logger.warn('Body selector timeout or content wait failed', { error: e.message });
-      }
+        // Wait for body to be available
+        try {
+          await page.waitForSelector('body', { timeout: 5000 });
+          // Wait for some content to render (simple heuristic)
+          await page.waitForFunction(() => document.body && document.body.innerText.length > 100, { timeout: 5000 }).catch(() => { });
+        } catch (e) {
+          logger.warn('Body selector timeout or content wait failed', { error: e.message, attempt });
+        }
 
-      const content = await page.evaluate(() => {
-        if (!document.body) return { source: 'none', text: "No body element found" };
+        const content = await page.evaluate(() => {
+          if (!document.body) return { source: 'none', text: "No body element found" };
 
-        // Helper to clean text
-        const cleanText = (text) => {
-          if (!text) return '';
-          return text
-            .replace(/\s+/g, ' ')
-            .replace(/[\n\r]+/g, ' ')
-            .trim();
-        };
+          // Helper to clean text
+          const cleanText = (text) => {
+            if (!text) return '';
+            return text
+              .replace(/\s+/g, ' ')
+              .replace(/[\n\r]+/g, ' ')
+              .trim();
+          };
 
-        // 1. Try common content selectors first (usually higher quality)
-        const contentSelectors = [
-          'article',
-          'main',
-          '[role="main"]',
-          '.post-content',
-          '.article-content',
-          '.entry-content',
-          '#content',
-          '.content'
-        ];
+          // 1. Try common content selectors first (usually higher quality)
+          const contentSelectors = [
+            'article',
+            'main',
+            '[role="main"]',
+            '.post-content',
+            '.article-content',
+            '.entry-content',
+            '#content',
+            '.content'
+          ];
 
-        for (const selector of contentSelectors) {
-          const element = document.querySelector(selector);
-          if (element) {
-            const text = cleanText(element.innerText);
-            if (text.length > 100) { // Threshold for meaningful content
-              return { source: selector, text };
+          for (const selector of contentSelectors) {
+            const element = document.querySelector(selector);
+            if (element) {
+              const text = cleanText(element.innerText);
+              if (text.length > 100) { // Threshold for meaningful content
+                return { source: selector, text };
+              }
             }
           }
+
+          // 2. Fallback to body innerText
+          const bodyText = cleanText(document.body.innerText);
+          if (bodyText.length > 50) {
+            return { source: 'body.innerText', text: bodyText };
+          }
+
+          // 3. Fallback to textContent (includes hidden text, but better than nothing)
+          const bodyContent = cleanText(document.body.textContent);
+          if (bodyContent.length > 50) {
+            return { source: 'body.textContent', text: bodyContent };
+          }
+
+          // 4. Last resort: meta description
+          const metaDesc = document.querySelector('meta[name="description"]');
+          if (metaDesc && metaDesc.content) {
+            return { source: 'meta[name="description"]', text: metaDesc.content };
+          }
+
+          return { source: 'none', text: "No content extracted" };
+        });
+
+        lastContent = content;
+
+        // If we got sufficient content, return immediately
+        if (content.text.length >= 100) {
+          logger.info(`Extracted content from ${content.source}, length: ${content.text.length}`, { attempt });
+          return content.text;
         }
 
-        // 2. Fallback to body innerText
-        const bodyText = cleanText(document.body.innerText);
-        if (bodyText.length > 50) {
-          return { source: 'body.innerText', text: bodyText };
+        // If minimal content and this isn't the last attempt, wait for lazy-load
+        if (attempt < maxAttempts) {
+          logger.info('Minimal content extracted, waiting for lazy-load...', {
+            contentLength: content.text.length,
+            attempt
+          });
+          await new Promise(resolve => setTimeout(resolve, 3000));
         }
 
-        // 3. Fallback to textContent (includes hidden text, but better than nothing)
-        const bodyContent = cleanText(document.body.textContent);
-        if (bodyContent.length > 50) {
-          return { source: 'body.textContent', text: bodyContent };
+      } catch (error) {
+        logger.warn('Error extracting page content', { error: error.message, attempt });
+        if (attempt === maxAttempts) {
+          return "Error extracting content";
         }
-
-        // 4. Last resort: meta description
-        const metaDesc = document.querySelector('meta[name="description"]');
-        if (metaDesc && metaDesc.content) {
-          return { source: 'meta[name="description"]', text: metaDesc.content };
-        }
-
-        return { source: 'none', text: "No content extracted" };
-      });
-
-      logger.info(`Extracted content from ${content.source}, length: ${content.text.length}`);
-      return content.text;
-
-    } catch (error) {
-      logger.warn('Error extracting page content', { error: error.message });
-      return "Error extracting content";
+      }
     }
+
+    // Return best content we got even if minimal
+    logger.info(`Returning best content after ${maxAttempts} attempts: ${lastContent.source}, length: ${lastContent.text.length}`);
+    return lastContent.text;
   }
 
   /**
