@@ -582,8 +582,12 @@ async function processAuditJob(job) {
               redirects: modules.adAnalyzer.data?.redirects || false
             },
             contentIndicators: {
-              textEntropy: modules.contentAnalyzer.data?.entropy?.score || 0,
-              aiLikelihood: modules.contentAnalyzer.data?.aiLikelihood?.percentage || 0
+              // Fix: Access the correct property paths for entropy and AI likelihood
+              textEntropy: modules.contentAnalyzer.data?.entropy?.entropyScore ||
+                modules.contentAnalyzer.data?.entropyScore || 0,
+              aiLikelihood: modules.contentAnalyzer.data?.ai?.aiScore ||
+                modules.contentAnalyzer.data?.aiLikelihood?.percentage ||
+                modules.contentAnalyzer.data?.aiLikelihood || 0
             },
             performance: {
               lcp: modules.crawler.data?.metrics?.coreLWP?.lcp || 0
