@@ -56,27 +56,74 @@ class CrawleeCrawler {
    * Initialize the Crawlee crawler with all MFA detection features
    */
   async initialize() {
-    logger.info('Initializing Crawlee PlaywrightCrawler with MFA detection features');
+    logger.info('[Crawler] Initializing Crawlee PlaywrightCrawler with MFA detection features');
 
-    // Crawlee handles browser lifecycle automatically
-    logger.info('Crawlee crawler initialized successfully');
+    // Launch browser for directory-audit-orchestrator compatibility
+    await this.ensureBrowser();
+
+    logger.info('[Crawler] Crawler initialized successfully');
   }
 
   /**
-   * Ensure browser is available (compatibility with existing code)
+   * Ensure browser is available for direct context creation
+   * Required by directory-audit-orchestrator.js
    */
   async ensureBrowser() {
-    // Crawlee manages browser instances automatically
-    // This method exists for backward compatibility
+    if (this.browser && this.browser.isConnected()) {
+      logger.debug('[Crawler] Browser already connected');
+      return;
+    }
+
+    logger.info('[Crawler] Launching Playwright browser...');
+
+    try {
+      this.browser = await chromium.launch({
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-features=IsolateOrigins,site-per-process',
+          '--disable-accelerated-2d-canvas',
+          '--disable-gpu',
+          '--disable-web-security',
+          '--window-size=1920,1080',
+          '--start-maximized',
+          '--disable-infobars',
+          '--disable-notifications',
+          '--disable-popup-blocking',
+        ],
+      });
+
+      logger.info('[Crawler] Browser launched successfully', {
+        isConnected: this.browser.isConnected(),
+      });
+    } catch (error) {
+      logger.error('[Crawler] Failed to launch browser', {
+        error: error.message,
+        stack: error.stack,
+      });
+      throw error;
+    }
   }
 
   /**
-   * Close the crawler (compatibility with existing code)
+   * Close the crawler and browser
    */
   async close() {
+    if (this.browser) {
+      try {
+        await this.browser.close();
+        logger.info('[Crawler] Browser closed');
+      } catch (error) {
+        logger.warn('[Crawler] Error closing browser', { error: error.message });
+      }
+      this.browser = null;
+    }
+
     if (this.crawler) {
-      // Crawlee handles cleanup automatically
-      logger.info('Crawler session ended');
+      logger.info('[Crawler] Crawler session ended');
     }
   }
 
