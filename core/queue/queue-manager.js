@@ -31,7 +31,10 @@ class QueueManager {
     }
 
     async processNext() {
+        logger.info(`[Queue:${this.queueName}] processNext called - isProcessing: ${this.isProcessing}, queueLength: ${this.queue.length}`);
+
         if (this.isProcessing || this.queue.length === 0) {
+            logger.info(`[Queue:${this.queueName}] Skipping: isProcessing=${this.isProcessing}, queueEmpty=${this.queue.length === 0}`);
             return;
         }
 
@@ -39,16 +42,16 @@ class QueueManager {
         const job = this.queue.shift();
 
         try {
-            logger.info(`[Queue:${this.queueName}] Processing job ${job.id}`, { name: job.name });
+            logger.info(`[Queue:${this.queueName}] 🚀 Starting job ${job.id}`, { name: job.name, data: JSON.stringify(job.data).slice(0, 200) });
             await this.processor(job);
-            logger.info(`[Queue:${this.queueName}] Job ${job.id} completed successfully`);
+            logger.info(`[Queue:${this.queueName}] ✅ Job ${job.id} completed successfully`);
         } catch (error) {
-            logger.error(`[Queue:${this.queueName}] Job ${job.id} failed`, error);
-            // Simple retry logic could be added here if needed, but for now we just log failure
+            logger.error(`[Queue:${this.queueName}] ❌ Job ${job.id} failed`, { error: error.message, stack: error.stack?.slice(0, 500) });
         } finally {
             this.isProcessing = false;
             // Process next job if any
             if (this.queue.length > 0) {
+                logger.info(`[Queue:${this.queueName}] More jobs in queue (${this.queue.length}), scheduling next...`);
                 setImmediate(() => this.processNext());
             }
         }
