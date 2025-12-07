@@ -78,9 +78,10 @@ async function runTechnicalHealthCheck(crawlData, domain, options = {}) {
     );
   }
 
-  if (!skipPerformance && crawlData) {
+  if (!skipPerformance) {
     checks.push(
       Promise.resolve().then(async () => {
+        // Always run performance analysis - it handles missing crawlData with fallback estimates
         results.components.performance = await analyzePerformance(crawlData, {
           browser: options.browser || null,
           url: domain,

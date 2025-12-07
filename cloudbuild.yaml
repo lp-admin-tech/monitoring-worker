@@ -1,0 +1,51 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/site-monitoring-worker:$COMMIT_SHA', '.']
+
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/site-monitoring-worker:$COMMIT_SHA']
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'site-monitoring-worker'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/site-monitoring-worker:$COMMIT_SHA'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--memory'
+      - '2Gi'
+      - '--cpu'
+      - '2'
+      - '--timeout'
+      - '300'
+      - '--concurrency'
+      - '1'
+      - '--min-instances'
+      - '0'
+      - '--max-instances'
+      - '3'
+      - '--set-env-vars'
+      - 'NODE_ENV=production'
+      - '--allow-unauthenticated'
+
+# Store images in Container Registry
+images:
+  - 'gcr.io/$PROJECT_ID/site-monitoring-worker:$COMMIT_SHA'
+
+# Substitution variables (can be overridden)
+substitutions:
+  _REGION: 'us-central1'
+
+# Build timeout
+timeout: '1200s'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

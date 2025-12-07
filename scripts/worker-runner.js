@@ -83,6 +83,30 @@ try {
 const app = express();
 app.use(express.json());
 
+// Health check endpoint for Cloud Run / GCP
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+  });
+});
+
+// Readiness check - confirms browser is initialized
+app.get('/ready', async (req, res) => {
+  try {
+    const browserReady = crawler?.browser?.isConnected?.() || false;
+    if (browserReady) {
+      res.status(200).json({ status: 'ready', browser: 'connected' });
+    } else {
+      res.status(503).json({ status: 'not_ready', browser: 'disconnected' });
+    }
+  } catch (err) {
+    res.status(503).json({ status: 'error', message: err.message });
+  }
+});
+
 /**
  * Calculate data quality metrics based on module success and data completeness
  * @param {Object} modules - Module results

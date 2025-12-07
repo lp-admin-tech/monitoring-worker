@@ -20,7 +20,7 @@ const envConfig = {
   },
   worker: {
     secret: process.env.WORKER_SECRET || '',
-    port: process.env.PORT || 9001,
+    port: parseInt(process.env.PORT || '8080', 10),
     nodeEnv: process.env.NODE_ENV || 'development',
   },
   logging: {

@@ -87,21 +87,29 @@ class CrawleeCrawler {
           '--disable-accelerated-2d-canvas',
           '--disable-gpu',
           '--disable-web-security',
-          '--window-size=1920,1080',
-          '--start-maximized',
+          '--window-size=1280,720',  // Smaller viewport
           '--disable-infobars',
           '--disable-notifications',
           '--disable-popup-blocking',
-          // Memory optimizations for free tier hosting
+          // Aggressive memory optimizations for 1GB RAM (e2-micro)
           '--single-process',
           '--no-zygote',
           '--disable-software-rasterizer',
-          '--js-flags=--max-old-space-size=256',
+          '--js-flags=--max-old-space-size=128',  // Reduced from 256
           '--disable-extensions',
           '--disable-background-networking',
           '--disable-sync',
           '--disable-translate',
           '--mute-audio',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--disable-component-update',
+          '--disable-default-apps',
+          '--disable-domain-reliability',
+          '--disable-hang-monitor',
+          '--memory-pressure-off',
+          '--renderer-process-limit=1',
         ],
       });
 
@@ -185,7 +193,7 @@ class CrawleeCrawler {
           },
         },
 
-        // Browser launch options (Render-compatible)
+        // Browser launch options (Render-compatible with aggressive memory limits)
         launchContext: {
           launchOptions: {
             headless: true,
@@ -198,11 +206,29 @@ class CrawleeCrawler {
               '--disable-accelerated-2d-canvas',
               '--disable-gpu',
               '--disable-web-security',
-              '--window-size=1920,1080',
-              '--start-maximized',
+              '--window-size=1280,720',  // Smaller viewport
               '--disable-infobars',
               '--disable-notifications',
               '--disable-popup-blocking',
+              // Aggressive memory optimizations for 512MB RAM (Render free tier)
+              '--single-process',
+              '--no-zygote',
+              '--disable-software-rasterizer',
+              '--js-flags=--max-old-space-size=128',  // Limit JS heap
+              '--disable-extensions',
+              '--disable-background-networking',
+              '--disable-sync',
+              '--disable-translate',
+              '--mute-audio',
+              '--disable-background-timer-throttling',
+              '--disable-backgrounding-occluded-windows',
+              '--disable-renderer-backgrounding',
+              '--disable-component-update',
+              '--disable-default-apps',
+              '--disable-domain-reliability',
+              '--disable-hang-monitor',
+              '--memory-pressure-off',
+              '--renderer-process-limit=1',
             ],
           },
         },
