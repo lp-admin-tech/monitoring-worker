@@ -88,20 +88,38 @@ class CrawleeCrawler {
       this.browser = null;
     }
 
-    logger.info('[Crawler] Launching fresh Playwright browser...');
+    logger.info('[Crawler] Launching Playwright browser with stealth mode...');
 
     try {
       this.browser = await chromium.launch({
         headless: true,
         args: [
+          // Security & Sandbox
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
+
+          // Stealth Mode - Hide Automation
+          '--disable-blink-features=AutomationControlled',
+          '--disable-features=IsolateOrigins,site-per-process',
+
+          // Performance
+          '--disable-accelerated-2d-canvas',
           '--disable-gpu',
+          '--disable-web-security', // For CORS issues
+
+          // Window & Display
+          '--window-size=1920,1080',
+          '--start-maximized',
+
+          // Additional stealth
+          '--disable-infobars',
+          '--disable-notifications',
+          '--disable-popup-blocking',
         ],
       });
 
-      logger.info('[Crawler] Browser launched successfully', {
+      logger.info('[Crawler] Browser launched successfully with stealth configuration', {
         isConnected: this.browser.isConnected(),
       });
     } catch (error) {
