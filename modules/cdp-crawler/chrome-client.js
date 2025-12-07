@@ -6,11 +6,93 @@
 const chromeLauncher = require('chrome-launcher');
 const CDP = require('chrome-remote-interface');
 const logger = require('../logger');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+/**
+ * Find Chrome/Chromium executable path
+ * Checks: environment variable, Playwright cache, system paths
+ */
+function findChromePath() {
+    // 1. Environment variable (highest priority)
+    if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) {
+        return process.env.CHROME_PATH;
+    }
+
+    // 2. Playwright's Chromium cache (common on servers)
+    const homeDir = os.homedir();
+    const playwrightPaths = [
+        // Linux
+        path.join(homeDir, '.cache/ms-playwright'),
+        // macOS
+        path.join(homeDir, 'Library/Caches/ms-playwright'),
+        // Windows
+        path.join(homeDir, 'AppData/Local/ms-playwright'),
+    ];
+
+    for (const playwrightCache of playwrightPaths) {
+        if (fs.existsSync(playwrightCache)) {
+            try {
+                const chromiumDirs = fs.readdirSync(playwrightCache)
+                    .filter(d => d.startsWith('chromium-'))
+                    .sort()
+                    .reverse(); // Get newest version
+
+                for (const chromiumDir of chromiumDirs) {
+                    const chromePaths = [
+                        // Linux
+                        path.join(playwrightCache, chromiumDir, 'chrome-linux/chrome'),
+                        // macOS
+                        path.join(playwrightCache, chromiumDir, 'chrome-mac/Chromium.app/Contents/MacOS/Chromium'),
+                        // Windows
+                        path.join(playwrightCache, chromiumDir, 'chrome-win/chrome.exe'),
+                    ];
+
+                    for (const chromePath of chromePaths) {
+                        if (fs.existsSync(chromePath)) {
+                            logger.info('[CDP] Found Playwright Chromium:', chromePath);
+                            return chromePath;
+                        }
+                    }
+                }
+            } catch (e) {
+                // Continue to next path
+            }
+        }
+    }
+
+    // 3. System Chrome/Chromium paths
+    const systemPaths = [
+        // Linux
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable',
+        // Snap
+        '/snap/bin/chromium',
+        // macOS
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    ];
+
+    for (const chromePath of systemPaths) {
+        if (fs.existsSync(chromePath)) {
+            logger.info('[CDP] Found system Chrome:', chromePath);
+            return chromePath;
+        }
+    }
+
+    // 4. Let chrome-launcher try to find it (may fail)
+    logger.warn('[CDP] No Chrome found, letting chrome-launcher search...');
+    return undefined;
+}
 
 class ChromeCDPClient {
     constructor(options = {}) {
         this.chrome = null;
         this.client = null;
+        this.chromePath = findChromePath();
         this.options = {
             headless: true,
             proxy: null,
@@ -66,10 +148,13 @@ class ChromeCDPClient {
         }
 
         try {
-            logger.info('[CDP] Launching Chrome process...');
+            logger.info('[CDP] Launching Chrome process...', {
+                chromePath: this.chromePath || 'auto-detect'
+            });
 
-            // Launch Chrome
+            // Launch Chrome with explicit path
             this.chrome = await chromeLauncher.launch({
+                chromePath: this.chromePath, // Use detected path
                 chromeFlags,
                 logLevel: 'silent',
                 ignoreDefaultFlags: true,
