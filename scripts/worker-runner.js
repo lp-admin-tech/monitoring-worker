@@ -173,8 +173,14 @@ function calculateDataQuality(modules, crawlData) {
 
   // Check policy checker - look for data at .data or root level
   const policyData = modules.policyChecker?.data || modules.policyChecker;
-  // Pass if we have any policy response (issues array exists, even if empty)
-  if (policyData && !policyData.error && (policyData.issues !== undefined || policyData.policyViolations !== undefined)) {
+  // Pass if we have any policy response - check various possible fields
+  const hasPolicyData = policyData && !policyData.error && (
+    policyData.issues !== undefined ||
+    policyData.violations !== undefined ||
+    policyData.complianceLevel !== undefined ||
+    policyData.policyViolations !== undefined
+  );
+  if (hasPolicyData) {
     metricsCollected.policy = true;
     successCount++;
   } else {
@@ -188,9 +194,17 @@ function calculateDataQuality(modules, crawlData) {
 
   // Check technical checker - look for data at .data or root level
   const technicalData = modules.technicalChecker?.data || modules.technicalChecker;
-  const pageLoadTime = technicalData?.performance?.pageLoadTime ?? technicalData?.pageLoadTime ?? 0;
-  const hasPerformanceData = technicalData && !technicalData.error && (pageLoadTime > 0 || technicalData?.performance || technicalData?.sslValid !== undefined);
-  if (hasPerformanceData) {
+  const pageLoadTime = technicalData?.performance?.pageLoadTime ?? technicalData?.components?.performance?.pageLoadTime ?? 0;
+  // Check for any valid technical data - components object, performance, or SSL data
+  const hasTechnicalData = technicalData && !technicalData.error && (
+    pageLoadTime > 0 ||
+    technicalData?.performance ||
+    technicalData?.components?.performance ||
+    technicalData?.components?.ssl?.valid !== undefined ||
+    technicalData?.sslValid !== undefined ||
+    technicalData?.summary
+  );
+  if (hasTechnicalData) {
     metricsCollected.technical = true;
     successCount++;
   } else {
@@ -746,7 +760,12 @@ async function processAuditJob(job) {
 
     try {
       await supabase.update('site_audits', siteAuditId, completedAudit);
+    } catch (updateErr) {
+      logger.error(`[${requestId}] Failed to update site audit with final results`, updateErr, { requestId });
+      throw updateErr;
+    }
 
+    try {
       const persistenceResults = await moduleDataOrchestrator.saveAllModuleResults(
         siteAuditId,
         publisherId,
@@ -786,9 +805,9 @@ async function processAuditJob(job) {
       // Cross-Module Comparison is already handled in moduleDataOrchestrator.saveAllModuleResults
       // Removing redundant call to prevent double execution
 
-    } catch (updateErr) {
-      logger.error(`[${requestId}] Failed to update site audit with final results`, updateErr, { requestId });
-      throw updateErr;
+    } catch (persistErr) {
+      // Log persistence errors but continue to publisher update
+      logger.error(`[${requestId}] Failed to persist module results (non-fatal)`, persistErr, { requestId });
     }
 
     // ✅ Update Publisher MFA Score
