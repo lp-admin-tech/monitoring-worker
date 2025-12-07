@@ -31,7 +31,7 @@ try {
   const AIAssistanceClass = require('../modules/ai-assistance');
   const crawlerModule = require('../modules/crawler');
   const ModuleDataPersistence = require('../modules/database-orchestrator');
-  const DirectoryAuditOrchestrator = require('../modules/directory-audit-orchestrator');
+  const CDPAuditOrchestrator = require('../modules/cdp-audit-orchestrator');
   const crossModuleAnalyzerModule = require('../modules/cross-module-analyzer');
   const { createClient } = require('@supabase/supabase-js');
 
@@ -62,12 +62,12 @@ try {
     logger
   });
 
-  directoryAuditOrchestrator = new DirectoryAuditOrchestrator({
+  directoryAuditOrchestrator = new CDPAuditOrchestrator({
     contentAnalyzer,
     adAnalyzer,
     policyChecker,
-    technicalChecker,
-    crawler
+    technicalChecker
+    // Note: CDP crawler is managed internally by CDPAuditOrchestrator
   });
 
   crossModuleAnalyzer = crossModuleAnalyzerModule;
@@ -1244,12 +1244,13 @@ async function gracefulShutdown(signal) {
     });
   }
 
-  if (crawler) {
+  // Close CDP Audit Orchestrator (closes Chrome process)
+  if (directoryAuditOrchestrator) {
     try {
-      await crawler.close();
-      logger.info('Crawler closed');
+      await directoryAuditOrchestrator.close();
+      logger.info('CDP Audit Orchestrator closed');
     } catch (err) {
-      logger.error('Error closing crawler', err);
+      logger.error('Error closing CDP Audit Orchestrator', err);
     }
   }
 
@@ -1449,11 +1450,11 @@ async function start() {
   }
 
   try {
-    logger.info('Initializing crawler...');
-    await crawler.initialize();
-    logger.info('Crawler initialized successfully');
+    logger.info('Initializing CDP Audit Orchestrator...');
+    // CDP crawler is lazy-initialized on first audit (saves memory on startup)
+    logger.info('CDP Audit Orchestrator ready (browser launches on first audit)');
   } catch (err) {
-    logger.error('Failed to initialize crawler', err);
+    logger.error('Failed to initialize CDP Audit Orchestrator', err);
     process.exit(1);
   }
 
