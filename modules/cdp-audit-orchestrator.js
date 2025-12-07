@@ -169,14 +169,14 @@ class CDPAuditOrchestrator {
      */
     async runAnalysisModules(url, crawlResult, publisherId, siteAuditId) {
         const modules = {};
+        const viewport = { width: 1920, height: 1080 };
 
-        // Content Analysis
+        // Content Analysis - ContentAnalyzer.analyzeContent(text, options)
         if (this.contentAnalyzer && crawlResult.content) {
             try {
                 logger.info('[CDPOrchestrator] Running content analyzer...');
                 const contentResult = await this.runModule('contentAnalyzer', () =>
-                    this.contentAnalyzer.analyze({
-                        content: crawlResult.content,
+                    this.contentAnalyzer.analyzeContent(crawlResult.content, {
                         url: url,
                         publisherId: publisherId
                     })
@@ -188,26 +188,17 @@ class CDPAuditOrchestrator {
             }
         }
 
-        // Ad Analysis - use CDP network data
+        // Ad Analysis - AdBehaviorAggregator.aggregateAnalysis(crawlData, viewport)
         if (this.adAnalyzer) {
             try {
                 logger.info('[CDPOrchestrator] Running ad analyzer...');
-                // Convert CDP data to format expected by adAnalyzer
-                const adData = {
-                    adElements: crawlResult.adHeatmap?.levels?.flatMap(l => l.ads) || [],
-                    adRequests: crawlResult.networkAnalysis?.adRequests || 0,
-                    adNetworks: crawlResult.networkAnalysis?.adNetworks || [],
-                    hasAutoRefresh: crawlResult.networkAnalysis?.hasAutoRefresh || false,
-                    adDensity: crawlResult.mfaIndicators?.adDensity || 0,
-                    adsAboveFold: crawlResult.mfaIndicators?.adsAboveFold || 0
-                };
+
+                // Convert CDP data to format expected by AdBehaviorAggregator
+                // It expects crawlData.har.log.entries, crawlData.adElements, crawlData.publisherId
+                const crawlData = this.convertToCrawlDataFormat(crawlResult, publisherId);
 
                 const adResult = await this.runModule('adAnalyzer', () =>
-                    this.adAnalyzer.analyze({
-                        url: url,
-                        publisherId: publisherId,
-                        crawlData: adData
-                    })
+                    this.adAnalyzer.aggregateAnalysis(crawlData, viewport)
                 );
                 modules.adAnalyzer = adResult;
             } catch (err) {
@@ -216,16 +207,16 @@ class CDPAuditOrchestrator {
             }
         }
 
-        // Policy Checker
+        // Policy Checker - runPolicyCheck(crawlData, domain, options)
+        // Uses crawlData for keyword scanning and category detection
         if (this.policyChecker) {
             try {
                 logger.info('[CDPOrchestrator] Running policy checker...');
+                const crawlData = this.convertToCrawlDataFormat(crawlResult, publisherId);
+                crawlData.content = crawlResult.content; // Add content for keyword scanning
+
                 const policyResult = await this.runModule('policyChecker', () =>
-                    this.policyChecker.analyze({
-                        url: url,
-                        content: crawlResult.content,
-                        publisherId: publisherId
-                    })
+                    this.policyChecker.runPolicyCheck(crawlData, new URL(url).hostname)
                 );
                 modules.policyChecker = policyResult;
             } catch (err) {
@@ -234,19 +225,22 @@ class CDPAuditOrchestrator {
             }
         }
 
-        // Technical Checker - use CDP metrics
+        // Technical Checker - runTechnicalHealthCheck(crawlData, domain, options)
+        // Uses crawlData for performance analysis, broken links, etc.
         if (this.technicalChecker) {
             try {
                 logger.info('[CDPOrchestrator] Running technical checker...');
+                const crawlData = this.convertToCrawlDataFormat(crawlResult, publisherId);
+
+                // Add network requests in format expected by technical checker
+                crawlData.networkRequests = crawlResult.networkAnalysis?.rawRequests || [];
+                crawlData.requests = crawlData.networkRequests;
+
                 const technicalResult = await this.runModule('technicalChecker', () =>
-                    this.technicalChecker.analyze({
-                        url: url,
-                        publisherId: publisherId,
-                        metrics: {
-                            cls: crawlResult.mfaIndicators?.layoutShift || 0,
-                            adDensity: crawlResult.mfaIndicators?.adDensity || 0,
-                            requestCount: crawlResult.networkAnalysis?.totalRequests || 0
-                        }
+                    this.technicalChecker.runTechnicalHealthCheck(crawlData, new URL(url).hostname, {
+                        skipPerformance: false,
+                        skipBrokenLinks: true, // Skip - needs different data format
+                        skipViewportOcclusion: true, // Skip - needs specific viewport data
                     })
                 );
                 modules.technicalChecker = technicalResult;
@@ -257,6 +251,63 @@ class CDPAuditOrchestrator {
         }
 
         return modules;
+    }
+
+    /**
+     * Convert CDP crawl result to format expected by AdBehaviorAggregator
+     */
+    convertToCrawlDataFormat(crawlResult, publisherId) {
+        // Convert CDP network requests to HAR-like format
+        const networkRequests = crawlResult.networkAnalysis?.rawRequests || [];
+        const harEntries = networkRequests.map(req => ({
+            request: {
+                url: req.url,
+                method: req.method || 'GET'
+            },
+            response: {
+                status: req.status || 200,
+                bodySize: req.size || 0
+            },
+            startedDateTime: new Date(req.timestamp || Date.now()).toISOString()
+        }));
+
+        // Collect all ad elements from heatmap levels
+        const adElements = [];
+        const levels = crawlResult.adHeatmap?.levels || [];
+        levels.forEach(level => {
+            (level.ads || []).forEach(ad => {
+                adElements.push({
+                    selector: ad.selector,
+                    tagName: ad.tagName,
+                    id: ad.id,
+                    className: ad.className,
+                    x: ad.x,
+                    y: ad.y,
+                    width: ad.width,
+                    height: ad.height,
+                    isAboveFold: ad.isAboveFold || false,
+                    isIframe: ad.isIframe || false
+                });
+            });
+        });
+
+        return {
+            publisherId: publisherId,
+            url: crawlResult.url,
+            har: {
+                log: {
+                    entries: harEntries
+                }
+            },
+            adElements: adElements,
+            networkRequests: networkRequests,
+            adNetworks: crawlResult.networkAnalysis?.adNetworks || [],
+            hasAutoRefresh: crawlResult.networkAnalysis?.hasAutoRefresh || false,
+            adDensity: crawlResult.mfaIndicators?.adDensity || 0,
+            adsAboveFold: crawlResult.mfaIndicators?.adsAboveFold || 0,
+            totalAds: crawlResult.mfaIndicators?.totalAds || 0,
+            contentLength: crawlResult.contentLength || 0
+        };
     }
 
     /**

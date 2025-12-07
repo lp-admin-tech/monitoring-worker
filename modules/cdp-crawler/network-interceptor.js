@@ -265,6 +265,10 @@ class NetworkInterceptor {
             vastCalls: this.vastCalls.length,
             websockets: this.websockets.length,
 
+            // Raw requests for HAR conversion
+            rawRequests: this.requests,
+            rawAdRequests: this.adRequests,
+
             // Networks
             adNetworks,
             adNetworkCount: adNetworks.length,
