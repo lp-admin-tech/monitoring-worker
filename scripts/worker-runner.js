@@ -120,7 +120,9 @@ function calculateDataQuality(modules, crawlData) {
   const totalModules = 5; // crawler, content, ads, policy, technical
 
   // Check crawler
-  if (crawlData && crawlData.content && crawlData.content.length >= 100) {
+  // Note: crawlData from CDP orchestrator has contentLength as a number, not content as a string
+  const crawlerContentLength = crawlData?.contentLength || (crawlData?.content?.length) || 0;
+  if (crawlData && crawlerContentLength >= 100) {
     metricsCollected.crawler = true;
     successCount++;
   } else {
@@ -128,7 +130,7 @@ function calculateDataQuality(modules, crawlData) {
     failures.push({
       module: 'crawler',
       reason: 'Insufficient content extracted',
-      contentLength: crawlData?.content?.length || 0,
+      contentLength: crawlerContentLength,
       timestamp: new Date().toISOString()
     });
   }
@@ -434,12 +436,13 @@ async function processAuditJob(job) {
     const mainSiteCrawlData = mainSiteResult.crawlData;
 
     // Map to expected 'modules' structure
+    // Note: calculateDataQuality expects module results under .data property
     const modules = {
       crawler: { success: true, data: mainSiteCrawlData },
-      contentAnalyzer: { name: 'contentAnalyzer', ...mainSiteModules.contentAnalyzer },
-      adAnalyzer: { name: 'adAnalyzer', ...mainSiteModules.adAnalyzer },
-      policyChecker: { name: 'policyChecker', ...mainSiteModules.policyChecker },
-      technicalChecker: { name: 'technicalChecker', ...mainSiteModules.technicalChecker },
+      contentAnalyzer: { name: 'contentAnalyzer', data: mainSiteModules.contentAnalyzer || null },
+      adAnalyzer: { name: 'adAnalyzer', data: mainSiteModules.adAnalyzer || null },
+      policyChecker: { name: 'policyChecker', data: mainSiteModules.policyChecker || null },
+      technicalChecker: { name: 'technicalChecker', data: mainSiteModules.technicalChecker || null },
     };
 
     // Aggregate results
