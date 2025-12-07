@@ -66,14 +66,29 @@ class CrawleeCrawler {
   /**
    * Ensure browser is available for direct context creation
    * Required by directory-audit-orchestrator.js
+   * Only recreates browser if it's crashed or disconnected
    */
   async ensureBrowser() {
-    if (this.browser && this.browser.isConnected()) {
-      logger.debug('[Crawler] Browser already connected');
-      return;
+    // Check if browser exists and is still connected
+    if (this.browser) {
+      try {
+        if (this.browser.isConnected()) {
+          logger.debug('[Crawler] Browser already connected');
+          return; // Browser is fine, don't recreate
+        }
+      } catch (err) {
+        logger.warn('[Crawler] Browser check failed', { error: err.message });
+      }
+      // Browser exists but is crashed/disconnected - clean it up
+      try {
+        await this.browser.close();
+      } catch (err) {
+        // Ignore close errors on crashed browser
+      }
+      this.browser = null;
     }
 
-    logger.info('[Crawler] Launching Playwright browser...');
+    logger.info('[Crawler] Launching fresh Playwright browser...');
 
     try {
       this.browser = await chromium.launch({
@@ -82,34 +97,7 @@ class CrawleeCrawler {
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-features=IsolateOrigins,site-per-process',
-          '--disable-accelerated-2d-canvas',
           '--disable-gpu',
-          '--disable-web-security',
-          '--window-size=1280,720',  // Smaller viewport
-          '--disable-infobars',
-          '--disable-notifications',
-          '--disable-popup-blocking',
-          // Aggressive memory optimizations for 1GB RAM (e2-micro)
-          '--single-process',
-          '--no-zygote',
-          '--disable-software-rasterizer',
-          '--js-flags=--max-old-space-size=128',  // Reduced from 256
-          '--disable-extensions',
-          '--disable-background-networking',
-          '--disable-sync',
-          '--disable-translate',
-          '--mute-audio',
-          '--disable-background-timer-throttling',
-          '--disable-backgrounding-occluded-windows',
-          '--disable-renderer-backgrounding',
-          '--disable-component-update',
-          '--disable-default-apps',
-          '--disable-domain-reliability',
-          '--disable-hang-monitor',
-          '--memory-pressure-off',
-          '--renderer-process-limit=1',
         ],
       });
 

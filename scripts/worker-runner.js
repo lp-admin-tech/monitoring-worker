@@ -220,7 +220,7 @@ function calculateDataQuality(modules, crawlData) {
 }
 
 const WORKER_SECRET = process.env.WORKER_SECRET;
-const BATCH_CONCURRENCY_LIMIT = parseInt(process.env.BATCH_CONCURRENCY_LIMIT || '5');
+const BATCH_CONCURRENCY_LIMIT = parseInt(process.env.BATCH_CONCURRENCY_LIMIT || '1'); // Reduced for 2GB RAM
 const MODULE_TIMEOUT = parseInt(process.env.MODULE_TIMEOUT || '30000');
 const RETRY_ENABLED = process.env.RETRY_ENABLED !== 'false';
 const MAX_RETRIES = 3;
