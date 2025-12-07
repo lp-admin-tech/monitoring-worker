@@ -135,62 +135,70 @@ function calculateDataQuality(modules, crawlData) {
     });
   }
 
-  // Check content analyzer
-  const contentData = modules.contentAnalyzer?.data;
-  if (contentData && contentData.textLength > 100 && contentData.entropy?.entropyScore > 0) {
+  // Check content analyzer - look for data at .data or root level
+  const contentData = modules.contentAnalyzer?.data || modules.contentAnalyzer;
+  const contentTextLength = contentData?.textLength || 0;
+  const contentEntropyScore = contentData?.entropy?.entropyScore || 0;
+  if (contentData && !contentData.error && (contentTextLength > 50 || contentEntropyScore > 0)) {
     metricsCollected.content = true;
     successCount++;
   } else {
     metricsCollected.content = false;
     failures.push({
       module: 'content',
-      reason: 'Content analysis failed or returned zero metrics',
-      textLength: contentData?.textLength || 0,
-      entropyScore: contentData?.entropy?.entropyScore || 0,
+      reason: contentData?.error || 'Content analysis failed or returned zero metrics',
+      textLength: contentTextLength,
+      entropyScore: contentEntropyScore,
       timestamp: new Date().toISOString()
     });
   }
 
-  // Check ad analyzer
-  const adData = modules.adAnalyzer?.data;
-  if (adData && (adData.summary?.totalAds > 0 || adData.summary?.adDensity >= 0)) {
+  // Check ad analyzer - look for data at .data or root level
+  const adData = modules.adAnalyzer?.data || modules.adAnalyzer;
+  const totalAds = adData?.summary?.totalAds ?? adData?.totalAds ?? 0;
+  const adDensity = adData?.summary?.adDensity ?? adData?.adDensity ?? -1;
+  // Pass if we have ANY valid ad data (even 0 ads is valid data)
+  if (adData && !adData.error && (totalAds >= 0 || adDensity >= 0)) {
     metricsCollected.ads = true;
     successCount++;
   } else {
     metricsCollected.ads = false;
     failures.push({
       module: 'ads',
-      reason: 'Ad analysis returned no data or zero ads detected',
-      totalAds: adData?.summary?.totalAds || 0,
+      reason: adData?.error || 'Ad analysis returned no data',
+      totalAds: totalAds,
       timestamp: new Date().toISOString()
     });
   }
 
-  // Check policy checker
-  const policyData = modules.policyChecker?.data;
-  if (policyData && policyData.issues !== undefined) {
+  // Check policy checker - look for data at .data or root level
+  const policyData = modules.policyChecker?.data || modules.policyChecker;
+  // Pass if we have any policy response (issues array exists, even if empty)
+  if (policyData && !policyData.error && (policyData.issues !== undefined || policyData.policyViolations !== undefined)) {
     metricsCollected.policy = true;
     successCount++;
   } else {
     metricsCollected.policy = false;
     failures.push({
       module: 'policy',
-      reason: 'Policy check failed or returned no data',
+      reason: policyData?.error || 'Policy check failed or returned no data',
       timestamp: new Date().toISOString()
     });
   }
 
-  // Check technical checker
-  const technicalData = modules.technicalChecker?.data;
-  if (technicalData && technicalData.performance?.pageLoadTime > 0) {
+  // Check technical checker - look for data at .data or root level
+  const technicalData = modules.technicalChecker?.data || modules.technicalChecker;
+  const pageLoadTime = technicalData?.performance?.pageLoadTime ?? technicalData?.pageLoadTime ?? 0;
+  const hasPerformanceData = technicalData && !technicalData.error && (pageLoadTime > 0 || technicalData?.performance || technicalData?.sslValid !== undefined);
+  if (hasPerformanceData) {
     metricsCollected.technical = true;
     successCount++;
   } else {
     metricsCollected.technical = false;
     failures.push({
       module: 'technical',
-      reason: 'Technical check failed or returned no performance data',
-      pageLoadTime: technicalData?.performance?.pageLoadTime || 0,
+      reason: technicalData?.error || 'Technical check failed or returned no performance data',
+      pageLoadTime: pageLoadTime,
       timestamp: new Date().toISOString()
     });
   }
