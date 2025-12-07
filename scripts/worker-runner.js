@@ -1313,27 +1313,18 @@ async function pollAuditJobQueue() {
       const isNewPublisher = triggered_by === 'new_publisher_edge_function' || triggered_by === 'bulk_upload';
       const gamDataSource = isNewPublisher ? 'historical' : 'dimensional';
 
-      // ✅ Validate GAM data is available in the correct table
+      // ✅ Check if GAM data is available (OPTIONAL - audits run without GAM)
       const { hasData, count } = await checkGAMDataAvailable(publisher_id, gamDataSource);
 
       if (!hasData) {
+        // GAM data is optional - log warning but continue with audit
         logger.warn(
-          `[${requestId}] Skipping job ${id} - No GAM data in ${gamDataSource} table for publisher ${publisher_id}. ` +
-          `Waiting for ${isNewPublisher ? 'historical' : 'daily'} data fetch.`
+          `[${requestId}] No GAM data in ${gamDataSource} table for publisher ${publisher_id}. ` +
+          `Audit will run without GAM enrichment.`
         );
-
-        await supabase.supabaseClient
-          .from('audit_job_queue')
-          .update({
-            last_error: `Waiting for GAM ${gamDataSource} data`,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', id);
-
-        continue;
+      } else {
+        logger.info(`[${requestId}] GAM data available (${count} records in ${gamDataSource})`);
       }
-
-      logger.info(`[${requestId}] GAM data check passed (${count} records in ${gamDataSource})`);
 
       // 2. Mark as processing
       await supabase.supabaseClient
