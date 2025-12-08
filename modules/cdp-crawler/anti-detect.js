@@ -6,29 +6,231 @@
 const logger = require('../logger');
 
 class AntiDetect {
-    constructor(client) {
-        this.client = client;
-        this.Runtime = client.Runtime;
-        this.Emulation = client.Emulation;
-    }
+  constructor(client) {
+    this.client = client;
+    this.Runtime = client.Runtime;
+    this.Emulation = client.Emulation;
+  }
 
-    async applyAll(profile = {}) {
-        logger.info('[AntiDetect] Applying stealth patches...');
+  async applyAll(profile = {}) {
+    logger.info('[AntiDetect] Applying stealth patches...');
 
-        await this.patchWebdriver();
-        await this.patchNavigator(profile);
-        await this.patchCanvas();
-        await this.patchWebGL(profile);
-        await this.patchPlugins();
-        await this.patchPermissions();
-        await this.patchChrome();
+    await this.patchWebdriver();
+    await this.patchNavigator(profile);
+    await this.patchUserAgentData(profile);
+    await this.patchDocumentVisibility(); // NEW: from crawl4ai
+    await this.patchCanvas();
+    await this.patchWebGL(profile);
+    await this.patchPlugins();
+    await this.patchPermissions();
+    await this.patchChrome();
+    await this.patchCloudflareBypass();
 
-        logger.info('[AntiDetect] All patches applied');
-    }
+    logger.info('[AntiDetect] All patches applied');
+  }
 
-    async patchWebdriver() {
-        await this.Runtime.evaluate({
-            expression: `
+  /**
+   * Patch userAgentData - modern bot detection uses this
+   */
+  async patchUserAgentData(profile) {
+    const brands = profile.brands || [
+      { brand: 'Google Chrome', version: '120' },
+      { brand: 'Chromium', version: '120' },
+      { brand: 'Not_A Brand', version: '24' }
+    ];
+    const platform = profile.platform || 'Windows';
+    const mobile = profile.isMobile || false;
+
+    await this.Runtime.evaluate({
+      expression: `
+        // Modern Chrome exposes navigator.userAgentData
+        if (!navigator.userAgentData) {
+          Object.defineProperty(navigator, 'userAgentData', {
+            get: () => ({
+              brands: ${JSON.stringify(brands)},
+              mobile: ${mobile},
+              platform: '${platform}',
+              getHighEntropyValues: async (hints) => ({
+                brands: ${JSON.stringify(brands)},
+                mobile: ${mobile},
+                platform: '${platform}',
+                platformVersion: '10.0.0',
+                architecture: 'x86',
+                bitness: '64',
+                model: '',
+                uaFullVersion: '120.0.6099.109'
+              })
+            }),
+            configurable: true
+          });
+        }
+      `
+    });
+  }
+
+  /**
+   * Cloudflare-specific bypass patches
+   */
+  async patchCloudflareBypass() {
+    await this.Runtime.evaluate({
+      expression: `
+        // Cloudflare checks for automation via Notification API
+        if (typeof Notification === 'undefined') {
+          window.Notification = {
+            permission: 'default',
+            requestPermission: () => Promise.resolve('default')
+          };
+        }
+        
+        // Cloudflare checks for browser automation markers
+        delete window.callPhantom;
+        delete window._phantom;
+        delete window.__nightmare;
+        delete window.domAutomation;
+        delete window.domAutomationController;
+        delete window._selenium;
+        delete window._Selenium_IDE_Recorder;
+        delete window.callSelenium;
+        delete window.__webdriver_evaluate;
+        delete window.__selenium_unwrapped;
+        delete window.__webdriver_script_function;
+        delete window.__webdriver_script_func;
+        delete window.__webdriver_script_fn;
+        delete window.__fxdriver_evaluate;
+        delete window.__driver_unwrapped;
+        delete window.__webdriver_unwrapped;
+        delete window.__driver_evaluate;
+        delete window.__selenium_evaluate;
+        delete window.__last_wm_id;
+        delete document.__webdriver_evaluate;
+        delete document.__selenium_evaluate;
+        delete document.__webdriver_script_function;
+        
+        // Override toString for functions to hide modifications
+        const origToString = Function.prototype.toString;
+        Function.prototype.toString = function() {
+          if (this === navigator.permissions.query) {
+            return 'function query() { [native code] }';
+          }
+          return origToString.call(this);
+        };
+      `
+    });
+  }
+
+  /**
+   * Patch document visibility - makes page appear active/visible
+   * From crawl4ai navigator_overrider.js
+   */
+  async patchDocumentVisibility() {
+    await this.Runtime.evaluate({
+      expression: `
+        // Make document appear visible (not hidden/backgrounded)
+        Object.defineProperty(document, 'hidden', {
+          get: () => false,
+          configurable: true
+        });
+        
+        Object.defineProperty(document, 'visibilityState', {
+          get: () => 'visible',
+          configurable: true
+        });
+        
+        // Prevent visibility change detection
+        const origAddEventListener = document.addEventListener;
+        document.addEventListener = function(type, listener, options) {
+          if (type === 'visibilitychange') {
+            return; // Ignore visibility change listeners
+          }
+          return origAddEventListener.call(this, type, listener, options);
+        };
+      `
+    });
+  }
+
+  /**
+   * Remove overlay elements (popups, modals, cookie banners)
+   * From crawl4ai remove_overlay_elements.js
+   */
+  async removeOverlays() {
+    await this.Runtime.evaluate({
+      expression: `
+        (async () => {
+          const isVisible = (elem) => {
+            const style = window.getComputedStyle(elem);
+            return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+          };
+
+          // Common selectors for popups and overlays
+          const closeSelectors = [
+            'button[class*="close" i]',
+            'button[class*="dismiss" i]',
+            'button[aria-label*="close" i]',
+            'a[class*="close" i]',
+            'span[class*="close" i]'
+          ];
+
+          const overlaySelectors = [
+            '[class*="cookie-banner" i]',
+            '[class*="cookie-consent" i]',
+            '[class*="newsletter" i]',
+            '[class*="popup" i]',
+            '[class*="modal" i]',
+            '[class*="overlay" i]',
+            '[role="dialog"]',
+            '[role="alertdialog"]'
+          ];
+
+          // Try clicking close buttons
+          for (const selector of closeSelectors) {
+            const buttons = document.querySelectorAll(selector);
+            for (const button of buttons) {
+              if (isVisible(button)) {
+                try {
+                  button.click();
+                  await new Promise(r => setTimeout(r, 100));
+                } catch (e) {}
+              }
+            }
+          }
+
+          // Remove overlay elements
+          for (const selector of overlaySelectors) {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(elem => {
+              if (isVisible(elem)) elem.remove();
+            });
+          }
+
+          // Remove high z-index fixed/absolute elements that cover screen
+          const allElements = document.querySelectorAll('*');
+          for (const elem of allElements) {
+            const style = window.getComputedStyle(elem);
+            const zIndex = parseInt(style.zIndex);
+            const position = style.position;
+            
+            if (
+              isVisible(elem) &&
+              (zIndex > 999 || position === 'fixed') &&
+              (elem.offsetWidth > window.innerWidth * 0.5 ||
+               elem.offsetHeight > window.innerHeight * 0.5)
+            ) {
+              elem.remove();
+            }
+          }
+
+          // Unlock scrolling
+          document.body.style.overflow = 'auto';
+          document.body.style.marginRight = '0px';
+          document.body.style.paddingRight = '0px';
+        })();
+      `
+    });
+  }
+
+  async patchWebdriver() {
+    await this.Runtime.evaluate({
+      expression: `
         // Remove webdriver flag
         Object.defineProperty(navigator, 'webdriver', {
           get: () => undefined,
@@ -46,18 +248,18 @@ class AntiDetect {
             originalQuery(parameters)
         );
       `
-        });
-    }
+    });
+  }
 
-    async patchNavigator(profile) {
-        const languages = profile.languages || ['en-US', 'en'];
-        const platform = profile.platform || 'Win32';
-        const hardwareConcurrency = profile.cores || 8;
-        const deviceMemory = profile.memory || 8;
-        const maxTouchPoints = profile.isMobile ? 5 : 0;
+  async patchNavigator(profile) {
+    const languages = profile.languages || ['en-US', 'en'];
+    const platform = profile.platform || 'Win32';
+    const hardwareConcurrency = profile.cores || 8;
+    const deviceMemory = profile.memory || 8;
+    const maxTouchPoints = profile.isMobile ? 5 : 0;
 
-        await this.Runtime.evaluate({
-            expression: `
+    await this.Runtime.evaluate({
+      expression: `
         Object.defineProperty(navigator, 'languages', {
           get: () => ${JSON.stringify(languages)},
           configurable: true
@@ -94,12 +296,12 @@ class AntiDetect {
           configurable: true
         });
       `
-        });
-    }
+    });
+  }
 
-    async patchCanvas() {
-        await this.Runtime.evaluate({
-            expression: `
+  async patchCanvas() {
+    await this.Runtime.evaluate({
+      expression: `
         // Add subtle noise to canvas fingerprinting
         const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
         HTMLCanvasElement.prototype.toDataURL = function(type) {
@@ -133,15 +335,15 @@ class AntiDetect {
           return imageData;
         };
       `
-        });
-    }
+    });
+  }
 
-    async patchWebGL(profile) {
-        const vendor = profile.webglVendor || 'Google Inc. (Intel)';
-        const renderer = profile.webglRenderer || 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+  async patchWebGL(profile) {
+    const vendor = profile.webglVendor || 'Google Inc. (Intel)';
+    const renderer = profile.webglRenderer || 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)';
 
-        await this.Runtime.evaluate({
-            expression: `
+    await this.Runtime.evaluate({
+      expression: `
         const getParameterProxy = new Proxy(WebGLRenderingContext.prototype.getParameter, {
           apply: function(target, thisArg, args) {
             // UNMASKED_VENDOR_WEBGL
@@ -159,12 +361,12 @@ class AntiDetect {
           WebGL2RenderingContext.prototype.getParameter = getParameterProxy;
         }
       `
-        });
-    }
+    });
+  }
 
-    async patchPlugins() {
-        await this.Runtime.evaluate({
-            expression: `
+  async patchPlugins() {
+    await this.Runtime.evaluate({
+      expression: `
         // Create realistic plugin array
         const mockPlugins = [
           { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
@@ -202,12 +404,12 @@ class AntiDetect {
           configurable: true
         });
       `
-        });
-    }
+    });
+  }
 
-    async patchPermissions() {
-        await this.Runtime.evaluate({
-            expression: `
+  async patchPermissions() {
+    await this.Runtime.evaluate({
+      expression: `
         const originalQuery = Permissions.prototype.query;
         Permissions.prototype.query = (parameters) => {
           if (parameters.name === 'notifications') {
@@ -216,12 +418,12 @@ class AntiDetect {
           return originalQuery(parameters);
         };
       `
-        });
-    }
+    });
+  }
 
-    async patchChrome() {
-        await this.Runtime.evaluate({
-            expression: `
+  async patchChrome() {
+    await this.Runtime.evaluate({
+      expression: `
         // Create window.chrome object
         window.chrome = {
           runtime: {
@@ -252,8 +454,8 @@ class AntiDetect {
           }
         };
       `
-        });
-    }
+    });
+  }
 }
 
 module.exports = AntiDetect;

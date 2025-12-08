@@ -204,27 +204,50 @@ class ChromeCDPClient {
     }
 
     async navigate(url, options = {}) {
-        const { Page } = this.client;
-        const timeout = options.timeout || 60000;
+        const { Page, Network } = this.client;
+        const timeout = options.timeout || 90000; // Increased default timeout
 
         try {
             logger.info(`[CDP] Navigating to ${url}`);
 
+            // Use multiple load event strategies
             const loadPromise = new Promise((resolve, reject) => {
-                const timer = setTimeout(() => reject(new Error('Navigation timeout')), timeout);
-                Page.loadEventFired(() => {
+                const timer = setTimeout(() => {
+                    logger.warn(`[CDP] Navigation timeout after ${timeout}ms for ${url}`);
+                    reject(new Error('Navigation timeout'));
+                }, timeout);
+
+                // Primary: DOM content loaded (faster, doesn't wait for all resources)
+                Page.domContentEventFired(() => {
                     clearTimeout(timer);
+                    logger.debug('[CDP] DOM content loaded');
+                    resolve();
+                });
+
+                // Fallback: frame stopped loading
+                Page.frameStoppedLoading(() => {
+                    clearTimeout(timer);
+                    logger.debug('[CDP] Frame stopped loading');
                     resolve();
                 });
             });
 
-            await Page.navigate({ url });
+            const { frameId, errorText } = await Page.navigate({ url });
+
+            if (errorText) {
+                logger.warn(`[CDP] Navigation error from Chrome: ${errorText}`);
+                // Don't throw, some errors are recoverable (like cert warnings)
+            }
+
             await loadPromise;
+
+            // Small additional wait for dynamic content
+            await new Promise(resolve => setTimeout(resolve, 2000));
 
             logger.info(`[CDP] Navigation complete: ${url}`);
             return true;
         } catch (error) {
-            logger.warn(`[CDP] Navigation error: ${error.message}`);
+            logger.warn(`[CDP] Navigation error: ${error.message}`, { url });
             return false;
         }
     }

@@ -8,6 +8,7 @@ const AntiDetect = require('./anti-detect');
 const HumanSimulator = require('./human-simulator');
 const NetworkInterceptor = require('./network-interceptor');
 const AdHeatmapGenerator = require('./ad-heatmap');
+const { KeywordRelevanceScorer, PathDepthScorer, ContentTypeFilter } = require('./url-scorers');
 const logger = require('../logger');
 
 // Default fingerprint profiles
@@ -49,6 +50,128 @@ class CDPCrawler {
     this.humanSimulator = null;
     this.networkInterceptor = null;
     this.adHeatmap = null;
+
+    // New analyzers from crawl4ai
+    this.keywordScorer = new KeywordRelevanceScorer();
+    this.pathDepthScorer = new PathDepthScorer();
+    this.contentTypeFilter = new ContentTypeFilter();
+
+    // Hooks system (inspired by crawl4ai)
+    this.hooks = {
+      on_browser_created: null,
+      before_navigate: null,
+      after_navigate: null,
+      before_scroll: null,
+      after_scroll: null,
+      on_ad_detected: null,
+      on_content_extracted: null,
+      on_error: null,
+      before_close: null
+    };
+  }
+
+  /**
+   * Register a hook callback
+   * @param {string} hookType - Hook name from this.hooks
+   * @param {Function} callback - Async function to call
+   */
+  setHook(hookType, callback) {
+    if (hookType in this.hooks) {
+      this.hooks[hookType] = callback;
+      logger.debug(`[CDPCrawler] Hook registered: ${hookType}`);
+    } else {
+      throw new Error(`Invalid hook type: ${hookType}. Valid types: ${Object.keys(this.hooks).join(', ')}`);
+    }
+    return this;
+  }
+
+  /**
+   * Execute a hook if registered
+   * @param {string} hookType - Hook name
+   * @param  {...any} args - Arguments to pass to hook
+   */
+  async executeHook(hookType, ...args) {
+    const hook = this.hooks[hookType];
+    if (hook) {
+      try {
+        return await hook(...args);
+      } catch (error) {
+        logger.warn(`[CDPCrawler] Hook ${hookType} error:`, error.message);
+      }
+    }
+    return args[0]; // Return first arg if no hook
+  }
+
+  /**
+   * Smart wait - auto-detect CSS selector or JS condition
+   * Inspired by crawl4ai smart_wait
+   * @param {string} condition - CSS selector, 'css:selector', or 'js:() => boolean'
+   * @param {number} timeout - Max wait time in ms
+   */
+  async smartWait(condition, timeout = 30000) {
+    const startTime = Date.now();
+    condition = condition.trim();
+
+    try {
+      if (condition.startsWith('js:')) {
+        // JavaScript condition
+        const jsCode = condition.slice(3).trim();
+        return await this._waitForJsCondition(jsCode, timeout);
+      } else if (condition.startsWith('css:')) {
+        // CSS selector
+        const selector = condition.slice(4).trim();
+        return await this._waitForSelector(selector, timeout);
+      } else {
+        // Auto-detect: try as CSS first, then JS
+        try {
+          return await this._waitForSelector(condition, timeout);
+        } catch (e) {
+          // Maybe it's a JS condition
+          if (condition.includes('=>') || condition.includes('return') || condition.includes('document.')) {
+            return await this._waitForJsCondition(condition, timeout);
+          }
+          throw e;
+        }
+      }
+    } catch (error) {
+      logger.debug(`[CDPCrawler] smartWait failed for "${condition}":`, error.message);
+      return false;
+    }
+  }
+
+  async _waitForSelector(selector, timeout) {
+    const startTime = Date.now();
+    const pollInterval = 100;
+
+    while (Date.now() - startTime < timeout) {
+      const result = await this.chromeClient.evaluate(`
+        !!document.querySelector(${JSON.stringify(selector)})
+      `);
+      if (result) return true;
+      await new Promise(r => setTimeout(r, pollInterval));
+    }
+    return false;
+  }
+
+  async _waitForJsCondition(jsCode, timeout) {
+    const startTime = Date.now();
+    const pollInterval = 100;
+
+    // Wrap in async IIFE if needed
+    const wrappedCode = jsCode.startsWith('(') || jsCode.startsWith('async')
+      ? `(${jsCode})()`
+      : `(async () => { ${jsCode} })()`;
+
+    while (Date.now() - startTime < timeout) {
+      try {
+        const result = await this.chromeClient.evaluate(wrappedCode);
+        if (result) return true;
+      } catch (e) {
+        // Condition threw error, keep waiting
+      }
+      await new Promise(r => setTimeout(r, pollInterval));
+    }
+    return false;
   }
 
   async launch(proxyUrl = null) {
@@ -81,6 +204,9 @@ class CDPCrawler {
     // Start network interception
     await this.networkInterceptor.start();
 
+    // Execute on_browser_created hook
+    await this.executeHook('on_browser_created', { client: this.client, profile });
+
     logger.info('[CDPCrawler] Crawler ready');
     return this;
   }
@@ -92,6 +218,9 @@ class CDPCrawler {
     const startTime = Date.now();
 
     try {
+      // Execute before_navigate hook
+      await this.executeHook('before_navigate', { url, options });
+
       // Navigate to page
       const navigated = await this.chromeClient.navigate(url, {
         timeout: this.options.timeout
@@ -101,8 +230,19 @@ class CDPCrawler {
         throw new Error('Navigation failed');
       }
 
+      // Execute after_navigate hook
+      await this.executeHook('after_navigate', { url, success: true });
+
       // Wait for dynamic content (longer wait for ads)
       await this.humanSimulator.wait(5000, 8000);
+
+      // Remove overlays/popups that may interfere with ad detection
+      try {
+        await this.antiDetect.removeOverlays();
+        logger.debug('[CDPCrawler] Removed overlay elements');
+      } catch (e) {
+        logger.debug('[CDPCrawler] Overlay removal skipped:', e.message);
+      }
 
       // Generate ad heatmap (with scroll)
       let heatmapData = null;
@@ -331,7 +471,69 @@ class CDPCrawler {
     return this.chromeClient.screenshot(options);
   }
 
+  /**
+   * Extract content from iframes (ads often hide in iframes)
+   * Inspired by crawl4ai process_iframes
+   * @returns {Promise<Array<{id: string, src: string, content: string}>>}
+   */
+  async extractIframeContent() {
+    try {
+      const iframeData = await this.chromeClient.evaluate(`
+        (async () => {
+          const iframes = document.querySelectorAll('iframe');
+          const results = [];
+          
+          for (let i = 0; i < iframes.length; i++) {
+            const iframe = iframes[i];
+            const src = iframe.src || iframe.getAttribute('data-src') || '';
+            
+            try {
+              // Only process same-origin iframes
+              if (iframe.contentDocument) {
+                const content = iframe.contentDocument.body?.innerText || '';
+                results.push({
+                  id: iframe.id || 'iframe-' + i,
+                  src: src,
+                  content: content.substring(0, 5000),
+                  isAd: src.includes('ad') || src.includes('banner') || 
+                        src.includes('doubleclick') || src.includes('googlesyndication')
+                });
+              } else {
+                // Cross-origin - we can only get src
+                results.push({
+                  id: iframe.id || 'iframe-' + i,
+                  src: src,
+                  content: null,
+                  isAd: src.includes('ad') || src.includes('banner') || 
+                        src.includes('doubleclick') || src.includes('googlesyndication')
+                });
+              }
+            } catch (e) {
+              results.push({
+                id: iframe.id || 'iframe-' + i,
+                src: src,
+                content: null,
+                error: e.message,
+                isAd: src.includes('ad') || src.includes('banner')
+              });
+            }
+          }
+          
+          return results;
+        })()
+      `);
+
+      return iframeData || [];
+    } catch (error) {
+      logger.debug('[CDPCrawler] Iframe extraction failed:', error.message);
+      return [];
+    }
+  }
+
   async close() {
+    // Execute before_close hook
+    await this.executeHook('before_close', { crawler: this });
+
     logger.info('[CDPCrawler] Closing crawler...');
     await this.chromeClient?.close();
     this.client = null;

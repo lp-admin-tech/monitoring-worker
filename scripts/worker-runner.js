@@ -480,7 +480,24 @@ async function processAuditJob(job) {
     );
 
     // Extract main site results
-    const mainSiteResult = orchestratorResult.mainSite.desktop || orchestratorResult.mainSite.mobile;
+    const mainSiteResult = orchestratorResult?.mainSite?.desktop || orchestratorResult?.mainSite?.mobile;
+
+    // Handle case where crawl completely failed
+    if (!mainSiteResult || !mainSiteResult.modules) {
+      const errorMsg = orchestratorResult?.error || 'Crawl returned no usable results';
+      logger.error(`[${requestId}] Crawl failed with no module results`, { error: errorMsg, siteUrl });
+
+      // Update site_audits with failed status
+      await supabase.update('site_audits', siteAuditId, {
+        status: 'failed',
+        error_message: errorMsg,
+        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      throw new Error(`Site audit failed: ${errorMsg}`);
+    }
+
     const mainSiteModules = mainSiteResult.modules;
     const mainSiteCrawlData = mainSiteResult.crawlData;
 

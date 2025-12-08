@@ -334,7 +334,7 @@ class CDPAuditOrchestrator {
     }
 
     /**
-     * Normalize URL
+     * Normalize URL - strips trailing special chars and ensures https
      */
     normalizeUrl(url) {
         if (!url || typeof url !== 'string') {
@@ -342,7 +342,13 @@ class CDPAuditOrchestrator {
         }
 
         let normalized = url.trim();
-        normalized = normalized.replace(/[:\\/]+$/, '');
+
+        // Remove trailing colons, slashes, and other problematic chars
+        // This handles cases like "example.com:" or "example.com:/"
+        normalized = normalized.replace(/[:\/\\]+$/g, '');
+
+        // Also remove any trailing special chars before http prefix is added
+        normalized = normalized.replace(/[:\s]+$/g, '');
 
         if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
             normalized = `https://${normalized}`;
@@ -350,9 +356,15 @@ class CDPAuditOrchestrator {
 
         try {
             const urlObj = new URL(normalized);
-            return urlObj.href;
+            // Get origin + pathname, strip any trailing slash from pathname if it's just "/"
+            let cleanUrl = urlObj.origin + urlObj.pathname;
+            // Remove trailing slash unless it's the root
+            if (cleanUrl.endsWith('/') && urlObj.pathname !== '/') {
+                cleanUrl = cleanUrl.slice(0, -1);
+            }
+            return cleanUrl;
         } catch (e) {
-            logger.warn('[CDPOrchestrator] URL normalization failed:', e.message);
+            logger.warn('[CDPOrchestrator] URL normalization failed:', { url, error: e.message });
             return null;
         }
     }
