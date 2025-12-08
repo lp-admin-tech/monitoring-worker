@@ -76,7 +76,10 @@ class OpenRouterRateLimiter extends RateLimiter {
   }
 
   calculateBackoffDelay(attempt) {
-    return this.initialBackoffMs * Math.pow(this.backoffMultiplier, attempt - 1);
+    const baseDelay = this.initialBackoffMs * Math.pow(this.backoffMultiplier, attempt - 1);
+    // Add jitter (0-20% of base delay) to prevent thundering herd
+    const jitter = Math.random() * 0.2 * baseDelay;
+    return Math.round(baseDelay + jitter);
   }
 
   async executeWithRetry(fn, maxRetries = null) {

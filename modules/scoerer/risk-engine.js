@@ -55,10 +55,16 @@ class RiskEngine {
     const affiliateRisk = Math.min((data.affiliateLinkCount || 0) / 10, 1) * (weights.affiliate_abuse || 0.10);
     const popupRisk = (data.hasPopupAds ? 1 : 0) * (weights.popup_ads || 0.15);
 
+    // NEW: Network Traffic Risk (Critical for hidden ads)
+    // If networkScore > 50, this should contribute significantly
+    const networkScore = data.networkScore || 0;
+    const networkTrafficRisk = Math.min(networkScore / 100, 1) * (weights.network_traffic || 0.25);
+
     const rawScore = adDensity + autoRefresh + viewportOcclusion + userPatterns + scrollJacking +
       videoStuffing + mutedAutoplay + stickyVideo + scrollAdInjection +
       isCluttered + aboveFoldDensity + contentAdRisk +
-      trackerRisk + contentRecRisk + commercialRisk + affiliateRisk + popupRisk;
+      trackerRisk + contentRecRisk + commercialRisk + affiliateRisk + popupRisk +
+      networkTrafficRisk;
     const normalizedScore = Math.min(rawScore, 1);
 
     return {
@@ -79,6 +85,7 @@ class RiskEngine {
       // NEW: Tracker and commercial signals
       trackers: { count: data.totalTrackerCount || 0, contentRec: data.contentRecCount || 0, weight: trackerRisk + contentRecRisk },
       commercial: { score: data.commercialIntentScore || 0, affiliates: data.affiliateLinkCount || 0, popups: data.hasPopupAds, weight: commercialRisk + affiliateRisk + popupRisk },
+      networkTraffic: { score: networkScore, weight: networkTrafficRisk }
     };
   }
 
@@ -228,12 +235,12 @@ class RiskEngine {
 
     logger.debug('Bayesian scoring complete', {
       posteriors,
-      bayesianScore,
+      bayesianScore: bayesianScore || 0,
       baselineRate: p.baselineRate
     });
 
     return {
-      score: Math.min(bayesianScore, 1),
+      score: Math.min(bayesianScore || 0, 1),
       posteriors,
       methodology: 'Bayesian'
     };
@@ -293,7 +300,8 @@ class RiskEngine {
       totalWeight += weight;
     }
 
-    return totalWeight === 0 ? 0 : totalWeightedScore / totalWeight;
+    return totalWeight === 0 ? 0 : (totalWeightedScore / totalWeight) || 0;
+
   }
 
   /**

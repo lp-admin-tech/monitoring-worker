@@ -31,7 +31,19 @@ class AdHeatmapGenerator {
     '[class*="revcontent"]', '[id*="taboola"]', '[id*="outbrain"]',
 
     // Video ads
-    '[class*="video-ad"]', '[class*="preroll"]', '[class*="midroll"]'
+    '[class*="video-ad"]', '[class*="preroll"]', '[class*="midroll"]',
+
+    // Generic ID/Class patterns (common in MFA)
+    '[id^="ad-"]', '[id^="banner-"]', '[id^="div-gpt-"]',
+    '[class^="ad-"]', '[class^="banner-"]', '[class*="sponsored"]',
+    '[aria-label="Advertisement"]', '[aria-label="Sponsored"]',
+
+    // Specific Bidders/Networks
+    '[id*="criteo"]', '[class*="criteo"]',
+    '[id*="pubmatic"]', '[class*="pubmatic"]',
+    '[id*="rubicon"]', '[class*="rubicon"]',
+    '[id*="openx"]', '[class*="openx"]',
+    '[id*="amazon"]', '[class*="amzn"]'
   ];
 
   async detectAdsInViewport() {

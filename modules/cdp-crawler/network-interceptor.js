@@ -290,18 +290,19 @@ class NetworkInterceptor {
         let score = 0;
 
         // Base score from ad request count
-        if (this.adRequests.length > 100) score += 25;
-        else if (this.adRequests.length > 50) score += 15;
-        else if (this.adRequests.length > 25) score += 5;
+        // Base score from ad request count - AGGRESSIVE SCORING
+        if (this.adRequests.length > 100) score += 70; // Was 25 - severe ad loading
+        else if (this.adRequests.length > 50) score += 40; // Was 15 - heavy ad loading
+        else if (this.adRequests.length > 25) score += 15; // Was 5 - moderate ad loading
 
         // Suspicious patterns
         for (const pattern of patterns) {
             switch (pattern.type) {
                 case 'AUTO_REFRESH_ADS':
-                    score += pattern.severity === 'HIGH' ? 30 : 20;
+                    score += pattern.severity === 'HIGH' ? 40 : 25; // Was 30/20
                     break;
                 case 'EXCESSIVE_AD_CALLS':
-                    score += pattern.severity === 'HIGH' ? 20 : 10;
+                    score += pattern.severity === 'HIGH' ? 30 : 15; // Was 20/10
                     break;
                 case 'MULTIPLE_PREBID_AUCTIONS':
                     score += 10;

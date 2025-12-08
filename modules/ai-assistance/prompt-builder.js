@@ -24,7 +24,7 @@ For each module analysis:
 Output in clean, structured TOON format. Be balanced, evidence-based, and explain findings in plain language.`;
   }
 
-  buildComprehensivePrompt(auditData, scorerOutput, policyViolations = []) {
+  buildComprehensivePrompt(auditData, scorerOutput, policyViolations = [], contextData = {}) {
     try {
       logger.info('Building comprehensive LLM prompt (TOON format)', {
         domain: auditData?.domain,
@@ -38,6 +38,12 @@ Output in clean, structured TOON format. Be balanced, evidence-based, and explai
       sections.push(this.buildRiskProbabilitySection(scorerOutput));
       sections.push(this.buildGamTrendsSection(scorerOutput));
       sections.push(this.buildViolationsSection(auditData, policyViolations));
+
+      // Add Page Content Section if available
+      if (contextData?.pageContent) {
+        sections.push(this.buildPageContentSection(contextData.pageContent));
+      }
+
       sections.push(this.buildAnalysisRequestSection());
 
       const prompt = sections.join('\n\n');
@@ -187,75 +193,88 @@ ${violationList}
 )`;
   }
 
+  buildPageContentSection(content) {
+    // Truncate content if too long (e.g., 15000 chars to stay within context limits)
+    const truncatedContent = content.length > 15000 ? content.substring(0, 15000) + '...[TRUNCATED]' : content;
+
+    return \`page_content(
+  format("markdown")
+  length("\${content.length} chars")
+  excerpt(\"\"\"
+\${truncatedContent}
+\"\"\")
+)\`;
+  }
+
   buildAnalysisRequestSection() {
     return `
----
-IMPORTANT: Output your analysis in PLAIN MARKDOWN format. Do NOT use TOON syntax in your response.
+    ---
+      IMPORTANT: Output your analysis in PLAIN MARKDOWN format.Do NOT use TOON syntax in your response.
 
 ## MFA Score Reasoning
 
 Provide analysis for each score in this format:
-<Score Name>: <Value> — <Brief reason>
+      <Score Name>: <Value> — <Brief reason>
 
-Then provide ONE suggestion line at the end.
+        Then provide ONE suggestion line at the end.
 
-## Module Analysis
+        ## Module Analysis
 
-For each significant module, use this plain markdown structure:
+        For each significant module, use this plain markdown structure:
 
-## <Module Name>
-**Impact**: <Minimal/Moderate/High> negative impact
-**Issues Found**: <description>
-  - <issue 1>
-  - <issue 2 if any>
-**Root Cause**: <explanation>
-**Recommended Fix**: <steps>
-**Positive Signals**:
-  ✓<signal 1>
-  ✓<signal 2>
-**Summary**: <one sentence>
+        ## <Module Name>
+          **Impact**: <Minimal /Moderate/High> negative impact
+          **Issues Found**: <description>
+            - <issue 1>
+            - <issue 2 if any>
+            **Root Cause**: <explanation>
+              **Recommended Fix**: <steps>
+                **Positive Signals**:
+                ✓<signal 1>
+                ✓<signal 2>
+                **Summary**: <one sentence>
 
-Remember: Use markdown headers (##), bullet points (-), and check marks (✓). NO parentheses syntax like module(name).
-`;
+                  Remember: Use markdown headers (##), bullet points (-), and check marks (✓). NO parentheses syntax like module(name).
+                  `;
   }
 
 
-  formatBenchmarkComparison(benchmarks) {
+                  formatBenchmarkComparison(benchmarks) {
     if (!benchmarks) return 'No benchmark data available.';
 
-    const items = [];
-    if (benchmarks?.ctr) {
-      items.push(`CTR ${benchmarks.ctr.percentile || 'average'}`);
+                  const items = [];
+                  if (benchmarks?.ctr) {
+                    items.push(`CTR ${benchmarks.ctr.percentile || 'average'}`);
     }
-    if (benchmarks?.ecpm) {
-      items.push(`eCPM ${benchmarks.ecpm.percentile || 'average'}`);
+                  if (benchmarks?.ecpm) {
+                    items.push(`eCPM ${benchmarks.ecpm.percentile || 'average'}`);
     }
-    if (benchmarks?.fillRate) {
-      items.push(`Fill Rate ${benchmarks.fillRate.percentile || 'average'}`);
+                  if (benchmarks?.fillRate) {
+                    items.push(`Fill Rate ${benchmarks.fillRate.percentile || 'average'}`);
     }
 
     return items.length > 0 ? items.join(', ') : 'Within benchmarks';
   }
 
-  formatDeviation(deviation) {
+                  formatDeviation(deviation) {
     if (!deviation) return 'No data';
     const sign = deviation > 0 ? '+' : '';
-    return `${sign}${(deviation * 100).toFixed(1)}%`;
+                  return `${sign}${(deviation * 100).toFixed(1)}%`;
   }
 
-  assessDomainReputation(auditData) {
+                  assessDomainReputation(auditData) {
     if (auditData?.domainAgeMonths && auditData.domainAgeMonths < 3) {
       return 'Very New - High Risk';
     }
-    if (auditData?.whoisPrivate) {
+                  if (auditData?.whoisPrivate) {
       return 'Private Registration - Suspicious';
     }
-    return 'Established';
+                  return 'Established';
   }
 
-  assessRevenueConsistency(scorerOutput) {
+                  assessRevenueConsistency(scorerOutput) {
     const ctrDev = scorerOutput?.benchmarks?.ctr?.deviation || 0;
-    const ecpmDev = scorerOutput?.benchmarks?.ecpm?.deviation || 0;
+                  const ecpmDev = scorerOutput?.benchmarks?.ecpm?.deviation || 0;
 
     if (Math.abs(ctrDev) > 0.5 || Math.abs(ecpmDev) > 0.5) {
       return 'Highly Inconsistent - Major Concern';
@@ -263,37 +282,37 @@ Remember: Use markdown headers (##), bullet points (-), and check marks (✓). N
     if (Math.abs(ctrDev) > 0.3 || Math.abs(ecpmDev) > 0.3) {
       return 'Somewhat Inconsistent - Review Needed';
     }
-    return 'Consistent - Normal';
+                  return 'Consistent - Normal';
   }
 
-  assessGroupAlignment(scorerOutput) {
+                  assessGroupAlignment(scorerOutput) {
     if (!scorerOutput?.patternDrift) return 'Aligned';
     if (scorerOutput.patternDrift.score > 0.7) {
       return 'Significant Divergence from Group';
     }
-    return 'Aligned with Publisher Group';
+                  return 'Aligned with Publisher Group';
   }
 
-  listApplicableRegulations() {
+                  listApplicableRegulations() {
     return 'AdChoices Guidelines, Google Publisher Policies, IAB Standards';
   }
 
-  calculateConfidence(scores) {
+                  calculateConfidence(scores) {
     if (!scores) return 0;
-    const factors = [
-      scores.mfaProbability !== undefined ? 0.3 : 0,
-      scores.overallRiskScore !== undefined ? 0.3 : 0,
-      scores.componentScores ? 0.4 : 0
-    ];
+                  const factors = [
+                  scores.mfaProbability !== undefined ? 0.3 : 0,
+                  scores.overallRiskScore !== undefined ? 0.3 : 0,
+                  scores.componentScores ? 0.4 : 0
+                  ];
     return Math.round(Math.min(100, factors.reduce((a, b) => a + b, 0) * 100));
   }
 
-  formatNumber(num) {
+                  formatNumber(num) {
     if (!num) return 'N/A';
     if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
     if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
-    return num.toString();
+                  return num.toString();
   }
 }
 
-module.exports = PromptBuilder;
+                  module.exports = PromptBuilder;

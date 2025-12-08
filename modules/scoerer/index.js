@@ -115,6 +115,11 @@ class ScoringEngine {
       flattened.stickyAdCount = densityMetrics.stickyAdCount || 0;
     }
 
+    if (auditData.crawlerData) {
+      flattened.networkScore = auditData.crawlerData.mfaIndicators?.networkScore || 0;
+      flattened.crawlerCombinedScore = auditData.crawlerData.mfaIndicators?.combinedScore || 0;
+    }
+
     if (auditData.policyCheck) {
       flattened.policyViolationCount = auditData.policyCheck.violations?.count || auditData.policyCheck.policyViolationCount || 0;
       flattened.restrictedKeywordMatches = auditData.policyCheck.keywords?.count || auditData.policyCheck.restrictedKeywordMatches || 0;
@@ -157,6 +162,14 @@ class ScoringEngine {
         flattened.contentRecCount = trackers.metrics?.contentRecCount || 0;
         flattened.fingerprintingCount = trackers.metrics?.fingerprintingCount || 0;
         flattened.isMfaTrackerSignal = trackers.isMfaSignal || false;
+      } else {
+        // Default values if trackers component is missing
+        flattened.totalTrackerCount = 0;
+        flattened.trackerRiskScore = 0;
+        flattened.adNetworkCount = 0;
+        flattened.contentRecCount = 0;
+        flattened.fingerprintingCount = 0;
+        flattened.isMfaTrackerSignal = false;
       }
     }
 
@@ -272,6 +285,10 @@ class ScoringEngine {
         brandSafetyRisk: flattenedData.brandSafetyRisk || 0,
         adsTxtArbitrageRisk: flattenedData.adsTxtArbitrageRisk || 0,
         weightedVisualDensity: flattenedData.adDensity || 0, // Use the (potentially weighted) density from flat data
+
+        // Network Signals
+        networkScore: flattenedData.networkScore || 0,
+        crawlerCombinedScore: flattenedData.crawlerCombinedScore || 0
       });
 
       const method = options.method || 'bayesian';
@@ -327,10 +344,10 @@ class ScoringEngine {
           }
         },
         trend: {
-          direction: trendAnalysis?.trend,
-          velocity: trendAnalysis?.velocity,
-          deviation: trendAnalysis?.deviation,
-          anomaly: trendAnalysis?.anomalyDetection
+          direction: trendAnalysis?.trend || 'stable',
+          velocity: trendAnalysis?.velocity || 0,
+          deviation: trendAnalysis?.deviation || 0,
+          anomaly: trendAnalysis?.anomalyDetection || false
         },
         benchmarks: benchmarkDeviation,
         patternDrift,

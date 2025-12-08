@@ -253,11 +253,11 @@ function getComponentScore(component) {
   if (component.error) return 0;
 
   if (typeof component.score === 'number') {
-    return component.score;
+    return isNaN(component.score) ? 0 : component.score;
   }
 
   if (typeof component.performanceScore === 'number') {
-    return component.performanceScore;
+    return isNaN(component.performanceScore) ? 0 : component.performanceScore;
   }
 
   if (component.valid === false) {
@@ -275,7 +275,8 @@ function aggregateScores(components) {
     brokenLinks: getComponentScore(components.brokenLinks),
     domainIntel: getComponentScore(components.domainIntel),
     viewportOcclusion: getComponentScore(components.viewportOcclusion),
-    safeBrowsing: getComponentScore(components.safeBrowsing), // NEW
+    safeBrowsing: getComponentScore(components.safeBrowsing),
+    trackers: getComponentScore(components.trackers),
   };
 
   const activeWeights = {};
@@ -297,7 +298,8 @@ function aggregateScores(components) {
     weightedScore += scores[key] * normalizedWeight;
   });
 
-  return Math.round(weightedScore);
+  const finalScore = Math.round(weightedScore);
+  return isNaN(finalScore) ? 0 : finalScore;
 }
 
 function generateSummary(components) {

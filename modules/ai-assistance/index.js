@@ -159,7 +159,8 @@ class AIAssistanceModule {
       const promptData = this.promptBuilder.buildComprehensivePrompt(
         auditData,
         scorerOutput,
-        policyViolations
+        policyViolations,
+        contextData
       );
 
       logger.debug('Prompt prepared', {
@@ -220,7 +221,7 @@ class AIAssistanceModule {
     if (this.apiKey) {
       try {
         // Add delay to avoid rate limits on free tier
-        const delayMs = parseInt(process.env.AI_REQUEST_DELAY_MS || '5000', 10);
+        const delayMs = parseInt(process.env.AI_REQUEST_DELAY_MS || '10000', 10);
         logger.debug('Waiting before LLM call to avoid rate limits', { delayMs });
         await new Promise(resolve => setTimeout(resolve, delayMs));
 
@@ -273,7 +274,7 @@ class AIAssistanceModule {
 
   async callAlibabaLLM(systemPrompt, userPrompt) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout
+    const timeout = setTimeout(() => controller.abort(), 180000); // 180s timeout
 
     try {
       const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation', {
@@ -329,7 +330,7 @@ class AIAssistanceModule {
   async performOpenRouterCall(model, apiKey, systemPrompt, userPrompt) {
     const makeRequest = async () => {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout
+      const timeout = setTimeout(() => controller.abort(), 180000); // 180s timeout
 
       try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {

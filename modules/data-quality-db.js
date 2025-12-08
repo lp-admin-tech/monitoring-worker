@@ -13,6 +13,16 @@ class DataQualityDB {
      * Save detailed data quality metrics to audit_data_quality table
      */
     async saveDataQuality(siteAuditId, publisherId, dataQuality, moduleResults = {}) {
+        if (!siteAuditId || !publisherId) {
+            logger.warn('[DataQualityDB] Missing required IDs for saving data quality', { siteAuditId, publisherId });
+            return { success: false, error: 'Missing siteAuditId or publisherId' };
+        }
+
+        if (!dataQuality) {
+            logger.warn('[DataQualityDB] Missing dataQuality object');
+            return { success: false, error: 'Missing dataQuality object' };
+        }
+
         try {
             logger.info('[DataQualityDB] Saving data quality', {
                 siteAuditId,
@@ -38,7 +48,7 @@ class DataQualityDB {
             const record = {
                 site_audit_id: siteAuditId,
                 publisher_id: publisherId,
-                data_quality_score: dataQuality.score || 0,
+                data_quality_score: typeof dataQuality.score === 'number' ? dataQuality.score : 0,
                 metrics_collected: dataQuality.metricsCollected || {},
                 collection_failures: dataQuality.failures || [],
 
@@ -58,34 +68,46 @@ class DataQualityDB {
                 overall_completeness: overallCompleteness,
 
                 // Status flags
-                is_sufficient: dataQuality.score >= 0.6,
+                is_sufficient: (dataQuality.score || 0) >= 0.6,
                 quality_level: qualityLevel,
 
                 updated_at: new Date().toISOString()
             };
 
-            const { data, error } = await this.supabase
-                .from('audit_data_quality')
-                .upsert(record, {
-                    onConflict: 'site_audit_id',
-                    returning: 'representation'
-                })
-                .select();
+            // Retry logic for DB operation
+            let lastError = null;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    const { data, error } = await this.supabase
+                        .from('audit_data_quality')
+                        .upsert(record, {
+                            onConflict: 'site_audit_id',
+                            returning: 'representation'
+                        })
+                        .select();
 
-            if (error) {
-                logger.error('[DataQualityDB] Failed to save data quality', { error: error.message });
-                return { success: false, error: error.message };
+                    if (error) throw error;
+
+                    logger.info('[DataQualityDB] Data quality saved successfully', {
+                        id: data?.[0]?.id,
+                        qualityLevel,
+                        overallCompleteness: overallCompleteness.toFixed(2),
+                        attempt
+                    });
+
+                    return { success: true, data: data?.[0] };
+                } catch (dbError) {
+                    lastError = dbError;
+                    logger.warn(`[DataQualityDB] DB save attempt ${attempt} failed`, { error: dbError.message });
+                    if (attempt < 3) await new Promise(r => setTimeout(r, 1000 * attempt)); // Backoff
+                }
             }
 
-            logger.info('[DataQualityDB] Data quality saved successfully', {
-                id: data?.[0]?.id,
-                qualityLevel,
-                overallCompleteness: overallCompleteness.toFixed(2)
-            });
+            logger.error('[DataQualityDB] Failed to save data quality after retries', { error: lastError?.message });
+            return { success: false, error: lastError?.message };
 
-            return { success: true, data: data?.[0] };
         } catch (err) {
-            logger.error('[DataQualityDB] Error saving data quality', { error: err.message });
+            logger.error('[DataQualityDB] Error preparing data quality record', { error: err.message });
             return { success: false, error: err.message };
         }
     }

@@ -6,12 +6,24 @@ const supabase = require('../modules/supabase-client');
 const gamFetcher = require('../modules/gam-fetcher');
 const QueueManager = require('../core/queue/queue-manager');
 const DataQualityDB = require('../modules/data-quality-db');
+const metrics = require('../modules/metrics');
 
 let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker, technicalCheckerDb, contentAnalyzerDb, adAnalyzerDb, policyCheckerDb, aiAssistanceDb, crawlerDb, moduleDataOrchestrator, directoryAuditOrchestrator, crossModuleAnalyzer, dataQualityDb;
 let server = null;
+let isShuttingDown = false;
 const activeProcesses = new Set();
+const verifySchema = require('./verify-schema');
+
+(async () => {
+  try {
+    await verifySchema();
+  } catch (err) {
+    console.error('Schema verification warning:', err.message);
+  }
+})();
 
 try {
+
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
 
@@ -105,6 +117,21 @@ app.get('/ready', async (req, res) => {
   } catch (err) {
     res.status(503).json({ status: 'error', message: err.message });
   }
+});
+
+// Prometheus metrics endpoint
+app.get('/metrics', (req, res) => {
+  res.set('Content-Type', 'text/plain');
+  res.send(metrics.toPrometheusFormat());
+});
+
+// Metrics JSON endpoint (for easier debugging)
+app.get('/metrics/json', (req, res) => {
+  res.json({
+    metrics: metrics.toJSON(),
+    activeJobs: activeProcesses.size,
+    isShuttingDown
+  });
 });
 
 /**
@@ -499,7 +526,7 @@ async function processAuditJob(job) {
             { enableLighthouse: true, lighthouseThreshold: 40 }
           );
 
-          if (retryTechnical?.performance?.performanceScore > 0 || retryTechnical?.technicalHealthScore > 0) {
+          if (retryTechnical?.performance?.performanceScore > 0 || (retryTechnical?.technicalHealthScore || 0) > 0) {
             modules.technicalChecker.data = retryTechnical;
             modules.technicalChecker.retried = true;
             logger.info(`[${requestId}] Technical check retry successful`, {
@@ -643,7 +670,9 @@ async function processAuditJob(job) {
             },
             seo: {
               title: modules.contentAnalyzer.data?.seo?.title || ''
-            }
+            },
+            // Add markdown content to context
+            pageContent: modules.crawler.data?.content || ''
           };
 
           const result = await aiAssistance.generateComprehensiveReport(
@@ -1495,6 +1524,73 @@ async function start() {
     logger.error('Server error', err);
     process.exit(1);
   });
+}
+
+/**
+ * Graceful shutdown handler
+ * Waits for active jobs to complete before shutting down
+ */
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) {
+    logger.warn('Shutdown already in progress, ignoring signal', { signal });
+    return;
+  }
+
+  isShuttingDown = true;
+  logger.info(`Received ${signal}, starting graceful shutdown...`, {
+    activeJobs: activeProcesses.size
+  });
+
+  const SHUTDOWN_TIMEOUT = parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT || '30000', 10);
+  const shutdownStart = Date.now();
+
+  // Stop accepting new requests
+  if (server) {
+    server.close(() => {
+      logger.info('HTTP server closed');
+    });
+  }
+
+  // Wait for active jobs to complete (with timeout)
+  while (activeProcesses.size > 0) {
+    const elapsed = Date.now() - shutdownStart;
+    if (elapsed > SHUTDOWN_TIMEOUT) {
+      logger.warn(`Shutdown timeout (${SHUTDOWN_TIMEOUT}ms) exceeded, forcing shutdown`, {
+        remainingJobs: activeProcesses.size
+      });
+      break;
+    }
+
+    logger.info(`Waiting for ${activeProcesses.size} active jobs to complete...`, {
+      elapsed,
+      timeout: SHUTDOWN_TIMEOUT
+    });
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+
+  // Close browser connections
+  try {
+    if (directoryAuditOrchestrator?.cdpCrawler) {
+      await directoryAuditOrchestrator.cdpCrawler.close();
+      logger.info('CDP crawler closed');
+    }
+  } catch (err) {
+    logger.warn('Error closing CDP crawler', { error: err.message });
+  }
+
+  // Flush logs
+  try {
+    await logger.flushQueue();
+  } catch (err) {
+    console.error('Error flushing logs:', err.message);
+  }
+
+  logger.info('Graceful shutdown complete', {
+    signal,
+    duration: Date.now() - shutdownStart
+  });
+
+  process.exit(signal === 'uncaughtException' ? 1 : 0);
 }
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

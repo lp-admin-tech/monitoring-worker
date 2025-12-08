@@ -213,7 +213,27 @@ class Logger {
     if (!this.shouldLog(LogLevel.ERROR)) return;
 
     const contextStr = this.formatContext(context);
-    const errorMsg = this.sanitize(error?.message || error?.toString() || 'Unknown error');
+    let errorMsg = 'Unknown error';
+
+    if (error) {
+      if (error instanceof Error) {
+        errorMsg = error.message;
+        if (error.stack) {
+          // Add stack trace to context if not already present
+          context.stack = error.stack;
+        }
+      } else if (typeof error === 'object') {
+        try {
+          errorMsg = JSON.stringify(error);
+        } catch (e) {
+          errorMsg = String(error);
+        }
+      } else {
+        errorMsg = String(error);
+      }
+    }
+
+    errorMsg = this.sanitize(errorMsg);
     console.error(`${COLORS.ERROR}${contextStr} ✗ ${this.sanitize(message)}: ${errorMsg}${COLORS.RESET}`);
 
     const entry = {

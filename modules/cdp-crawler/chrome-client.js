@@ -97,6 +97,7 @@ class ChromeCDPClient {
             headless: true,
             proxy: null,
             userDataDir: null,
+            userAgent: null,
             ...options
         };
     }
@@ -180,6 +181,14 @@ class ChromeCDPClient {
                 CSS.enable(),
                 Security.enable()
             ]);
+
+            // Set User-Agent if provided
+            if (this.options.userAgent) {
+                await Emulation.setUserAgentOverride({
+                    userAgent: this.options.userAgent
+                });
+                logger.info('[CDP] User-Agent override applied');
+            }
 
             // Ignore certificate errors (for testing)
             await Security.setIgnoreCertificateErrors({ ignore: true });

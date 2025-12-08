@@ -205,14 +205,15 @@ class HumanSimulator {
                 }
             }
 
-            // Scroll one viewport
-            const scrollDuration = 1500 + Math.random() * 1000;
-            await this.scroll(viewportHeight, scrollDuration);
-            currentY += viewportHeight;
+            // Scroll one viewport (smaller steps for better lazy loading)
+            const scrollAmount = Math.round(viewportHeight * 0.7);
+            const scrollDuration = 2000 + Math.random() * 1000;
+            await this.scroll(scrollAmount, scrollDuration);
+            currentY += scrollAmount;
             levelIndex++;
 
-            // Wait for lazy load
-            await this.wait(500, 1500);
+            // Wait for lazy load (longer wait for ads)
+            await this.wait(3000, 5000);
 
             // Check if page grew
             const { result: updated } = await this.Runtime.evaluate({
