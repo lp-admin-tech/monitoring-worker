@@ -143,8 +143,14 @@ class HumanSimulator {
             returnByValue: true
         });
 
-        const { viewportHeight, totalHeight } = result.value;
-        let currentY = result.value.currentScroll;
+        // Handle case where browser context is closed or page crashed
+        if (!result || !result.value) {
+            logger.warn('[HumanSim] Failed to get page dimensions - browser context may be closed');
+            return;
+        }
+
+        const { viewportHeight = 1080, totalHeight = 0 } = result.value;
+        let currentY = result.value.currentScroll || 0;
 
         logger.info(`[HumanSim] Scrolling page: ${totalHeight}px total, ${viewportHeight}px viewport`);
 
@@ -187,7 +193,13 @@ class HumanSimulator {
             returnByValue: true
         });
 
-        const { viewportHeight, totalHeight } = result.value;
+        // Handle case where browser context is closed or page crashed
+        if (!result || !result.value) {
+            logger.warn('[HumanSim] Failed to get page dimensions - browser context may be closed');
+            return [];
+        }
+
+        const { viewportHeight = 1080, totalHeight = 0 } = result.value;
         const levels = [];
         let currentY = 0;
         let levelIndex = 0;
