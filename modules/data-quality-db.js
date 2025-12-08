@@ -78,13 +78,30 @@ class DataQualityDB {
             let lastError = null;
             for (let attempt = 1; attempt <= 3; attempt++) {
                 try {
-                    const { data, error } = await this.supabase
+                    // Check if record exists first to avoid ON CONFLICT issues
+                    const { data: existing } = await this.supabase
                         .from('audit_data_quality')
-                        .upsert(record, {
-                            onConflict: 'site_audit_id',
-                            returning: 'representation'
-                        })
-                        .select();
+                        .select('id')
+                        .eq('site_audit_id', siteAuditId)
+                        .maybeSingle();
+
+                    let result;
+                    if (existing) {
+                        // Update existing
+                        result = await this.supabase
+                            .from('audit_data_quality')
+                            .update(record)
+                            .eq('id', existing.id)
+                            .select();
+                    } else {
+                        // Insert new
+                        result = await this.supabase
+                            .from('audit_data_quality')
+                            .insert(record)
+                            .select();
+                    }
+
+                    const { data, error } = result;
 
                     if (error) throw error;
 

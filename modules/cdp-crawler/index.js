@@ -300,7 +300,12 @@ class CDPCrawler {
 
   async extractContent() {
     try {
-      const content = await this.chromeClient.evaluate(`
+      if (!this.chromeClient) {
+        logger.warn('[CDPCrawler] Content extraction skipped: No Chrome client');
+        return '';
+      }
+
+      const result = await this.chromeClient.evaluate(`
         (() => {
           function htmlToMarkdown(node) {
             let output = '';
@@ -418,9 +423,15 @@ class CDPCrawler {
             .substring(0, 50000); // Limit size
         })()
       `);
-      return content;
+
+      if (!result || !result.value) {
+        logger.warn('[CDPCrawler] Content extraction returned empty or invalid result');
+        return '';
+      }
+
+      return result.value;
     } catch (error) {
-      logger.warn('[CDPCrawler] Content extraction failed:', error.message);
+      logger.warn('[CDPCrawler] Content extraction failed:', error.message || error);
       return '';
     }
   }

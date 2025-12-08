@@ -98,7 +98,7 @@ class AdAnalyzerDB {
         visible_ads_percentage: visibilityData.visible_ads_percentage || 0,
         visible_ads_count: visibilityData.visible_ads_count || 0,
         // hidden_ads_count removed due to schema mismatch
-        total_ads_count: visibilityData.total_ads_count || 0,
+        // total_ads_count removed due to schema mismatch
         recommendations: visibilityData.recommendations || [],
       };
 
