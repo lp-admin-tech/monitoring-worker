@@ -36,7 +36,7 @@ class AIAssistanceModule {
 
     this.openRouter = {
       apiKey: envConfig?.openRouter?.apiKey || process.env.OPENROUTER_API_KEY || '',
-      model: envConfig?.openRouter?.model || process.env.OPENROUTER_MODEL || 'alibaba/tongyi-deepresearch-30b-a3b:free',
+      model: envConfig?.openRouter?.model || process.env.OPENROUTER_MODEL || 'google/gemma-3-12b-it:free',
     };
 
     const hasAlibabaKey = !!this.aiModel.apiKey;

@@ -209,33 +209,43 @@ ${truncatedContent}
   buildAnalysisRequestSection() {
     return `
     ---
-      IMPORTANT: Output your analysis in PLAIN MARKDOWN format.Do NOT use TOON syntax in your response.
+    IMPORTANT: Output your analysis in STRICT MARKDOWN format. Do NOT use TOON syntax or JSON.
 
-## MFA Score Reasoning
+    # MFA Score Reasoning
 
-Provide analysis for each score in this format:
-      <Score Name>: <Value> — <Brief reason>
+    Provide analysis for each score in this format:
+    **<Score Name>**: <Value> — <Brief reason>
 
-        Then provide ONE suggestion line at the end.
+    Then provide ONE suggestion line at the end.
 
-        ## Module Analysis
+    # Module Analysis
 
-        For each significant module, use this plain markdown structure:
+    For each significant module, use this plain markdown structure:
 
-        ## <Module Name>
-          **Impact**: <Minimal /Moderate/High> negative impact
-          **Issues Found**: <description>
-            - <issue 1>
-            - <issue 2 if any>
-            **Root Cause**: <explanation>
-              **Recommended Fix**: <steps>
-                **Positive Signals**:
-                ✓<signal 1>
-                ✓<signal 2>
-                **Summary**: <one sentence>
+    ## <Module Name>
+    **Impact**: <Minimal / Moderate / High> negative impact
+    **Issues Found**: <description>
+    - <issue 1>
+    - <issue 2 if any>
+    
+    **Root Cause**: <explanation>
+    
+    **Recommended Fix**: <steps>
+    
+    **Positive Signals**:
+    ✓ <signal 1>
+    ✓ <signal 2>
+    
+    **Summary**: <one sentence>
 
-                  Remember: Use markdown headers (##), bullet points (-), and check marks (✓). NO parentheses syntax like module(name).
-                  `;
+    Remember: 
+    - Use markdown headers (##) for modules.
+    - Use bold keys (**Key**:) for fields.
+    - Use bullet points (-) for lists.
+    - Use check marks (✓) for positive signals.
+    - NO parentheses syntax like module(name).
+    - Ensure clean spacing between sections.
+    `;
   }
 
 

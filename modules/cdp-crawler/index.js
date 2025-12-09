@@ -416,11 +416,21 @@ class CDPCrawler {
           // Initial cleanup of obviously bad elements before traversal
           clone.querySelectorAll('script, style, noscript, iframe, svg').forEach(el => el.remove());
 
-          return htmlToMarkdown(clone)
+          let markdown = htmlToMarkdown(clone)
             .replace(/\\n\\s+\\n/g, '\\n\\n') // Collapse multiple blank lines
             .replace(/\\n{3,}/g, '\\n\\n') // Max 2 newlines
             .trim()
             .substring(0, 50000); // Limit size
+
+          // Fallback to innerText if markdown is empty
+          if (!markdown || markdown.length < 50) {
+             const rawText = document.body.innerText || '';
+             if (rawText.length > markdown.length) {
+                return 'FALLBACK_TEXT:\\n' + rawText.substring(0, 50000);
+             }
+          }
+          
+          return markdown;
         })()
       `);
 
