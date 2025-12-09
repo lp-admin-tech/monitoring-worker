@@ -34,15 +34,20 @@ class AIAssistanceModule {
       provider: envConfig?.aiModel?.provider || process.env.AI_MODEL_PROVIDER || 'alibaba',
     };
 
-    this.openRouter = {
-      apiKey: envConfig?.openRouter?.apiKey || process.env.OPENROUTER_API_KEY || '',
-      model: envConfig?.openRouter?.model || process.env.OPENROUTER_MODEL || 'google/gemma-3-12b-it:free',
+    this.huggingFace = {
+      apiKey: envConfig?.huggingFace?.apiKey || process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN || '',
+      model: envConfig?.huggingFace?.model || process.env.HUGGINGFACE_MODEL || 'meta-llama/Meta-Llama-3-8B-Instruct:fastest',
     };
 
     const hasAlibabaKey = !!this.aiModel.apiKey;
     const hasOpenRouterKey = !!this.openRouter.apiKey;
+    const hasHuggingFaceKey = !!this.huggingFace.apiKey;
 
-    if (hasOpenRouterKey && !hasAlibabaKey) {
+    if (hasHuggingFaceKey) {
+      this.apiKey = this.huggingFace.apiKey;
+      this.model = this.huggingFace.model;
+      this.provider = 'huggingface';
+    } else if (hasOpenRouterKey && !hasAlibabaKey) {
       this.apiKey = this.openRouter.apiKey;
       this.model = this.openRouter.model;
       this.provider = 'openrouter';
@@ -233,6 +238,8 @@ class AIAssistanceModule {
         let response = '';
         if (this.provider === 'alibaba') {
           response = await this.callAlibabaLLM(systemPrompt, userPrompt);
+        } else if (this.provider === 'huggingface') {
+          response = await this.callHuggingFaceLLM(systemPrompt, userPrompt);
         } else {
           response = await this.callOpenRouterLLM(systemPrompt, userPrompt);
         }
@@ -270,6 +277,57 @@ class AIAssistanceModule {
     // 3. Fallback to Rule-Based Analysis (Reviewer Summary)
     logger.warn('All LLM attempts failed, using robust reviewer summary fallback');
     return this.generateFallbackAnalysis(userPrompt, contextData);
+  }
+
+  async callHuggingFaceLLM(systemPrompt, userPrompt) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 180000); // 180s timeout
+
+    try {
+      // Use the configured model or default to Llama 3 8B (fastest)
+      const modelId = this.model.startsWith('google/') || this.model.startsWith('meta-llama/') || this.model.startsWith('Qwen/') ? this.model : 'meta-llama/Meta-Llama-3-8B-Instruct:fastest';
+
+      // Using the OpenAI-compatible router endpoint as requested
+      const response = await fetch('https://router.huggingface.co/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          max_tokens: 4096,
+          temperature: 0.3,
+          stream: false
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HuggingFace Router API error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      const data = await response.json();
+
+      if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+        throw new Error('Invalid response format from HuggingFace Router');
+      }
+
+      return data.choices[0].message.content;
+    } catch (error) {
+      clearTimeout(timeout);
+      if (error.name === 'AbortError') {
+        throw new Error('HuggingFace request timed out');
+      }
+      throw error;
+    }
   }
 
   async callAlibabaLLM(systemPrompt, userPrompt) {
