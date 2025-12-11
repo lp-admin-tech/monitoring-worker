@@ -2,8 +2,8 @@ const logger = require('../logger');
 const PromptBuilder = require('./prompt-builder');
 const AnalysisInterpreter = require('./analysis');
 const ReportFormatter = require('./formatter');
-const { OpenRouterRateLimiter } = require('./rate-limiter');
 const aiDb = require('./db');
+const { InferenceClient } = require('@huggingface/inference');
 
 let supabaseClient = null;
 
@@ -26,40 +26,16 @@ class AIAssistanceModule {
     this.promptBuilder = new PromptBuilder();
     this.analysisInterpreter = new AnalysisInterpreter();
     this.reportFormatter = new ReportFormatter();
-    this.rateLimiter = new OpenRouterRateLimiter();
-
-    this.aiModel = {
-      apiKey: envConfig?.aiModel?.apiKey || process.env.AI_MODEL_API_KEY || '',
-      model: envConfig?.aiModel?.model || process.env.AI_MODEL_NAME || 'alibaba/tongyi-qwen-plus',
-      provider: envConfig?.aiModel?.provider || process.env.AI_MODEL_PROVIDER || 'alibaba',
-    };
 
     this.huggingFace = {
       apiKey: envConfig?.huggingFace?.apiKey || process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN || '',
-      model: envConfig?.huggingFace?.model || process.env.HUGGINGFACE_MODEL || 'meta-llama/Meta-Llama-3-8B-Instruct:fastest',
+      model: envConfig?.huggingFace?.model || process.env.HUGGINGFACE_MODEL || 'meta-llama/Meta-Llama-3-8B-Instruct',
     };
 
-    const hasAlibabaKey = !!this.aiModel.apiKey;
-    const hasOpenRouterKey = !!this.openRouter.apiKey;
-    const hasHuggingFaceKey = !!this.huggingFace.apiKey;
-
-    if (hasHuggingFaceKey) {
-      this.apiKey = this.huggingFace.apiKey;
-      this.model = this.huggingFace.model;
-      this.provider = 'huggingface';
-    } else if (hasOpenRouterKey && !hasAlibabaKey) {
-      this.apiKey = this.openRouter.apiKey;
-      this.model = this.openRouter.model;
-      this.provider = 'openrouter';
-    } else if (hasOpenRouterKey && hasAlibabaKey) {
-      this.apiKey = this.openRouter.apiKey;
-      this.model = this.openRouter.model;
-      this.provider = 'openrouter';
-    } else {
-      this.apiKey = this.aiModel.apiKey;
-      this.model = this.aiModel.model;
-      this.provider = this.aiModel.provider;
-    }
+    // HuggingFace is the only provider now
+    this.apiKey = this.huggingFace.apiKey;
+    this.model = this.huggingFace.model;
+    this.provider = 'huggingface';
   }
 
   async persistAIResults(result, siteAuditId, publisherId, previousResult = null) {
@@ -222,7 +198,7 @@ class AIAssistanceModule {
   async callLLM(systemPrompt, userPrompt, contextData = {}) {
     let primaryError = null;
 
-    // 1. Try Primary Model (if configured)
+    // 1. Try Primary Model (HuggingFace)
     if (this.apiKey) {
       try {
         // Add delay to avoid rate limits on free tier
@@ -230,218 +206,68 @@ class AIAssistanceModule {
         logger.debug('Waiting before LLM call to avoid rate limits', { delayMs });
         await new Promise(resolve => setTimeout(resolve, delayMs));
 
-        logger.debug('Calling Primary LLM', {
+        logger.debug('Calling HuggingFace LLM', {
           model: this.model,
           provider: this.provider
         });
 
-        let response = '';
-        if (this.provider === 'alibaba') {
-          response = await this.callAlibabaLLM(systemPrompt, userPrompt);
-        } else if (this.provider === 'huggingface') {
-          response = await this.callHuggingFaceLLM(systemPrompt, userPrompt);
-        } else {
-          response = await this.callOpenRouterLLM(systemPrompt, userPrompt);
-        }
+        const response = await this.callHuggingFaceLLM(systemPrompt, userPrompt);
 
         if (response && response.trim().length > 0) {
           return response;
         }
-        logger.warn('Primary LLM returned empty response, attempting backup');
+        logger.warn('HuggingFace LLM returned empty response');
       } catch (error) {
         primaryError = error;
-        logger.warn('Primary LLM failed, attempting backup', { error: error.message });
+        logger.warn('HuggingFace LLM failed', { error: error.message });
       }
     } else {
-      logger.info('No primary API key configured, skipping to backup');
+      logger.info('No HuggingFace API key configured');
     }
 
-    // 2. Try Backup Model (DeepSeek via OpenRouter)
-    // Check if we have an OpenRouter key (either as primary or specifically for backup)
-    const openRouterKey = this.openRouter.apiKey || (this.provider === 'openrouter' ? this.apiKey : null);
-
-    if (openRouterKey) {
-      try {
-        const response = await this.callBackupLLM(systemPrompt, userPrompt, openRouterKey);
-        if (response && response.trim().length > 0) {
-          return response;
-        }
-        logger.warn('Backup LLM returned empty response');
-      } catch (error) {
-        logger.warn('Backup LLM failed', { error: error.message });
-      }
-    } else {
-      logger.warn('No OpenRouter key available for backup LLM');
-    }
-
-    // 3. Fallback to Rule-Based Analysis (Reviewer Summary)
-    logger.warn('All LLM attempts failed, using robust reviewer summary fallback');
+    // 2. Fallback to Rule-Based Analysis (no backup LLM)
+    logger.warn('LLM failed, using rule-based fallback analysis');
     return this.generateFallbackAnalysis(userPrompt, contextData);
   }
 
   async callHuggingFaceLLM(systemPrompt, userPrompt) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 180000); // 180s timeout
-
     try {
-      // Use the configured model or default to Llama 3 8B (fastest)
-      const modelId = this.model.startsWith('google/') || this.model.startsWith('meta-llama/') || this.model.startsWith('Qwen/') ? this.model : 'meta-llama/Meta-Llama-3-8B-Instruct:fastest';
+      const client = new InferenceClient(this.huggingFace.apiKey);
+      let out = '';
 
-      // Using the OpenAI-compatible router endpoint as requested
-      const response = await fetch('https://router.huggingface.co/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: modelId,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          max_tokens: 4096,
-          temperature: 0.3,
-          stream: false
-        }),
-        signal: controller.signal
+      logger.info('Calling HuggingFace Inference API', { model: this.huggingFace.model });
+
+      const stream = client.chatCompletionStream({
+        model: this.huggingFace.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        max_tokens: 8192,
+        temperature: 0.3,
       });
 
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`HuggingFace Router API error: ${response.status} ${response.statusText} - ${errorText}`);
-      }
-
-      const data = await response.json();
-
-      if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-        throw new Error('Invalid response format from HuggingFace Router');
-      }
-
-      return data.choices[0].message.content;
-    } catch (error) {
-      clearTimeout(timeout);
-      if (error.name === 'AbortError') {
-        throw new Error('HuggingFace request timed out');
-      }
-      throw error;
-    }
-  }
-
-  async callAlibabaLLM(systemPrompt, userPrompt) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 180000); // 180s timeout
-
-    try {
-      const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-          'X-DashScope-Async': 'enable'
-        },
-        body: JSON.stringify({
-          model: this.model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          parameters: {
-            temperature: 0.3,
-            top_p: 0.9,
-            max_tokens: 8192
+      for await (const chunk of stream) {
+        if (chunk.choices && chunk.choices.length > 0) {
+          const newContent = chunk.choices[0].delta.content;
+          if (newContent) {
+            out += newContent;
           }
-        }),
-        signal: controller.signal
-      });
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        throw new Error(`Alibaba LLM API error: ${response.status} ${response.statusText}`);
+        }
       }
 
-      const data = await response.json();
-
-      if (data.code && data.code !== 'Success') {
-        throw new Error(`Alibaba LLM returned error: ${data.message}`);
+      if (!out || out.trim().length === 0) {
+        throw new Error('HuggingFace returned empty response');
       }
 
-      return data.output?.text || '';
+      return out;
     } catch (error) {
-      clearTimeout(timeout);
+      logger.error('HuggingFace API error:', error);
       throw error;
     }
   }
 
-  async callOpenRouterLLM(systemPrompt, userPrompt) {
-    return this.performOpenRouterCall(this.model, this.apiKey, systemPrompt, userPrompt);
-  }
-
-  async callBackupLLM(systemPrompt, userPrompt, apiKey) {
-    const backupModel = 'deepseek/deepseek-r1-distill-llama-70b:free';
-    logger.info('Calling Backup LLM (DeepSeek)', { model: backupModel });
-    return this.performOpenRouterCall(backupModel, apiKey, systemPrompt, userPrompt);
-  }
-
-  async performOpenRouterCall(model, apiKey, systemPrompt, userPrompt) {
-    const makeRequest = async () => {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 180000); // 180s timeout
-
-      try {
-        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-            'HTTP-Referer': 'https://compliance-monitor.local',
-            'X-Title': 'Compliance AI Assistant'
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userPrompt }
-            ],
-            temperature: 0.3,
-            top_p: 0.9,
-            max_tokens: 8192
-          }),
-          signal: controller.signal
-        });
-        clearTimeout(timeout);
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          const error = new Error(`OpenRouter API error: ${response.status} ${response.statusText}`);
-          error.status = response.status;
-          error.data = errorData;
-          throw error;
-        }
-
-        const data = await response.json();
-
-        if (data.error) {
-          throw new Error(`OpenRouter returned error: ${JSON.stringify(data.error)}`);
-        }
-
-        return data.choices?.[0]?.message?.content || '';
-      } catch (error) {
-        clearTimeout(timeout);
-        throw error;
-      }
-    };
-
-    const result = await this.rateLimiter.executeWithRetry(makeRequest, 3);
-
-    if (!result.success) {
-      throw result.error || new Error('OpenRouter request failed after retries');
-    }
-
-    return result.data;
-  }
+  // OpenRouter and Alibaba functions removed - using HuggingFace only
 
   generateFallbackAnalysis(userPrompt, contextData = {}) {
     logger.info('Generating fallback analysis using Reviewer Summary logic');

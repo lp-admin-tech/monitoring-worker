@@ -14,9 +14,27 @@ class AdHeatmapGenerator {
 
   // Common ad selectors
   static AD_SELECTORS = [
-    // Google Ads
+    // Google Ads / AdX / Ad Manager / GPT (comprehensive)
     '[id*="google_ads"]', '[id*="gpt-"]', '[class*="adunit"]',
     '[data-google-query-id]', 'ins.adsbygoogle', '[id*="div-gpt-ad"]',
+    '[id*="google_ads_iframe"]', 'iframe[id*="google_ads"]',
+    'iframe[src*="googleads"]', 'iframe[src*="tpc.googlesyndication"]',
+    'iframe[src*="pagead2.googlesyndication"]', 'iframe[src*="securepubads"]',
+    '[data-ad-slot]', '[data-ad-client]', '[data-ad-format]',
+    '[class*="adsbygoogle"]', '[id*="aswift"]',
+    'iframe[name*="google_ads"]', 'iframe[title*="Advertisement"]',
+    '[class*="google-ad"]', '[id*="google-ad"]',
+    'div[data-google-container-id]', '[data-text-ad]',
+
+    // Google AdX / Ad Exchange specific
+    'iframe[id*="aswift_"]', 'iframe[name*="aswift_"]',
+    '[id*="google_image_div"]', 'div[id*="ad_unit"]',
+    'iframe[src*="safeframe"]', '[class*="safeframe"]',
+    '[id*="sf_"]', 'iframe[name*="safeframe"]',
+    '[data-load-complete]', '[data-google-av-cxn]',
+    'div[id*="_ads_"]', '[class*="GoogleActiveViewElement"]',
+    'iframe[src*="googleadservices"]', '[id*="google_image_"]',
+    '[id*="ad-div"]', '[class*="ad-wrapper"]',
 
     // Generic ad containers
     '[class*="ad-slot"]', '[class*="advertisement"]', '[class*="ad-container"]',
@@ -43,7 +61,37 @@ class AdHeatmapGenerator {
     '[id*="pubmatic"]', '[class*="pubmatic"]',
     '[id*="rubicon"]', '[class*="rubicon"]',
     '[id*="openx"]', '[class*="openx"]',
-    '[id*="amazon"]', '[class*="amzn"]'
+    '[id*="amazon"]', '[class*="amzn"]',
+
+    // === NEW: Deceptive Download Ads (MFA favorite) ===
+    '[class*="download"]', '[id*="download"]',
+    'a[href*="download"][class*="button"]', 'button[class*="download"]',
+    '[class*="fake-download"]', '[class*="dl-button"]',
+
+    // Fake system notifications / alerts
+    '[class*="notification-ad"]', '[class*="alert-ad"]',
+    '[class*="system-message"]', '[class*="update-notification"]',
+
+    // Pop-under / overlay patterns
+    '[class*="overlay-ad"]', '[class*="popup-ad"]', '[class*="modal-ad"]',
+    '[class*="interstitial"]', '[class*="splash-ad"]',
+
+    // AdSense alternatives commonly used by MFA
+    '[class*="propeller"]', '[id*="propeller"]',
+    '[class*="adsterra"]', '[id*="adsterra"]',
+    '[class*="popcash"]', '[id*="popcash"]',
+    '[class*="admaven"]', '[id*="admaven"]',
+    '[class*="adcash"]', '[id*="adcash"]',
+    '[class*="monetag"]', '[id*="monetag"]',
+    '[class*="hilltopads"]', '[id*="hilltopads"]',
+
+    // Widget / recommendation areas (often ads)
+    '[class*="widget-ad"]', '[class*="sidebar-ad"]',
+    '[class*="related-ad"]', '[class*="promoted"]',
+
+    // Data attributes often used by ad networks
+    '[data-ad-slot]', '[data-ad-client]', '[data-ad-format]',
+    '[data-adblockkey]', '[data-cfasync]'
   ];
 
   async detectAdsInViewport() {
@@ -73,10 +121,19 @@ class AdHeatmapGenerator {
                   
                   // Check if it's likely an ad iframe
                   const isIframe = el.tagName === 'IFRAME';
+                  const src = el.src || '';
                   const hasAdSrc = isIframe && (
-                    el.src?.includes('doubleclick') ||
-                    el.src?.includes('googlesyndication') ||
-                    el.src?.includes('amazon-adsystem')
+                    src.includes('doubleclick') ||
+                    src.includes('googlesyndication') ||
+                    src.includes('googleads') ||
+                    src.includes('amazon-adsystem') ||
+                    src.includes('adsystem') ||
+                    src.includes('ad.') ||
+                    src.includes('/ads/') ||
+                    src.includes('pagead') ||
+                    src.includes('adservice') ||
+                    src.includes('securepubads') ||
+                    src.includes('tpc.google')
                   );
                   
                   ads.push({
@@ -98,6 +155,52 @@ class AdHeatmapGenerator {
               });
             } catch (e) {
               // Selector failed, skip
+            }
+          });
+          
+          // === NEW: Text-based heuristic detection for deceptive elements ===
+          const deceptivePatterns = [
+            /download\\s*(now|free|here|button|right now)/i,
+            /click\\s*(here|to|now)/i,
+            /free\\s*(download|install|get)/i,
+            /install\\s*(now|free)/i,
+            /update\\s*(required|now|available)/i,
+            /your\\s*(system|computer|device)/i,
+            /virus\\s*(detected|found|alert)/i,
+            /warning[:\\s]/i,
+            /congratulations/i
+          ];
+          
+          // Check buttons and prominent links for deceptive text
+          document.querySelectorAll('button, a.button, a[class*="btn"], [class*="button"], [role="button"]').forEach(el => {
+            const text = (el.innerText || '').trim().toLowerCase();
+            const isDeceptive = deceptivePatterns.some(pattern => pattern.test(text));
+            
+            if (isDeceptive) {
+              const rect = el.getBoundingClientRect();
+              const computedStyle = window.getComputedStyle(el);
+              
+              if (rect.height > 10 && rect.width > 10 && 
+                  computedStyle.display !== 'none' &&
+                  computedStyle.visibility !== 'hidden') {
+                
+                ads.push({
+                  selector: 'DECEPTIVE_TEXT: ' + text.substring(0, 30),
+                  tagName: el.tagName,
+                  id: el.id || null,
+                  className: el.className || null,
+                  x: Math.round(rect.x),
+                  y: Math.round(rect.y + scrollY),
+                  width: Math.round(rect.width),
+                  height: Math.round(rect.height),
+                  area: Math.round(rect.width * rect.height),
+                  inViewport: rect.bottom > 0 && rect.top < viewportHeight,
+                  isAboveFold: rect.top < viewportHeight && scrollY === 0,
+                  isIframe: false,
+                  hasAdSrc: false,
+                  isDeceptive: true
+                });
+              }
             }
           });
           

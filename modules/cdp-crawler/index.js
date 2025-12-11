@@ -39,7 +39,7 @@ class CDPCrawler {
   constructor(options = {}) {
     this.options = {
       fingerprint: options.fingerprint || 'desktop',
-      timeout: options.timeout || 90000,
+      timeout: options.timeout || 120000, // Increased to 120s
       scrollDuration: options.scrollDuration || 45000,
       ...options
     };
@@ -234,7 +234,7 @@ class CDPCrawler {
       await this.executeHook('after_navigate', { url, success: true });
 
       // Wait for dynamic content (longer wait for ads)
-      await this.humanSimulator.wait(5000, 8000);
+      await this.humanSimulator.wait(8000, 12000); // Increased wait time
 
       // Remove overlays/popups that may interfere with ad detection
       try {
@@ -414,19 +414,46 @@ class CDPCrawler {
           const clone = document.body.cloneNode(true);
           
           // Initial cleanup of obviously bad elements before traversal
-          clone.querySelectorAll('script, style, noscript, iframe, svg').forEach(el => el.remove());
+          clone.querySelectorAll('script, style, noscript, iframe, svg, nav, footer, header, aside, [role="navigation"], [role="banner"], [role="complementary"], .sidebar, .advertisement, .ad, .ads, .social-share, .comments, .related-posts').forEach(el => el.remove());
 
-          let markdown = htmlToMarkdown(clone)
+          // Try to find main content area first (better content extraction)
+          let contentRoot = clone.querySelector('article') || 
+                           clone.querySelector('main') || 
+                           clone.querySelector('[role="main"]') ||
+                           clone.querySelector('.post-content') ||
+                           clone.querySelector('.entry-content') ||
+                           clone.querySelector('.article-content') ||
+                           clone.querySelector('.content') ||
+                           clone.querySelector('#content') ||
+                           clone;
+
+          let markdown = htmlToMarkdown(contentRoot)
             .replace(/\\n\\s+\\n/g, '\\n\\n') // Collapse multiple blank lines
             .replace(/\\n{3,}/g, '\\n\\n') // Max 2 newlines
             .trim()
             .substring(0, 50000); // Limit size
 
-          // Fallback to innerText if markdown is empty
-          if (!markdown || markdown.length < 50) {
+          // Fallback to full body if markdown from content area is too short
+          if ((!markdown || markdown.length < 200) && contentRoot !== clone) {
+             const fullBodyMarkdown = htmlToMarkdown(clone)
+               .replace(/\\n\\s+\\n/g, '\\n\\n')
+               .replace(/\\n{3,}/g, '\\n\\n')
+               .trim()
+               .substring(0, 50000);
+             
+             if (fullBodyMarkdown.length > markdown.length) {
+               markdown = fullBodyMarkdown;
+             }
+          }
+
+          // Fallback to innerText if markdown is still empty or too short
+          if (!markdown || markdown.length < 100) {
              const rawText = document.body.innerText || '';
-             if (rawText.length > markdown.length) {
-                return 'FALLBACK_TEXT:\\n' + rawText.substring(0, 50000);
+             // Basic cleanup of raw text
+             const cleanText = rawText.replace(/\\n{3,}/g, '\\n\\n').trim();
+             
+             if (cleanText.length > (markdown ? markdown.length : 0)) {
+                return 'FALLBACK_TEXT (Extraction Failed):\\n' + cleanText.substring(0, 50000);
              }
           }
           
@@ -434,9 +461,17 @@ class CDPCrawler {
         })()
       `);
 
-      if (!result || !result.value) {
-        logger.warn('[CDPCrawler] Content extraction returned empty or invalid result');
-        return '';
+      if (!result || (!result.value && result.value !== '')) {
+        logger.warn('[CDPCrawler] Content extraction returned invalid result structure');
+        // Final desperate fallback
+        const fallback = await this.chromeClient.evaluate('document.body.innerText');
+        return fallback?.value || '';
+      }
+
+      if (!result.value) {
+        logger.warn('[CDPCrawler] Content extraction returned empty string, trying raw body text');
+        const fallback = await this.chromeClient.evaluate('document.body.innerText');
+        return fallback?.value || '';
       }
 
       return result.value;

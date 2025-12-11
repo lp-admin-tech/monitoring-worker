@@ -205,47 +205,58 @@ class ChromeCDPClient {
 
     async navigate(url, options = {}) {
         const { Page, Network } = this.client;
-        const timeout = options.timeout || 90000; // Increased default timeout
+        const timeout = options.timeout || 120000; // Increased default timeout to 120s
 
         try {
-            logger.info(`[CDP] Navigating to ${url}`);
+            logger.info(`[CDP] Navigating to ${url} (timeout: ${timeout}ms)`);
 
             // Use multiple load event strategies
             const loadPromise = new Promise((resolve, reject) => {
+                let isResolved = false;
+
                 const timer = setTimeout(() => {
-                    logger.warn(`[CDP] Navigation timeout after ${timeout}ms for ${url}`);
-                    reject(new Error('Navigation timeout'));
+                    if (!isResolved) {
+                        logger.warn(`[CDP] Navigation timeout after ${timeout}ms for ${url}`);
+                        // Don't reject, just resolve with what we have to avoid crashing the audit
+                        resolve(false);
+                    }
                 }, timeout);
 
-                // Primary: DOM content loaded (faster, doesn't wait for all resources)
-                Page.domContentEventFired(() => {
-                    clearTimeout(timer);
-                    logger.debug('[CDP] DOM content loaded');
-                    resolve();
-                });
+                const onSuccess = (event) => {
+                    if (!isResolved) {
+                        isResolved = true;
+                        clearTimeout(timer);
+                        logger.debug(`[CDP] Navigation success: ${event}`);
+                        resolve(true);
+                    }
+                };
 
-                // Fallback: frame stopped loading
-                Page.frameStoppedLoading(() => {
-                    clearTimeout(timer);
-                    logger.debug('[CDP] Frame stopped loading');
-                    resolve();
-                });
+                // 1. Load Event (most reliable for full page)
+                Page.loadEventFired(() => onSuccess('loadEventFired'));
+
+                // 2. DOM Content Loaded (faster)
+                Page.domContentEventFired(() => onSuccess('domContentEventFired'));
+
+                // 3. Frame Stopped Loading (fallback)
+                Page.frameStoppedLoading(() => onSuccess('frameStoppedLoading'));
             });
 
             const { frameId, errorText } = await Page.navigate({ url });
 
             if (errorText) {
                 logger.warn(`[CDP] Navigation error from Chrome: ${errorText}`);
-                // Don't throw, some errors are recoverable (like cert warnings)
+                if (errorText.includes('net::ERR_NAME_NOT_RESOLVED') || errorText.includes('net::ERR_CONNECTION_REFUSED')) {
+                    return false;
+                }
             }
 
-            await loadPromise;
+            const success = await loadPromise;
 
             // Small additional wait for dynamic content
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await new Promise(resolve => setTimeout(resolve, 3000));
 
-            logger.info(`[CDP] Navigation complete: ${url}`);
-            return true;
+            logger.info(`[CDP] Navigation complete: ${url} (Success: ${success})`);
+            return true; // Always return true to allow partial crawls unless network error
         } catch (error) {
             logger.warn(`[CDP] Navigation error: ${error.message}`, { url });
             return false;
