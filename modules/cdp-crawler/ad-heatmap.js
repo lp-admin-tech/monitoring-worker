@@ -294,7 +294,12 @@ class AdHeatmapGenerator {
     };
   }
 
-  async generateFullHeatmap(humanSimulator) {
+  /**
+   * Generate full page heatmap with scroll
+   * @param {HumanSimulator} humanSimulator - Human simulator instance
+   * @param {Function} onScrollLevel - Optional callback for each scroll level (e.g., for progressive content extraction)
+   */
+  async generateFullHeatmap(humanSimulator, onScrollLevel = null) {
     logger.info('[AdHeatmap] Starting full page heatmap generation...');
 
     const levels = [];
@@ -304,6 +309,15 @@ class AdHeatmapGenerator {
       levels.push(levelData);
 
       logger.debug(`[AdHeatmap] Level ${levelIndex}: ${levelData.adCount} ads, density: ${(levelData.adDensity * 100).toFixed(1)}%`);
+
+      // Call optional callback for progressive content extraction
+      if (onScrollLevel && typeof onScrollLevel === 'function') {
+        try {
+          await onScrollLevel(scrollY, viewportHeight, levelIndex);
+        } catch (e) {
+          logger.debug(`[AdHeatmap] onScrollLevel callback error at level ${levelIndex}:`, e.message);
+        }
+      }
 
       return levelData;
     });

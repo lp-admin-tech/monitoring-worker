@@ -288,6 +288,130 @@ class ChromeCDPClient {
         return Buffer.from(data, 'base64');
     }
 
+    /**
+     * Wait for network to become idle (no pending requests for idleTime ms)
+     * Inspired by Playwright's waitForLoadState('networkidle')
+     * @param {number} timeout - Max wait time in ms
+     * @param {number} idleTime - How long network must be idle
+     * @returns {Promise<boolean>} - True if network became idle, false if timeout
+     */
+    async waitForNetworkIdle(timeout = 30000, idleTime = 500) {
+        if (!this.client) return false;
+
+        const { Network } = this.client;
+        let pendingRequests = 0;
+        let lastActivityTime = Date.now();
+        let isResolved = false;
+
+        return new Promise((resolve) => {
+            const timeoutId = setTimeout(() => {
+                if (!isResolved) {
+                    isResolved = true;
+                    logger.debug(`[CDP] Network idle timeout after ${timeout}ms (${pendingRequests} pending)`);
+                    resolve(false);
+                }
+            }, timeout);
+
+            const checkIdle = () => {
+                if (isResolved) return;
+                if (pendingRequests === 0 && Date.now() - lastActivityTime >= idleTime) {
+                    isResolved = true;
+                    clearTimeout(timeoutId);
+                    logger.debug('[CDP] Network is idle');
+                    resolve(true);
+                }
+            };
+
+            // Track request start
+            Network.requestWillBeSent(() => {
+                pendingRequests++;
+                lastActivityTime = Date.now();
+            });
+
+            // Track request end
+            Network.loadingFinished(() => {
+                pendingRequests = Math.max(0, pendingRequests - 1);
+                lastActivityTime = Date.now();
+                setTimeout(checkIdle, idleTime);
+            });
+
+            Network.loadingFailed(() => {
+                pendingRequests = Math.max(0, pendingRequests - 1);
+                lastActivityTime = Date.now();
+                setTimeout(checkIdle, idleTime);
+            });
+
+            // Initial check after idleTime
+            setTimeout(checkIdle, idleTime);
+        });
+    }
+
+    /**
+     * Block heavy resources (images, fonts, videos) for faster crawling
+     * @param {boolean} enable - Enable or disable blocking
+     */
+    async blockResources(enable = true) {
+        if (!this.client) return;
+
+        const { Network } = this.client;
+
+        if (enable) {
+            // Block patterns for heavy resources
+            const blockPatterns = [
+                '*.jpg', '*.jpeg', '*.png', '*.gif', '*.webp', '*.svg', '*.ico',
+                '*.woff', '*.woff2', '*.ttf', '*.eot', '*.otf',
+                '*.mp4', '*.webm', '*.avi', '*.mov',
+                '*.mp3', '*.wav', '*.ogg',
+                '*google-analytics*', '*googletagmanager*', '*facebook.net*', '*twitter.com/i/*'
+            ];
+
+            await Network.setBlockedURLs({ urls: blockPatterns });
+            logger.debug('[CDP] Resource blocking enabled');
+        } else {
+            await Network.setBlockedURLs({ urls: [] });
+            logger.debug('[CDP] Resource blocking disabled');
+        }
+    }
+
+    /**
+     * Save a debug screenshot when extraction fails
+     * @param {string} prefix - Filename prefix
+     * @returns {Promise<string|null>} - Path to saved screenshot or null
+     */
+    async saveDebugScreenshot(prefix = 'debug') {
+        try {
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const filename = `${prefix}_${timestamp}.png`;
+            const filepath = path.join(os.tmpdir(), filename);
+
+            const screenshotBuffer = await this.screenshot({ format: 'png' });
+            fs.writeFileSync(filepath, screenshotBuffer);
+
+            logger.info(`[CDP] Debug screenshot saved: ${filepath}`);
+            return filepath;
+        } catch (error) {
+            logger.warn('[CDP] Failed to save debug screenshot:', error.message);
+            return null;
+        }
+    }
+
+    /**
+     * Check if browser is healthy and connected
+     * @returns {boolean}
+     */
+    isHealthy() {
+        try {
+            return !!(
+                this.client &&
+                this.chrome &&
+                this.chrome.process &&
+                !this.chrome.process.killed
+            );
+        } catch (e) {
+            return false;
+        }
+    }
+
     async close() {
         try {
             if (this.client) {

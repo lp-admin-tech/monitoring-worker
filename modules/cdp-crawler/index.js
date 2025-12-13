@@ -212,16 +212,31 @@ class CDPCrawler {
   }
 
   async crawl(url, options = {}) {
-    const { fullHeatmap = true, simulateBrowsing = true } = options;
+    const { fullHeatmap = true, simulateBrowsing = true, blockResources = false } = options;
 
     logger.info(`[CDPCrawler] Crawling: ${url}`);
     const startTime = Date.now();
 
+    // Content collection for progressive extraction
+    let baselineContent = '';
+    let scrollContents = [];
+    let finalContent = '';
+
     try {
+      // Check browser health before starting
+      if (!this.chromeClient.isHealthy()) {
+        throw new Error('Browser is not healthy');
+      }
+
+      // Optionally block heavy resources for speed
+      if (blockResources) {
+        await this.chromeClient.blockResources(true);
+      }
+
       // Execute before_navigate hook
       await this.executeHook('before_navigate', { url, options });
 
-      // Navigate to page
+      // Navigate to page with timeout
       const navigated = await this.chromeClient.navigate(url, {
         timeout: this.options.timeout
       });
@@ -233,8 +248,19 @@ class CDPCrawler {
       // Execute after_navigate hook
       await this.executeHook('after_navigate', { url, success: true });
 
-      // Wait for dynamic content (longer wait for ads)
-      await this.humanSimulator.wait(8000, 12000); // Increased wait time
+      // Wait for network to become idle (instead of fixed wait)
+      logger.debug('[CDPCrawler] Waiting for network idle...');
+      await this.chromeClient.waitForNetworkIdle(15000, 500);
+
+      // Wait for DOM to stabilize
+      await this.waitForDOMStable(5000, 300);
+
+      // Handle cookie consent banners
+      try {
+        await this.handleCookieConsent();
+      } catch (e) {
+        logger.debug('[CDPCrawler] Cookie consent handling skipped:', e.message);
+      }
 
       // Remove overlays/popups that may interfere with ad detection
       try {
@@ -244,10 +270,26 @@ class CDPCrawler {
         logger.debug('[CDPCrawler] Overlay removal skipped:', e.message);
       }
 
-      // Generate ad heatmap (with scroll)
+      // === PHASE 1: BASELINE CONTENT EXTRACTION ===
+      logger.debug('[CDPCrawler] Extracting baseline content...');
+      baselineContent = await this.extractContentSafe();
+      logger.debug(`[CDPCrawler] Baseline content: ${baselineContent?.length || 0} chars`);
+
+      // === PHASE 2: SCROLL + HEATMAP + PROGRESSIVE EXTRACTION ===
       let heatmapData = null;
       if (fullHeatmap) {
-        heatmapData = await this.adHeatmap.generateFullHeatmap(this.humanSimulator);
+        // Generate ad heatmap with scroll - capture content at each level
+        heatmapData = await this.adHeatmap.generateFullHeatmap(this.humanSimulator, async (scrollY) => {
+          // Progressive content extraction callback
+          try {
+            const chunk = await this.extractContentSafe();
+            if (chunk && chunk.length > 100) {
+              scrollContents.push(chunk);
+            }
+          } catch (e) {
+            logger.debug('[CDPCrawler] Progressive extraction failed at scroll level');
+          }
+        });
       } else {
         heatmapData = await this.adHeatmap.quickScan();
       }
@@ -257,8 +299,14 @@ class CDPCrawler {
         await this.humanSimulator.randomMouseMovement(3000);
       }
 
-      // Extract content
-      const content = await this.extractContent();
+      // Wait for network idle again after all interactions
+      await this.chromeClient.waitForNetworkIdle(10000, 500);
+
+      // === PHASE 3: FINAL CONTENT EXTRACTION WITH RETRIES ===
+      finalContent = await this.extractContentWithRetry(3);
+
+      // Choose best content from all extractions
+      const content = this.chooseBestContent(baselineContent, scrollContents, finalContent);
 
       // Get network analysis
       const networkAnalysis = this.networkInterceptor.getAnalysis();
@@ -270,8 +318,9 @@ class CDPCrawler {
       logger.info(`[CDPCrawler] Crawl complete in ${duration}ms`, {
         url,
         mfaScore: mfaIndicators.combinedScore,
-        adCount: heatmapData.totalAdsDetected,
-        adNetworks: networkAnalysis.adNetworkCount
+        adCount: heatmapData?.totalAdsDetected || 0,
+        adNetworks: networkAnalysis.adNetworkCount,
+        contentLength: content?.length || 0
       });
 
       return {
@@ -287,16 +336,218 @@ class CDPCrawler {
       };
 
     } catch (error) {
-      logger.error(`[CDPCrawler] Crawl failed: ${url}`, { error: error.message });
+      // Save debug screenshot on failure
+      try {
+        await this.chromeClient.saveDebugScreenshot(`crawl_fail_${url.replace(/[^a-z0-9]/gi, '_').slice(0, 50)}`);
+      } catch (e) {
+        // Ignore screenshot errors
+      }
+
+      logger.error(`[CDPCrawler] Crawl failed: ${url}`, {
+        error: error.message,
+        stack: error.stack
+      });
+
+      // Return best content we managed to get, even on failure
+      const partialContent = this.chooseBestContent(baselineContent, scrollContents, finalContent);
+
       return {
         url,
         success: false,
         error: error.message,
         duration: Date.now() - startTime,
+        content: partialContent,
+        contentLength: partialContent?.length || 0,
         timestamp: new Date().toISOString()
       };
     }
   }
+
+  /**
+   * Wait for DOM to stabilize (no mutations for idleTime ms)
+   */
+  async waitForDOMStable(timeout = 5000, idleTime = 300) {
+    try {
+      return await this.chromeClient.evaluate(`
+        new Promise((resolve) => {
+          let lastMutation = Date.now();
+          let resolved = false;
+          
+          const observer = new MutationObserver(() => {
+            lastMutation = Date.now();
+          });
+          
+          observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true
+          });
+          
+          const check = () => {
+            if (resolved) return;
+            if (Date.now() - lastMutation >= ${idleTime}) {
+              resolved = true;
+              observer.disconnect();
+              resolve(true);
+            } else {
+              setTimeout(check, 100);
+            }
+          };
+          
+          setTimeout(check, ${idleTime});
+          setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              observer.disconnect();
+              resolve(false);
+            }
+          }, ${timeout});
+        })
+      `);
+    } catch (e) {
+      logger.debug('[CDPCrawler] DOM stability check failed:', e.message);
+      return false;
+    }
+  }
+
+  /**
+   * Handle cookie consent banners
+   */
+  async handleCookieConsent() {
+    const consentSelectors = [
+      '[id*="cookie"] button[class*="accept"]',
+      '[class*="cookie"] button[class*="accept"]',
+      '[id*="consent"] button[class*="accept"]',
+      'button[id*="accept-cookies"]',
+      'button[class*="accept-cookies"]',
+      '[data-testid*="cookie-accept"]',
+      '#onetrust-accept-btn-handler',
+      '.cookie-consent-accept'
+    ];
+
+    for (const selector of consentSelectors) {
+      try {
+        const clicked = await this.chromeClient.evaluate(`
+          (() => {
+            const btn = document.querySelector('${selector}');
+            if (btn && btn.offsetParent !== null) {
+              btn.click();
+              return true;
+            }
+            return false;
+          })()
+        `);
+        if (clicked) {
+          logger.debug(`[CDPCrawler] Clicked cookie consent: ${selector}`);
+          await this.humanSimulator.wait(500, 1000);
+          return true;
+        }
+      } catch (e) {
+        // Continue to next selector
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Safe content extraction (won't throw)
+   */
+  async extractContentSafe() {
+    try {
+      return await this.extractContent();
+    } catch (e) {
+      logger.debug('[CDPCrawler] Safe extraction failed:', e.message);
+      return '';
+    }
+  }
+
+  /**
+   * Extract content with retry logic
+   */
+  async extractContentWithRetry(maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const content = await this.extractContent();
+        if (content && content.length > 100) {
+          return content;
+        }
+        logger.debug(`[CDPCrawler] Extraction attempt ${attempt} got ${content?.length || 0} chars`);
+      } catch (error) {
+        logger.warn(`[CDPCrawler] Extraction attempt ${attempt} failed:`, error.message);
+      }
+
+      if (attempt < maxRetries) {
+        // Wait before retry with exponential backoff
+        await this.humanSimulator.wait(500 * attempt, 1000 * attempt);
+      }
+    }
+
+    // Final fallback - try raw innerText
+    try {
+      const fallback = await this.chromeClient.evaluate('document.body.innerText || ""');
+      return fallback || '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /**
+   * Choose best content from multiple extractions
+   */
+  chooseBestContent(baseline, scrollChunks, final) {
+    const candidates = [
+      { content: final, source: 'final' },
+      { content: baseline, source: 'baseline' },
+      ...(scrollChunks || []).map((c, i) => ({ content: c, source: `scroll_${i}` }))
+    ].filter(c => c.content && c.content.length > 0);
+
+    if (candidates.length === 0) {
+      return '';
+    }
+
+    // Score each candidate
+    const scored = candidates.map(c => ({
+      ...c,
+      score: this.scoreContent(c.content)
+    }));
+
+    // Sort by score descending
+    scored.sort((a, b) => b.score - a.score);
+
+    logger.debug(`[CDPCrawler] Best content: ${scored[0].source} (score: ${scored[0].score}, ${scored[0].content.length} chars)`);
+    return scored[0].content;
+  }
+
+  /**
+   * Score content quality
+   */
+  scoreContent(content) {
+    if (!content) return 0;
+
+    let score = 0;
+
+    // Length score (prefer longer content, but with diminishing returns)
+    score += Math.min(content.length / 100, 100);
+
+    // Markdown structure (headings, lists)
+    const headings = (content.match(/^#{1,6}\s/gm) || []).length;
+    score += headings * 5;
+
+    const listItems = (content.match(/^[-*]\s/gm) || []).length;
+    score += listItems * 2;
+
+    // Paragraphs (double newlines)
+    const paragraphs = (content.match(/\n\n/g) || []).length;
+    score += paragraphs * 3;
+
+    // Penalize if looks like error/fallback
+    if (content.includes('FALLBACK_TEXT')) {
+      score -= 50;
+    }
+
+    return score;
+  }
+
 
   async extractContent() {
     try {
@@ -461,20 +712,20 @@ class CDPCrawler {
         })()
       `);
 
-      if (!result || (!result.value && result.value !== '')) {
-        logger.warn('[CDPCrawler] Content extraction returned invalid result structure');
-        // Final desperate fallback
-        const fallback = await this.chromeClient.evaluate('document.body.innerText');
-        return fallback?.value || '';
+      // evaluate() returns the value directly, not wrapped in {value}
+      if (result === null || result === undefined) {
+        logger.warn('[CDPCrawler] Content extraction returned null/undefined, trying raw body text');
+        const fallback = await this.chromeClient.evaluate('document.body.innerText || ""');
+        return fallback || '';
       }
 
-      if (!result.value) {
+      if (result === '' || (typeof result === 'string' && result.trim() === '')) {
         logger.warn('[CDPCrawler] Content extraction returned empty string, trying raw body text');
-        const fallback = await this.chromeClient.evaluate('document.body.innerText');
-        return fallback?.value || '';
+        const fallback = await this.chromeClient.evaluate('document.body.innerText || ""');
+        return fallback || '';
       }
 
-      return result.value;
+      return result;
     } catch (error) {
       logger.warn('[CDPCrawler] Content extraction failed:', error.message || error);
       return '';

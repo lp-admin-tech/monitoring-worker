@@ -8,9 +8,16 @@ const logger = require('../logger');
 class HumanSimulator {
     constructor(client) {
         this.client = client;
-        this.Input = client.Input;
-        this.Runtime = client.Runtime;
-        this.DOM = client.DOM;
+        this.Input = client?.Input;
+        this.Runtime = client?.Runtime;
+        this.DOM = client?.DOM;
+    }
+
+    /**
+     * Check if browser connection is still valid
+     */
+    isConnected() {
+        return !!(this.client && this.Runtime && this.Input);
     }
 
     // Bezier curve for easing (standard CSS ease-in-out)
@@ -26,6 +33,7 @@ class HumanSimulator {
         const delay = min + Math.random() * (max - min);
         await new Promise(r => setTimeout(r, delay));
     }
+
 
     // Bezier curve mouse movement (not linear!)
     async moveMouse(startX, startY, endX, endY, steps = 25) {
@@ -132,16 +140,29 @@ class HumanSimulator {
 
     // Scroll to bottom with random pauses
     async scrollToBottom(options = {}) {
+        // Connection check first
+        if (!this.isConnected()) {
+            logger.warn('[HumanSim] Cannot scroll - not connected');
+            return;
+        }
+
         const { pauseChance = 0.15, maxPauseDuration = 3000 } = options;
 
-        const { result } = await this.Runtime.evaluate({
-            expression: `({
-        viewportHeight: window.innerHeight,
-        totalHeight: document.body.scrollHeight,
-        currentScroll: window.scrollY
-      })`,
-            returnByValue: true
-        });
+        let result;
+        try {
+            const evalResult = await this.Runtime.evaluate({
+                expression: `({
+            viewportHeight: window.innerHeight,
+            totalHeight: document.body.scrollHeight,
+            currentScroll: window.scrollY
+          })`,
+                returnByValue: true
+            });
+            result = evalResult.result;
+        } catch (e) {
+            logger.warn('[HumanSim] Failed to get page dimensions:', e.message);
+            return;
+        }
 
         // Handle case where browser context is closed or page crashed
         if (!result || !result.value) {
@@ -184,14 +205,27 @@ class HumanSimulator {
 
     // Full page scroll with callback for each level
     async scrollAndCapture(captureCallback) {
-        const { result } = await this.Runtime.evaluate({
-            expression: `({
-        viewportHeight: window.innerHeight,
-        totalHeight: document.body.scrollHeight,
-        currentScroll: window.scrollY
-      })`,
-            returnByValue: true
-        });
+        // Connection check first
+        if (!this.isConnected()) {
+            logger.warn('[HumanSim] Cannot scroll and capture - not connected');
+            return [];
+        }
+
+        let result;
+        try {
+            const evalResult = await this.Runtime.evaluate({
+                expression: `({
+            viewportHeight: window.innerHeight,
+            totalHeight: document.body.scrollHeight,
+            currentScroll: window.scrollY
+          })`,
+                returnByValue: true
+            });
+            result = evalResult.result;
+        } catch (e) {
+            logger.warn('[HumanSim] Failed to get page dimensions:', e.message);
+            return [];
+        }
 
         // Handle case where browser context is closed or page crashed
         if (!result || !result.value) {
