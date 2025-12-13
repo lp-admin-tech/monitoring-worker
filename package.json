@@ -20,6 +20,7 @@
   "license": "MIT",
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
+    "@huggingface/inference": "^2.6.4",
     "dotenv": "^17.2.3",
     "playwright": "^1.44.0",
     "crawlee": "^3.11.0",
