@@ -4,17 +4,7 @@ const AnalysisInterpreter = require('./analysis');
 const ReportFormatter = require('./formatter');
 const aiDb = require('./db');
 
-// Make HuggingFace import resilient - use fallback if package missing
-let InferenceClient = null;
-try {
-  const hf = require('@huggingface/inference');
-  InferenceClient = hf.InferenceClient;
-} catch (err) {
-  logger.warn('[AIAssistance] @huggingface/inference not installed - using rule-based fallback only');
-}
-
 let supabaseClient = null;
-
 
 function getSupabaseClient() {
   if (supabaseClient === null && supabaseClient !== false) {
@@ -36,36 +26,24 @@ class AIAssistanceModule {
     this.analysisInterpreter = new AnalysisInterpreter();
     this.reportFormatter = new ReportFormatter();
 
-    // Groq - Primary provider (fast inference)
+    // Groq - Primary LLM provider (fast inference)
     this.groq = {
       apiKey: envConfig?.groq?.apiKey || process.env.GROQ_API_KEY || '',
       model: envConfig?.groq?.model || process.env.GROQ_MODEL || 'llama-3.1-70b-versatile',
       baseUrl: 'https://api.groq.com/openai/v1'
     };
 
-
-    // HuggingFace - Fallback provider
-    this.huggingFace = {
-      apiKey: envConfig?.huggingFace?.apiKey || process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN || '',
-      model: envConfig?.huggingFace?.model || process.env.HUGGINGFACE_MODEL || 'meta-llama/Meta-Llama-3-8B-Instruct',
-    };
-
-    // Primary provider selection (prefer Groq if available)
+    // Provider selection
     if (this.groq.apiKey) {
       this.apiKey = this.groq.apiKey;
       this.model = this.groq.model;
       this.provider = 'groq';
-      logger.info('[AIAssistance] Using Groq as primary LLM provider');
-    } else if (this.huggingFace.apiKey) {
-      this.apiKey = this.huggingFace.apiKey;
-      this.model = this.huggingFace.model;
-      this.provider = 'huggingface';
-      logger.info('[AIAssistance] Using HuggingFace as primary LLM provider');
+      logger.info('[AIAssistance] Using Groq as LLM provider');
     } else {
       this.apiKey = null;
       this.model = null;
       this.provider = 'fallback';
-      logger.warn('[AIAssistance] No LLM API key configured - using rule-based fallback only');
+      logger.warn('[AIAssistance] No GROQ_API_KEY configured - using rule-based fallback only');
     }
   }
 
@@ -231,8 +209,8 @@ class AIAssistanceModule {
   async callLLM(systemPrompt, userPrompt, contextData = {}) {
     let lastError = null;
 
-    // 1. Try Groq if configured as primary or if Groq API key exists
-    if (this.provider === 'groq' || this.groq.apiKey) {
+    // 1. Try Groq
+    if (this.groq.apiKey) {
       try {
         logger.info('Calling Groq LLM', { model: this.groq.model });
         const response = await this.callGroqLLM(systemPrompt, userPrompt);
@@ -247,30 +225,11 @@ class AIAssistanceModule {
       }
     }
 
-    // 2. Try HuggingFace as fallback
-    if (this.huggingFace.apiKey) {
-      try {
-        const delayMs = parseInt(process.env.AI_REQUEST_DELAY_MS || '5000', 10);
-        logger.debug('Waiting before HuggingFace call', { delayMs });
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-
-        logger.info('Calling HuggingFace LLM', { model: this.huggingFace.model });
-        const response = await this.callHuggingFaceLLM(systemPrompt, userPrompt);
-
-        if (response && response.trim().length > 0) {
-          return response;
-        }
-        logger.warn('HuggingFace LLM returned empty response');
-      } catch (error) {
-        lastError = error;
-        logger.warn('HuggingFace LLM failed', { error: error.message });
-      }
-    }
-
-    // 3. Fallback to Rule-Based Analysis
-    logger.warn('All LLMs failed, using rule-based fallback analysis', { lastError: lastError?.message });
+    // 2. Fallback to Rule-Based Analysis
+    logger.warn('Groq LLM failed or not configured, using rule-based fallback', { lastError: lastError?.message });
     return this.generateFallbackAnalysis(userPrompt, contextData);
   }
+
 
   /**
    * Call Groq LLM using OpenAI-compatible API
