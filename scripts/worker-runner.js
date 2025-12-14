@@ -7,6 +7,9 @@ const gamFetcher = require('../modules/gam-fetcher');
 const QueueManager = require('../core/queue/queue-manager');
 const DataQualityDB = require('../modules/data-quality-db');
 const metrics = require('../modules/metrics');
+const ExtractionTracker = require('../modules/extraction-tracker');
+const { calculateDataQuality } = require('../modules/data-quality-calculator');
+
 
 let contentAnalyzer, adAnalyzer, scorer, aiAssistance, crawler, policyChecker, technicalChecker, technicalCheckerDb, contentAnalyzerDb, adAnalyzerDb, policyCheckerDb, aiAssistanceDb, crawlerDb, moduleDataOrchestrator, directoryAuditOrchestrator, crossModuleAnalyzer, dataQualityDb;
 let server = null;
@@ -134,141 +137,8 @@ app.get('/metrics/json', (req, res) => {
   });
 });
 
-/**
- * Calculate data quality metrics based on module success and data completeness
- * @param {Object} modules - Module results
- * @param {Object} crawlData - Crawler data
- * @returns {Object} Data quality assessment
- */
-function calculateDataQuality(modules, crawlData) {
-  const metricsCollected = {};
-  const failures = [];
-  let successCount = 0;
-  const totalModules = 5; // crawler, content, ads, policy, technical
+// calculateDataQuality function moved to ../modules/data-quality-calculator.js
 
-  // Check crawler
-  // Note: crawlData from CDP orchestrator has contentLength as a number, not content as a string
-  const crawlerContentLength = crawlData?.contentLength || (crawlData?.content?.length) || 0;
-  if (crawlData && crawlerContentLength >= 100) {
-    metricsCollected.crawler = true;
-    successCount++;
-  } else {
-    metricsCollected.crawler = false;
-    failures.push({
-      module: 'crawler',
-      reason: 'Insufficient content extracted',
-      contentLength: crawlerContentLength,
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  // Check content analyzer - look for data at .data or root level
-  const contentData = modules.contentAnalyzer?.data || modules.contentAnalyzer;
-  const contentTextLength = contentData?.textLength || 0;
-  const contentEntropyScore = contentData?.entropy?.entropyScore || 0;
-  if (contentData && !contentData.error && (contentTextLength > 50 || contentEntropyScore > 0)) {
-    metricsCollected.content = true;
-    successCount++;
-  } else {
-    metricsCollected.content = false;
-    failures.push({
-      module: 'content',
-      reason: contentData?.error || 'Content analysis failed or returned zero metrics',
-      textLength: contentTextLength,
-      entropyScore: contentEntropyScore,
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  // Check ad analyzer - look for data at .data or root level
-  const adData = modules.adAnalyzer?.data || modules.adAnalyzer;
-  const totalAds = adData?.summary?.totalAds ?? adData?.totalAds ?? 0;
-  const adDensity = adData?.summary?.adDensity ?? adData?.adDensity ?? -1;
-  // Pass if we have ANY valid ad data (even 0 ads is valid data)
-  if (adData && !adData.error && (totalAds >= 0 || adDensity >= 0)) {
-    metricsCollected.ads = true;
-    successCount++;
-  } else {
-    metricsCollected.ads = false;
-    failures.push({
-      module: 'ads',
-      reason: adData?.error || 'Ad analysis returned no data',
-      totalAds: totalAds,
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  // Check policy checker - look for data at .data or root level
-  const policyData = modules.policyChecker?.data || modules.policyChecker;
-  // Pass if we have any policy response - check various possible fields
-  const hasPolicyData = policyData && !policyData.error && (
-    policyData.issues !== undefined ||
-    policyData.violations !== undefined ||
-    policyData.complianceLevel !== undefined ||
-    policyData.policyViolations !== undefined
-  );
-  if (hasPolicyData) {
-    metricsCollected.policy = true;
-    successCount++;
-  } else {
-    metricsCollected.policy = false;
-    failures.push({
-      module: 'policy',
-      reason: policyData?.error || 'Policy check failed or returned no data',
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  // Check technical checker - look for data at .data or root level
-  const technicalData = modules.technicalChecker?.data || modules.technicalChecker;
-  const pageLoadTime = technicalData?.performance?.pageLoadTime ?? technicalData?.components?.performance?.pageLoadTime ?? 0;
-  // Check for any valid technical data - components object, performance, or SSL data
-  const hasTechnicalData = technicalData && !technicalData.error && (
-    pageLoadTime > 0 ||
-    technicalData?.performance ||
-    technicalData?.components?.performance ||
-    technicalData?.components?.ssl?.valid !== undefined ||
-    technicalData?.sslValid !== undefined ||
-    technicalData?.summary
-  );
-  if (hasTechnicalData) {
-    metricsCollected.technical = true;
-    successCount++;
-  } else {
-    metricsCollected.technical = false;
-    failures.push({
-      module: 'technical',
-      reason: technicalData?.error || 'Technical check failed or returned no performance data',
-      pageLoadTime: pageLoadTime,
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  // Calculate quality score (0.0 - 1.0)
-  const baseScore = successCount / totalModules;
-  const failurePenalty = Math.min(failures.length * 0.05, 0.3);
-  const qualityScore = Math.max(baseScore - failurePenalty, 0.0);
-
-  // Determine quality level
-  let qualityLevel;
-  if (qualityScore >= 0.9) qualityLevel = 'excellent';
-  else if (qualityScore >= 0.7) qualityLevel = 'good';
-  else if (qualityScore >= 0.5) qualityLevel = 'warning';
-  else qualityLevel = 'critical';
-
-  // Audit is complete if at least 70% of metrics collected (3 out of 5)
-  const isComplete = successCount >= Math.ceil(totalModules * 0.7);
-
-  return {
-    score: Math.round(qualityScore * 100) / 100,
-    level: qualityLevel,
-    isComplete,
-    metricsCollected,
-    failures,
-    successCount,
-    totalModules
-  };
-}
 
 const WORKER_SECRET = process.env.WORKER_SECRET;
 const BATCH_CONCURRENCY_LIMIT = parseInt(process.env.BATCH_CONCURRENCY_LIMIT || '1'); // Reduced for 2GB RAM
@@ -277,71 +147,12 @@ const RETRY_ENABLED = process.env.RETRY_ENABLED !== 'false';
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 2000, 4000];
 
-/**
- * Track extraction failures for publisher flagging
- * @param {string} publisherId - Publisher UUID
- * @param {string} domain - Site domain
- * @param {string} siteAuditId - Site audit UUID
- * @param {string} reason - Failure reason
- * @param {Array} attempts - Extraction attempts details
- */
-async function trackExtractionFailure(publisherId, domain, siteAuditId, reason, attempts = []) {
-  try {
-    await supabase.supabaseClient.from('extraction_failures').insert({
-      publisher_id: publisherId,
-      domain,
-      site_audit_id: siteAuditId,
-      failure_reason: reason,
-      extraction_attempts: attempts,
-      created_at: new Date().toISOString()
-    });
-    logger.info(`[ExtractionTracker] Recorded extraction failure for ${domain}`, { publisherId, reason });
-  } catch (err) {
-    // Non-fatal - just log the error
-    logger.warn(`[ExtractionTracker] Failed to track extraction failure`, { error: err.message });
-  }
-}
-
-/**
- * Check publisher extraction health and flag if >50% failure rate
- * @param {string} publisherId - Publisher UUID
- */
-async function checkPublisherExtractionHealth(publisherId) {
-  try {
-    const { data, error } = await supabase.supabaseClient.rpc('get_extraction_failure_rate', {
-      p_publisher_id: publisherId,
-      p_days: 7
-    });
-
-    if (error) {
-      logger.warn(`[ExtractionTracker] Could not check extraction health`, { error: error.message });
-      return;
-    }
-
-    const failureRate = data?.failure_rate || 0;
-
-    if (failureRate > 0.5) {
-      // Flag publisher for manual review
-      logger.warn(`[ExtractionTracker] Publisher has HIGH extraction failure rate: ${(failureRate * 100).toFixed(1)}%`, {
-        publisherId,
-        totalAudits: data.total_audits,
-        failedExtractions: data.failed_extractions
-      });
-
-      // Update publisher extraction_health field
-      await supabase.supabaseClient.from('publishers').update({
-        extraction_health: {
-          status: 'needs_review',
-          failure_rate: failureRate,
-          total_audits: data.total_audits,
-          failed_extractions: data.failed_extractions,
-          last_checked: new Date().toISOString()
-        }
-      }).eq('id', publisherId);
-    }
-  } catch (err) {
-    logger.warn(`[ExtractionTracker] Failed to check publisher extraction health`, { error: err.message });
-  }
+// Extraction tracker instance - initialized with supabase client
+let extractionTracker = null;
+try {
+  extractionTracker = supabase.supabaseClient ? new ExtractionTracker(supabase.supabaseClient) : null;
+} catch (e) {
+  logger.warn('[Worker] ExtractionTracker not initialized:', e.message);
 }
 
 
@@ -596,9 +407,9 @@ async function processAuditJob(job) {
     const extractionFailed = mainSiteCrawlData?.extractionFailed ||
       (mainSiteCrawlData?.contentLength || 0) < 100;
 
-    if (extractionFailed && siteAuditId) {
+    if (extractionFailed && siteAuditId && extractionTracker) {
       const domain = new URL(normalizedUrl).hostname;
-      await trackExtractionFailure(
+      await extractionTracker.trackFailure(
         publisherId,
         domain,
         siteAuditId,
@@ -607,8 +418,9 @@ async function processAuditJob(job) {
       );
 
       // Check if this publisher should be flagged for review
-      await checkPublisherExtractionHealth(publisherId);
+      await extractionTracker.checkPublisherHealth(publisherId);
     }
+
 
 
     // 🔄 Retry failed modules if data quality is critical (3+ failures)

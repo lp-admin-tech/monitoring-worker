@@ -36,16 +36,40 @@ class AIAssistanceModule {
     this.analysisInterpreter = new AnalysisInterpreter();
     this.reportFormatter = new ReportFormatter();
 
+    // Groq - Primary provider (fast inference)
+    this.groq = {
+      apiKey: envConfig?.groq?.apiKey || process.env.GROQ_API_KEY || '',
+      model: envConfig?.groq?.model || process.env.GROQ_MODEL || 'llama-3.1-70b-versatile',
+      baseUrl: 'https://api.groq.com/openai/v1'
+    };
+
+
+    // HuggingFace - Fallback provider
     this.huggingFace = {
       apiKey: envConfig?.huggingFace?.apiKey || process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN || '',
       model: envConfig?.huggingFace?.model || process.env.HUGGINGFACE_MODEL || 'meta-llama/Meta-Llama-3-8B-Instruct',
     };
 
-    // HuggingFace is the only provider now
-    this.apiKey = this.huggingFace.apiKey;
-    this.model = this.huggingFace.model;
-    this.provider = 'huggingface';
+    // Primary provider selection (prefer Groq if available)
+    if (this.groq.apiKey) {
+      this.apiKey = this.groq.apiKey;
+      this.model = this.groq.model;
+      this.provider = 'groq';
+      logger.info('[AIAssistance] Using Groq as primary LLM provider');
+    } else if (this.huggingFace.apiKey) {
+      this.apiKey = this.huggingFace.apiKey;
+      this.model = this.huggingFace.model;
+      this.provider = 'huggingface';
+      logger.info('[AIAssistance] Using HuggingFace as primary LLM provider');
+    } else {
+      this.apiKey = null;
+      this.model = null;
+      this.provider = 'fallback';
+      logger.warn('[AIAssistance] No LLM API key configured - using rule-based fallback only');
+    }
   }
+
+
 
   async persistAIResults(result, siteAuditId, publisherId, previousResult = null) {
     if (!siteAuditId) {
@@ -205,21 +229,32 @@ class AIAssistanceModule {
   }
 
   async callLLM(systemPrompt, userPrompt, contextData = {}) {
-    let primaryError = null;
+    let lastError = null;
 
-    // 1. Try Primary Model (HuggingFace)
-    if (this.apiKey) {
+    // 1. Try Groq if configured as primary or if Groq API key exists
+    if (this.provider === 'groq' || this.groq.apiKey) {
       try {
-        // Add delay to avoid rate limits on free tier
-        const delayMs = parseInt(process.env.AI_REQUEST_DELAY_MS || '10000', 10);
-        logger.debug('Waiting before LLM call to avoid rate limits', { delayMs });
+        logger.info('Calling Groq LLM', { model: this.groq.model });
+        const response = await this.callGroqLLM(systemPrompt, userPrompt);
+
+        if (response && response.trim().length > 0) {
+          return response;
+        }
+        logger.warn('Groq LLM returned empty response');
+      } catch (error) {
+        lastError = error;
+        logger.warn('Groq LLM failed', { error: error.message });
+      }
+    }
+
+    // 2. Try HuggingFace as fallback
+    if (this.huggingFace.apiKey) {
+      try {
+        const delayMs = parseInt(process.env.AI_REQUEST_DELAY_MS || '5000', 10);
+        logger.debug('Waiting before HuggingFace call', { delayMs });
         await new Promise(resolve => setTimeout(resolve, delayMs));
 
-        logger.debug('Calling HuggingFace LLM', {
-          model: this.model,
-          provider: this.provider
-        });
-
+        logger.info('Calling HuggingFace LLM', { model: this.huggingFace.model });
         const response = await this.callHuggingFaceLLM(systemPrompt, userPrompt);
 
         if (response && response.trim().length > 0) {
@@ -227,17 +262,66 @@ class AIAssistanceModule {
         }
         logger.warn('HuggingFace LLM returned empty response');
       } catch (error) {
-        primaryError = error;
+        lastError = error;
         logger.warn('HuggingFace LLM failed', { error: error.message });
       }
-    } else {
-      logger.info('No HuggingFace API key configured');
     }
 
-    // 2. Fallback to Rule-Based Analysis (no backup LLM)
-    logger.warn('LLM failed, using rule-based fallback analysis');
+    // 3. Fallback to Rule-Based Analysis
+    logger.warn('All LLMs failed, using rule-based fallback analysis', { lastError: lastError?.message });
     return this.generateFallbackAnalysis(userPrompt, contextData);
   }
+
+  /**
+   * Call Groq LLM using OpenAI-compatible API
+   */
+  async callGroqLLM(systemPrompt, userPrompt) {
+    try {
+      const fetch = require('node-fetch');
+
+      const response = await fetch(`${this.groq.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.groq.apiKey}`
+        },
+        body: JSON.stringify({
+          model: this.groq.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          max_tokens: 4096,
+          temperature: 0.3
+        }),
+        timeout: 60000
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Groq API error: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+
+      if (!content || content.trim().length === 0) {
+        throw new Error('Groq returned empty response');
+      }
+
+      logger.info('Groq LLM response received', {
+        model: this.groq.model,
+        responseLength: content.length
+      });
+
+      return content;
+    } catch (error) {
+      logger.error('Groq API error:', error.message);
+      throw error;
+
+    }
+  }
+
 
   async callHuggingFaceLLM(systemPrompt, userPrompt) {
     try {
