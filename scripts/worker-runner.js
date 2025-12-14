@@ -47,7 +47,7 @@ try {
   const crossModuleAnalyzerModule = require('../modules/cross-module-analyzer');
   const { createClient } = require('@supabase/supabase-js');
 
-  crawler = crawlerModule;
+  // crawler = crawlerModule; // Removed legacy crawler assignment
   policyChecker = policyCheckerModule;
   technicalChecker = technicalCheckerModule;
   crawlerDb = crawlerDbModule;
@@ -108,7 +108,7 @@ app.get('/health', (req, res) => {
 // Readiness check - confirms browser is initialized
 app.get('/ready', async (req, res) => {
   try {
-    const browserReady = crawler?.browser?.isConnected?.() || false;
+    const browserReady = directoryAuditOrchestrator?.crawler?.isConnected?.() || false;
     if (browserReady) {
       res.status(200).json({ status: 'ready', browser: 'connected' });
     } else {
@@ -276,6 +276,74 @@ const MODULE_TIMEOUT = parseInt(process.env.MODULE_TIMEOUT || '30000');
 const RETRY_ENABLED = process.env.RETRY_ENABLED !== 'false';
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 2000, 4000];
+
+/**
+ * Track extraction failures for publisher flagging
+ * @param {string} publisherId - Publisher UUID
+ * @param {string} domain - Site domain
+ * @param {string} siteAuditId - Site audit UUID
+ * @param {string} reason - Failure reason
+ * @param {Array} attempts - Extraction attempts details
+ */
+async function trackExtractionFailure(publisherId, domain, siteAuditId, reason, attempts = []) {
+  try {
+    await supabase.supabaseClient.from('extraction_failures').insert({
+      publisher_id: publisherId,
+      domain,
+      site_audit_id: siteAuditId,
+      failure_reason: reason,
+      extraction_attempts: attempts,
+      created_at: new Date().toISOString()
+    });
+    logger.info(`[ExtractionTracker] Recorded extraction failure for ${domain}`, { publisherId, reason });
+  } catch (err) {
+    // Non-fatal - just log the error
+    logger.warn(`[ExtractionTracker] Failed to track extraction failure`, { error: err.message });
+  }
+}
+
+/**
+ * Check publisher extraction health and flag if >50% failure rate
+ * @param {string} publisherId - Publisher UUID
+ */
+async function checkPublisherExtractionHealth(publisherId) {
+  try {
+    const { data, error } = await supabase.supabaseClient.rpc('get_extraction_failure_rate', {
+      p_publisher_id: publisherId,
+      p_days: 7
+    });
+
+    if (error) {
+      logger.warn(`[ExtractionTracker] Could not check extraction health`, { error: error.message });
+      return;
+    }
+
+    const failureRate = data?.failure_rate || 0;
+
+    if (failureRate > 0.5) {
+      // Flag publisher for manual review
+      logger.warn(`[ExtractionTracker] Publisher has HIGH extraction failure rate: ${(failureRate * 100).toFixed(1)}%`, {
+        publisherId,
+        totalAudits: data.total_audits,
+        failedExtractions: data.failed_extractions
+      });
+
+      // Update publisher extraction_health field
+      await supabase.supabaseClient.from('publishers').update({
+        extraction_health: {
+          status: 'needs_review',
+          failure_rate: failureRate,
+          total_audits: data.total_audits,
+          failed_extractions: data.failed_extractions,
+          last_checked: new Date().toISOString()
+        }
+      }).eq('id', publisherId);
+    }
+  } catch (err) {
+    logger.warn(`[ExtractionTracker] Failed to check publisher extraction health`, { error: err.message });
+  }
+}
+
 
 // --- JOB PROCESSOR FUNCTION ---
 // This function contains the logic that was previously in BatchSiteProcessor.executeSiteAudit
@@ -523,6 +591,25 @@ async function processAuditJob(job) {
       metricsCollected: dataQuality.metricsCollected,
       failures: dataQuality.failures
     });
+
+    // 📊 Track extraction failures for publisher flagging
+    const extractionFailed = mainSiteCrawlData?.extractionFailed ||
+      (mainSiteCrawlData?.contentLength || 0) < 100;
+
+    if (extractionFailed && siteAuditId) {
+      const domain = new URL(normalizedUrl).hostname;
+      await trackExtractionFailure(
+        publisherId,
+        domain,
+        siteAuditId,
+        mainSiteCrawlData?.extractionFailed ? 'ALL_STRATEGIES_FAILED' : 'CONTENT_TOO_SHORT',
+        mainSiteCrawlData?.extractionAttempts || []
+      );
+
+      // Check if this publisher should be flagged for review
+      await checkPublisherExtractionHealth(publisherId);
+    }
+
 
     // 🔄 Retry failed modules if data quality is critical (3+ failures)
     if (dataQuality.level === 'critical' && dataQuality.failures.length >= 3) {

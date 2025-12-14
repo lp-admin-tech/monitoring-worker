@@ -3,9 +3,18 @@ const PromptBuilder = require('./prompt-builder');
 const AnalysisInterpreter = require('./analysis');
 const ReportFormatter = require('./formatter');
 const aiDb = require('./db');
-const { InferenceClient } = require('@huggingface/inference');
+
+// Make HuggingFace import resilient - use fallback if package missing
+let InferenceClient = null;
+try {
+  const hf = require('@huggingface/inference');
+  InferenceClient = hf.InferenceClient;
+} catch (err) {
+  logger.warn('[AIAssistance] @huggingface/inference not installed - using rule-based fallback only');
+}
 
 let supabaseClient = null;
+
 
 function getSupabaseClient() {
   if (supabaseClient === null && supabaseClient !== false) {
@@ -232,10 +241,16 @@ class AIAssistanceModule {
 
   async callHuggingFaceLLM(systemPrompt, userPrompt) {
     try {
+      // Check if HuggingFace package is available
+      if (!InferenceClient) {
+        throw new Error('@huggingface/inference package not installed - run npm install');
+      }
+
       const client = new InferenceClient(this.huggingFace.apiKey);
       let out = '';
 
       logger.info('Calling HuggingFace Inference API', { model: this.huggingFace.model });
+
 
       const stream = client.chatCompletionStream({
         model: this.huggingFace.model,

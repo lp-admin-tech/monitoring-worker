@@ -28,6 +28,7 @@ class AdAnalyzerDB {
         viewport_width: densityData.viewport_width,
         viewport_height: densityData.viewport_height,
         version: 1,
+        audit_timestamp: new Date().toISOString(),
       };
 
       const { data, error } = await this.supabase
@@ -64,6 +65,7 @@ class AdAnalyzerDB {
         affected_ad_slots: refreshData.affected_ad_slots || 0,
         risk_level: refreshData.risk_level || 'low',
         version: 1,
+        audit_timestamp: new Date().toISOString(),
       };
 
       const { data, error } = await this.supabase
@@ -100,6 +102,7 @@ class AdAnalyzerDB {
         // hidden_ads_count removed due to schema mismatch
         // total_ads_count removed due to schema mismatch
         recommendations: visibilityData.recommendations || [],
+        audit_timestamp: new Date().toISOString(),
       };
 
       const { data, error } = await this.supabase
@@ -138,6 +141,7 @@ class AdAnalyzerDB {
         detected_anomalies: patternData.detected_anomalies || [],
         correlation_data: patternData.correlation_data || {},
         version: 1,
+        audit_timestamp: new Date().toISOString(),
       };
 
       const { data, error } = await this.supabase
@@ -290,6 +294,7 @@ class AdAnalyzerDB {
         video_stuffing_detected: videoData.video_stuffing_detected || false,
         risk_score: videoData.risk_score || 0,
         video_players_data: videoData.video_players_data || [],
+        audit_timestamp: new Date().toISOString(),
       };
 
       const { data, error } = await this.supabase

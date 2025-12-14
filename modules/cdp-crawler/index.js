@@ -303,10 +303,15 @@ class CDPCrawler {
       await this.chromeClient.waitForNetworkIdle(10000, 500);
 
       // === PHASE 3: FINAL CONTENT EXTRACTION WITH RETRIES ===
-      finalContent = await this.extractContentWithRetry(3);
+      const extractionResult = await this.extractContentWithRetry(5);
+      finalContent = extractionResult.content || '';
+
+      // Track if extraction failed for publisher flagging
+      const extractionFailed = extractionResult.extractionFailed || false;
 
       // Choose best content from all extractions
       const content = this.chooseBestContent(baselineContent, scrollContents, finalContent);
+
 
       // Get network analysis
       const networkAnalysis = this.networkInterceptor.getAnalysis();
@@ -329,11 +334,13 @@ class CDPCrawler {
         duration,
         content,
         contentLength: content?.length || 0,
+        extractionFailed,
         networkAnalysis,
         adHeatmap: heatmapData,
         mfaIndicators,
         timestamp: new Date().toISOString()
       };
+
 
     } catch (error) {
       // Save debug screenshot on failure
@@ -462,34 +469,198 @@ class CDPCrawler {
   }
 
   /**
-   * Extract content with retry logic
+   * Extract content with retry logic and multiple strategies
+   * Enhanced for resilience against stubborn sites
    */
-  async extractContentWithRetry(maxRetries = 3) {
+  async extractContentWithRetry(maxRetries = 5) {
+    // Track extraction attempts for failure analysis
+    const extractionAttempts = [];
+
+    // Try browser recovery if disconnected
+    if (!this.chromeClient?.isConnected()) {
+      logger.warn('[CDPCrawler] Browser disconnected before extraction, attempting recovery...');
+      const recovered = await this.recoverBrowserContext();
+      if (!recovered) {
+        logger.error('[CDPCrawler] Browser recovery failed');
+        return { content: '', extractionFailed: true, reason: 'BROWSER_DISCONNECTED' };
+      }
+    }
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const content = await this.extractContent();
+        // Use different extraction strategies per attempt
+        const content = await this.extractWithStrategy(attempt);
+
+        extractionAttempts.push({
+          attempt,
+          strategy: this.getStrategyName(attempt),
+          contentLength: content?.length || 0,
+          success: content && content.length > 100
+        });
+
         if (content && content.length > 100) {
-          return content;
+          logger.debug(`[CDPCrawler] Extraction succeeded on attempt ${attempt} (${this.getStrategyName(attempt)}): ${content.length} chars`);
+          return { content, extractionFailed: false, attempts: extractionAttempts };
         }
-        logger.debug(`[CDPCrawler] Extraction attempt ${attempt} got ${content?.length || 0} chars`);
+
+        logger.debug(`[CDPCrawler] Extraction attempt ${attempt} (${this.getStrategyName(attempt)}) got ${content?.length || 0} chars`);
       } catch (error) {
-        logger.warn(`[CDPCrawler] Extraction attempt ${attempt} failed:`, error.message);
+        logger.warn(`[CDPCrawler] Extraction attempt ${attempt} (${this.getStrategyName(attempt)}) failed:`, error.message);
+        extractionAttempts.push({
+          attempt,
+          strategy: this.getStrategyName(attempt),
+          error: error.message,
+          success: false
+        });
+
+        // Check if browser died and try recovery
+        if (!this.chromeClient?.isConnected() && attempt < maxRetries) {
+          logger.warn('[CDPCrawler] Browser connection lost during extraction, recovering...');
+          await this.recoverBrowserContext();
+        }
       }
 
       if (attempt < maxRetries) {
         // Wait before retry with exponential backoff
-        await this.humanSimulator.wait(500 * attempt, 1000 * attempt);
+        const waitTime = 500 * Math.pow(1.5, attempt - 1);
+        await new Promise(r => setTimeout(r, waitTime));
       }
     }
 
-    // Final fallback - try raw innerText
-    try {
-      const fallback = await this.chromeClient.evaluate('document.body.innerText || ""');
-      return fallback || '';
-    } catch (e) {
-      return '';
+    // All strategies failed
+    logger.warn('[CDPCrawler] All extraction strategies failed');
+    return { content: '', extractionFailed: true, reason: 'ALL_STRATEGIES_FAILED', attempts: extractionAttempts };
+  }
+
+  /**
+   * Get strategy name for logging
+   */
+  getStrategyName(attempt) {
+    const strategies = ['markdown', 'innerText', 'outerHTML', 'iframe', 'minimal'];
+    return strategies[attempt - 1] || 'unknown';
+  }
+
+  /**
+   * Extract content using different strategies based on attempt number
+   */
+  async extractWithStrategy(attempt) {
+    switch (attempt) {
+      case 1:
+        // Strategy 1: Full markdown extraction (default)
+        return await this.extractContent();
+
+      case 2:
+        // Strategy 2: Simple innerText extraction
+        return await this.chromeClient.evaluate(`
+          (() => {
+            const main = document.querySelector('article, main, [role="main"], .content, #content');
+            const text = (main || document.body).innerText || '';
+            return text.replace(/\\n{3,}/g, '\\n\\n').trim().substring(0, 50000);
+          })()
+        `);
+
+      case 3:
+        // Strategy 3: outerHTML with regex stripping (more aggressive)
+        return await this.chromeClient.evaluate(`
+          (() => {
+            let html = document.body.outerHTML || '';
+            html = html.replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '');
+            html = html.replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '');
+            html = html.replace(/<[^>]+>/g, ' ');
+            html = html.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
+            html = html.replace(/\\s+/g, ' ');
+            return html.trim().substring(0, 50000);
+          })()
+        `);
+
+      case 4:
+        // Strategy 4: Iframe content extraction + body text
+        try {
+          const iframes = await this.extractIframeContent();
+          const iframeText = iframes
+            .filter(f => f.content && !f.isAd)
+            .map(f => f.content)
+            .join('\n\n');
+          const bodyText = await this.chromeClient.evaluate('document.body.innerText || ""');
+          return (bodyText + '\n\n' + iframeText).trim().substring(0, 50000);
+        } catch (e) {
+          return await this.chromeClient.evaluate('document.body.innerText || ""');
+        }
+
+      case 5:
+        // Strategy 5: Minimal extraction - just visible text nodes
+        return await this.chromeClient.evaluate(`
+          (() => {
+            const walker = document.createTreeWalker(
+              document.body,
+              NodeFilter.SHOW_TEXT,
+              {
+                acceptNode: (node) => {
+                  const parent = node.parentElement;
+                  if (!parent) return NodeFilter.FILTER_REJECT;
+                  const tag = parent.tagName.toLowerCase();
+                  if (['script', 'style', 'noscript', 'svg'].includes(tag)) {
+                    return NodeFilter.FILTER_REJECT;
+                  }
+                  return NodeFilter.FILTER_ACCEPT;
+                }
+              }
+            );
+            const texts = [];
+            let node;
+            while (node = walker.nextNode()) {
+              const text = node.textContent.trim();
+              if (text.length > 2) texts.push(text);
+            }
+            return texts.join(' ').replace(/\\s+/g, ' ').substring(0, 50000);
+          })()
+        `);
+
+      default:
+        return await this.extractContent();
     }
   }
+
+  /**
+   * Attempt to recover browser context after disconnection
+   */
+  async recoverBrowserContext() {
+    try {
+      logger.info('[CDPCrawler] Attempting browser context recovery...');
+
+      // Check if client is still usable
+      if (this.chromeClient?.isConnected()) {
+        return true;
+      }
+
+      // Try to re-establish CDP connection to existing process
+      if (this.chromeClient?.process && !this.chromeClient.process.killed) {
+        logger.info('[CDPCrawler] Chrome process alive, reconnecting CDP...');
+        try {
+          await this.chromeClient.reconnect();
+          if (this.chromeClient.isConnected()) {
+            logger.info('[CDPCrawler] Successfully reconnected to Chrome');
+            return true;
+          }
+        } catch (e) {
+          logger.debug('[CDPCrawler] Reconnection failed:', e.message);
+        }
+      }
+
+      // Launch fresh Chrome instance
+      logger.info('[CDPCrawler] Launching fresh Chrome instance...');
+      try {
+        await this.chromeClient?.close();
+      } catch (e) { /* ignore */ }
+
+      await this.initialize();
+      return this.chromeClient?.isConnected() || false;
+    } catch (error) {
+      logger.error('[CDPCrawler] Browser recovery failed:', error.message);
+      return false;
+    }
+  }
+
 
   /**
    * Choose best content from multiple extractions

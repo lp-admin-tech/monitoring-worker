@@ -170,7 +170,7 @@ class ChromeCDPClient {
             this.client = await CDP({ port: this.chrome.port });
 
             // Destructure the domains we need
-            const { Network, Page, Runtime, DOM, CSS, Input, Emulation, Security } = this.client;
+            const { Network, Page, Runtime, DOM, CSS, Emulation, Security } = this.client;
 
             // Enable required domains
             await Promise.all([
@@ -193,6 +193,12 @@ class ChromeCDPClient {
             // Ignore certificate errors (for testing)
             await Security.setIgnoreCertificateErrors({ ignore: true });
 
+            // Handle disconnection
+            this.client.on('disconnect', () => {
+                logger.warn('[CDP] Chrome disconnected unexpectedly');
+                this.client = null;
+            });
+
             logger.info('[CDP] Chrome connected and domains enabled');
 
             return this.client;
@@ -204,14 +210,14 @@ class ChromeCDPClient {
     }
 
     async navigate(url, options = {}) {
-        const { Page, Network } = this.client;
-        const timeout = options.timeout || 120000; // Increased default timeout to 120s
+        const { Page } = this.client;
+        const timeout = options.timeout || 120000; // 120s default timeout
 
         try {
             logger.info(`[CDP] Navigating to ${url} (timeout: ${timeout}ms)`);
 
             // Use multiple load event strategies
-            const loadPromise = new Promise((resolve, reject) => {
+            const loadPromise = new Promise((resolve) => {
                 let isResolved = false;
 
                 const timer = setTimeout(() => {
@@ -335,20 +341,37 @@ class ChromeCDPClient {
                 setTimeout(checkIdle, idleTime);
             });
 
+            // Track failed requests
             Network.loadingFailed(() => {
                 pendingRequests = Math.max(0, pendingRequests - 1);
                 lastActivityTime = Date.now();
                 setTimeout(checkIdle, idleTime);
             });
 
-            // Initial check after idleTime
+            // Initial check in case network is already idle
             setTimeout(checkIdle, idleTime);
         });
     }
 
     /**
-     * Block heavy resources (images, fonts, videos) for faster crawling
-     * @param {boolean} enable - Enable or disable blocking
+     * Check if the CDP client is connected
+     * @returns {boolean}
+     */
+    isConnected() {
+        return this.client !== null && this.chrome !== null;
+    }
+
+    /**
+     * Check if browser is healthy and ready for use
+     * @returns {boolean}
+     */
+    isHealthy() {
+        return this.isConnected();
+    }
+
+    /**
+     * Block heavy resources to speed up crawling
+     * @param {boolean} enable - Whether to enable blocking
      */
     async blockResources(enable = true) {
         if (!this.client) return;
@@ -356,16 +379,13 @@ class ChromeCDPClient {
         const { Network } = this.client;
 
         if (enable) {
-            // Block patterns for heavy resources
-            const blockPatterns = [
-                '*.jpg', '*.jpeg', '*.png', '*.gif', '*.webp', '*.svg', '*.ico',
-                '*.woff', '*.woff2', '*.ttf', '*.eot', '*.otf',
-                '*.mp4', '*.webm', '*.avi', '*.mov',
-                '*.mp3', '*.wav', '*.ogg',
-                '*google-analytics*', '*googletagmanager*', '*facebook.net*', '*twitter.com/i/*'
-            ];
-
-            await Network.setBlockedURLs({ urls: blockPatterns });
+            await Network.setBlockedURLs({
+                urls: [
+                    '*.woff', '*.woff2', '*.ttf', '*.otf', // Fonts
+                    '*.mp4', '*.webm', '*.avi', '*.mov',   // Videos
+                    '*.mp3', '*.wav', '*.ogg',             // Audio
+                ]
+            });
             logger.debug('[CDP] Resource blocking enabled');
         } else {
             await Network.setBlockedURLs({ urls: [] });
@@ -374,67 +394,90 @@ class ChromeCDPClient {
     }
 
     /**
-     * Save a debug screenshot when extraction fails
-     * @param {string} prefix - Filename prefix
-     * @returns {Promise<string|null>} - Path to saved screenshot or null
+     * Save a debug screenshot
+     * @param {string} name - Screenshot name
      */
-    async saveDebugScreenshot(prefix = 'debug') {
+    async saveDebugScreenshot(name) {
         try {
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const filename = `${prefix}_${timestamp}.png`;
-            const filepath = path.join(os.tmpdir(), filename);
-
-            const screenshotBuffer = await this.screenshot({ format: 'png' });
+            const screenshotBuffer = await this.screenshot();
+            const debugDir = path.join(os.tmpdir(), 'cdp-debug');
+            if (!fs.existsSync(debugDir)) {
+                fs.mkdirSync(debugDir, { recursive: true });
+            }
+            const filepath = path.join(debugDir, `${name}_${Date.now()}.png`);
             fs.writeFileSync(filepath, screenshotBuffer);
-
-            logger.info(`[CDP] Debug screenshot saved: ${filepath}`);
-            return filepath;
-        } catch (error) {
-            logger.warn('[CDP] Failed to save debug screenshot:', error.message);
-            return null;
+            logger.debug(`[CDP] Debug screenshot saved: ${filepath}`);
+        } catch (e) {
+            logger.debug('[CDP] Failed to save debug screenshot:', e.message);
         }
     }
 
     /**
-     * Check if browser is healthy and connected
-     * @returns {boolean}
+     * Attempt to reconnect to an existing Chrome process
+     * Used for recovery when connection is lost during extraction
      */
-    isHealthy() {
+    async reconnect() {
+        if (!this.chrome || !this.chrome.port) {
+            throw new Error('No Chrome process to reconnect to');
+        }
+
+        logger.info('[CDP] Attempting to reconnect to Chrome...');
+
         try {
-            return !!(
-                this.client &&
-                this.chrome &&
-                this.chrome.process &&
-                !this.chrome.process.killed
-            );
-        } catch (e) {
-            return false;
+            // Close existing client if any
+            if (this.client) {
+                try {
+                    await this.client.close();
+                } catch (e) { /* ignore */ }
+                this.client = null;
+            }
+
+            // Re-establish CDP connection
+            const CDP = require('chrome-remote-interface');
+            this.client = await CDP({ port: this.chrome.port });
+
+            // Re-enable required domains
+            const { Network, Page, Runtime, Performance } = this.client;
+            await Promise.all([
+                Network.enable(),
+                Page.enable(),
+                Runtime.enable(),
+                Performance.enable().catch(() => { })
+            ]);
+
+            logger.info('[CDP] Successfully reconnected to Chrome');
+            return true;
+        } catch (error) {
+            logger.error('[CDP] Reconnection failed:', error.message);
+            throw error;
         }
     }
 
+    /**
+     * Close the Chrome process and cleanup
+     */
     async close() {
         try {
             if (this.client) {
                 await this.client.close();
                 this.client = null;
             }
+        } catch (e) {
+            logger.debug('[CDP] Error closing client:', e.message);
+        }
+
+        try {
             if (this.chrome) {
                 await this.chrome.kill();
                 this.chrome = null;
             }
-            logger.info('[CDP] Chrome closed');
-        } catch (error) {
-            logger.warn('[CDP] Error closing Chrome', { error: error.message });
+        } catch (e) {
+            logger.debug('[CDP] Error killing Chrome:', e.message);
         }
+
+        logger.info('[CDP] Chrome closed');
     }
 
-    getClient() {
-        return this.client;
-    }
-
-    isConnected() {
-        return this.client !== null && this.chrome !== null;
-    }
 }
 
 module.exports = ChromeCDPClient;
