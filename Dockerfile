@@ -1,61 +1,29 @@
-FROM python:3.12-slim
+# Use the official Playwright image with all browser dependencies pre-installed
+FROM mcr.microsoft.com/playwright:v1.44.0-jammy
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PLAYWRIGHT_BROWSERS_PATH=/app/pw-browsers
-
-# Install system dependencies for Playwright and health checks
-RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
-    curl \
-    libnss3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
-    libpango-1.0-0 \
-    libcairo2 \
-    && rm -rf /var/lib/apt/lists/*
-
+# Set working directory
 WORKDIR /app
 
-# Install Python dependencies
-COPY pyproject.toml .
-RUN pip install --no-cache-dir uv && \
-    uv pip install --system .
+# Copy package files
+COPY package*.json ./
 
-# Install Playwright browsers to a specific path
-RUN playwright install chromium
+# Install dependencies (browsers already included in base image)
+RUN npm ci --only=production
 
 # Copy application code
 COPY . .
 
-# Create a start script to handle different roles
-RUN echo '#!/bin/bash\n\
-    if [ "$ROLE" = "worker" ]; then\n\
-    exec celery -A src.queue.celery_app worker --loglevel=info --concurrency=${CONCURRENCY:-2}\n\
-    elif [ "$ROLE" = "beat" ]; then\n\
-    exec celery -A src.queue.celery_app beat --loglevel=info\n\
-    else\n\
-    exec uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}\n\
-    fi' > /app/start.sh && chmod +x /app/start.sh
+# Set environment variables for Playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV NODE_ENV=production
+ENV PORT=8080
 
-# Expose port for FastAPI
-EXPOSE 8000
+# Cloud Run expects port 8080
+EXPOSE 8080
 
-# Health check (only relevant for API role)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:8080/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
 
-# Default command
-CMD ["/app/start.sh"]
+# Run the worker
+CMD ["node", "scripts/worker-runner.js"]
