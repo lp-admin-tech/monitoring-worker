@@ -485,8 +485,14 @@ async def _poll_queue_async() -> dict[str, Any]:
         
         # Dispatch audit tasks for each site
         for site_info in sites:
-            site_name = site_info.get("site_name")
-            site_url = site_info.get("url") or site_info.get("site_url")
+            # Handle both string and dict formats
+            if isinstance(site_info, str):
+                site_name = site_info
+                site_url = None
+            else:
+                site_name = site_info.get("site_name")
+                site_url = site_info.get("url") or site_info.get("site_url")
+            
             run_site_audit.delay(
                 publisher_id=publisher_id,
                 site_url=site_url,
