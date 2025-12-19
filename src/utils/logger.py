@@ -37,7 +37,6 @@ def setup_logging() -> None:
     
     # Shared processors for all outputs
     shared_processors: list[Processor] = [
-        structlog.stdlib.add_logger_name,
         _add_log_level,
         _add_timestamp,
         structlog.processors.StackInfoRenderer(),
