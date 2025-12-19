@@ -140,7 +140,7 @@ class DatabaseClient:
             insert_data = {
                 "publisher_id": publisher_id,
                 "site_name": site_name,
-                "status": "started",
+                "status": "pending",
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             # Add audit_queue_id if provided (links to the job that triggered this audit)
