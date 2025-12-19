@@ -34,6 +34,7 @@ def run_site_audit(
     site_name: str | None = None,
     priority: str = "normal",
     triggered_by: str = "api",
+    job_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Run a complete site audit.
@@ -61,6 +62,7 @@ def run_site_audit(
                 site_url=site_url,
                 site_name=site_name,
                 triggered_by=triggered_by,
+                job_id=job_id,
             )
         )
         
@@ -89,6 +91,7 @@ async def _run_audit_async(
     site_url: str | None,
     site_name: str | None,
     triggered_by: str,
+    job_id: str | None = None,
 ) -> dict[str, Any]:
     """Async implementation of the full audit flow."""
     from src.database.client import db
@@ -114,7 +117,7 @@ async def _run_audit_async(
     site = site_name or publisher.get("site_name") or url
     
     # Create audit record
-    audit_id = await db.create_site_audit(publisher_id, site)
+    audit_id = await db.create_site_audit(publisher_id, site, job_id)
     if not audit_id:
         raise ValueError("Failed to create audit record")
     
@@ -485,10 +488,21 @@ async def _poll_queue_async() -> dict[str, Any]:
         
         # Dispatch audit tasks for each site
         for site_info in sites:
-            # Handle both string and dict formats
+            # Handle various formats: string, JSON string, or dict
             if isinstance(site_info, str):
-                site_name = site_info
-                site_url = None
+                # Check if it's a JSON-encoded string like '{"site_name":"example.com"}'
+                if site_info.startswith('{'):
+                    try:
+                        import json
+                        parsed = json.loads(site_info)
+                        site_name = parsed.get("site_name", site_info)
+                        site_url = parsed.get("url") or parsed.get("site_url")
+                    except json.JSONDecodeError:
+                        site_name = site_info
+                        site_url = None
+                else:
+                    site_name = site_info
+                    site_url = None
             else:
                 site_name = site_info.get("site_name")
                 site_url = site_info.get("url") or site_info.get("site_url")
@@ -498,6 +512,7 @@ async def _poll_queue_async() -> dict[str, Any]:
                 site_url=site_url,
                 site_name=site_name,
                 triggered_by=triggered_by,
+                job_id=job_id,  # Pass job_id for audit_queue_id tracking
             )
             dispatched += 1
         

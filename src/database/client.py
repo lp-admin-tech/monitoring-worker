@@ -133,16 +133,21 @@ class DatabaseClient:
             logger.error("Failed to fetch publisher", publisher_id=publisher_id, error=str(e))
             return None
     
-    async def create_site_audit(self, publisher_id: str, site_name: str) -> str | None:
+    async def create_site_audit(self, publisher_id: str, site_name: str, audit_queue_id: str | None = None) -> str | None:
         """Create a new site audit record, returns the audit ID."""
         try:
             from datetime import datetime, timezone
-            result = self.client.table("site_audits").insert({
+            insert_data = {
                 "publisher_id": publisher_id,
                 "site_name": site_name,
                 "status": "started",
                 "created_at": datetime.now(timezone.utc).isoformat(),
-            }).execute()
+            }
+            # Add audit_queue_id if provided (links to the job that triggered this audit)
+            if audit_queue_id:
+                insert_data["audit_queue_id"] = audit_queue_id
+            
+            result = self.client.table("site_audits").insert(insert_data).execute()
             return result.data[0]["id"] if result.data else None
         except Exception as e:
             logger.error(
