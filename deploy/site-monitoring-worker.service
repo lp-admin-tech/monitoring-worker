@@ -1,0 +1,16 @@
+[Unit]
+Description=Site Monitoring Worker - Celery
+After=network.target redis-server.service
+
+[Service]
+Type=simple
+User=rai_ali1235
+Group=rai_ali1235
+WorkingDirectory=/opt/site-monitoring-worker
+Environment="PATH=/opt/site-monitoring-worker/venv/bin"
+ExecStart=/opt/site-monitoring-worker/venv/bin/python -m celery -A src.queue.celery_app worker --loglevel=info
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
