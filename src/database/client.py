@@ -132,6 +132,53 @@ class DatabaseClient:
         except Exception as e:
             logger.error("Failed to fetch publisher", publisher_id=publisher_id, error=str(e))
             return None
+
+    async def create_site_audit(self, publisher_id: str, site_name: str, audit_queue_id: str | None = None, audit_job_queue_id: str | None = None) -> str | None:
+        """Create a new site audit record, returns the audit ID."""
+        try:
+            from datetime import datetime, timezone
+            insert_data = {
+                "publisher_id": publisher_id,
+                "site_name": site_name,
+                "status": "pending",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if audit_queue_id:
+                insert_data["audit_queue_id"] = audit_queue_id
+            if audit_job_queue_id:
+                insert_data["audit_job_queue_id"] = audit_job_queue_id
+            
+            # Try to insert with links
+            try:
+                result = self.client.table("site_audits").insert(insert_data).execute()
+                return result.data[0]["id"] if result.data else None
+            except Exception as e:
+                # Check for foreign key violation (Postgres error 23503)
+                if "23503" in str(e):
+                    logger.warning(
+                        "Audit queue job missing, linking skipped",
+                        publisher_id=publisher_id,
+                        site_name=site_name,
+                        audit_queue_id=audit_queue_id,
+                        audit_job_queue_id=audit_job_queue_id
+                    )
+                    # Retry without the failing foreign keys
+                    if "audit_queue_id" in insert_data:
+                        del insert_data["audit_queue_id"]
+                    if "audit_job_queue_id" in insert_data:
+                        del insert_data["audit_job_queue_id"]
+                        
+                    result = self.client.table("site_audits").insert(insert_data).execute()
+                    return result.data[0]["id"] if result.data else None
+                raise e
+        except Exception as e:
+            logger.error(
+                "Failed to create site audit",
+                publisher_id=publisher_id,
+                site_name=site_name,
+                error=str(e),
+            )
+            return None
     
     async def update_site_audit(
         self,

@@ -116,7 +116,7 @@ async def _run_audit_async(
     site = site_name or publisher.get("site_name") or url
     
     # Create audit record
-    audit_id = await db.create_site_audit(publisher_id, site, job_id)
+    audit_id = await db.create_site_audit(publisher_id, site, audit_job_queue_id=job_id)
     if not audit_id:
         raise ValueError("Failed to create audit record")
     
