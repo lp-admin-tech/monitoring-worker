@@ -271,7 +271,7 @@ class DatabaseClient:
             try:
                 result = self.client.table("report_historical").select("*").eq(
                     "publisher_id", publisher_id
-                ).gte("report_date", cutoff_date).order("report_date", desc=True).execute()
+                ).gte("date", cutoff_date).order("date", desc=True).execute()
                 
                 if result.data:
                     gam_data = result.data

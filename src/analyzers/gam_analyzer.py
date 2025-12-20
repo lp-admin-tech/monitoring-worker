@@ -79,7 +79,7 @@ class GAMMetricsAnalyzer:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
         recent_data = [
             d for d in gam_data
-            if self._parse_date(d.get("report_date")) >= cutoff
+            if self._parse_date(d.get("report_date") or d.get("date")) >= cutoff
         ]
         
         if not recent_data:
@@ -98,8 +98,8 @@ class GAMMetricsAnalyzer:
             "has_data": True,
             "data_points": len(recent_data),
             "date_range": {
-                "start": min(d.get("report_date", "") for d in recent_data),
-                "end": max(d.get("report_date", "") for d in recent_data),
+                "start": min(d.get("report_date") or d.get("date", "") for d in recent_data),
+                "end": max(d.get("report_date") or d.get("date", "") for d in recent_data),
             },
             "metrics": metrics,
             "suspicious_patterns": suspicious_patterns,

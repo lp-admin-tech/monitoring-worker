@@ -182,6 +182,8 @@ class RiskEngine:
         }
     
     def _get_risk_level(self, score: float) -> str:
-        if score <= 0.3: return "low"
-        if score <= 0.6: return "medium"
-        return "high"
+        if score <= 0.2: return "MINIMAL"
+        if score <= 0.4: return "LOW"
+        if score <= 0.6: return "MEDIUM"
+        if score <= 0.8: return "HIGH"
+        return "CRITICAL"
