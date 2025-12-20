@@ -340,17 +340,23 @@ async def _run_audit_async(
         start_time = time.perf_counter()
         llm_client = LLMClient()
         
-        ai_report = await llm_client.generate_report(
-            audit_data={
-                "content_analysis": content_result,
-                "ad_analysis": ad_result,
-                "technical_check": technical_result,
-                "policy_check": policy_result,
-            },
-            risk_score=risk_result["risk_score"],
-            risk_level=risk_result["risk_level"],
+        ai_report = await llm_client.generate_audit_report(
+            analysis_results={
+                "url": url,
+                "ad": ad_result,
+                "content": content_result,
+                "traffic": ad_result.get("traffic_quality", {}),
+                "ivt": ad_result.get("network_analysis", {}),
+                "scoring": {
+                    "probability": risk_result["mfa_probability"],
+                    "confidence": risk_result.get("data_quality_score", 0.5),
+                },
+            }
         )
         duration = time.perf_counter() - start_time
+        
+        # Wrap the string report in a dict for downstream compatibility
+        ai_report = {"summary": ai_report, "risk_level": risk_result["risk_level"]}
         
         logger.info(
             "✓ AI report generated",

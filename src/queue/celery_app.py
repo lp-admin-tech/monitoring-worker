@@ -26,8 +26,8 @@ celery_app.conf.update(
     # Task execution
     task_acks_late=True,
     task_reject_on_worker_lost=True,
-    task_time_limit=600,  # 10 minutes hard limit
-    task_soft_time_limit=300,  # 5 minutes soft limit
+    task_time_limit=900,  # 15 minutes hard limit (multi-URL crawls up to 25 pages)
+    task_soft_time_limit=600,  # 10 minutes soft limit
     
     # Worker settings
     worker_prefetch_multiplier=1,  # One task at a time
