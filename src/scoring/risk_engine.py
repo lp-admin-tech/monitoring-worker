@@ -97,11 +97,14 @@ class RiskEngine:
         if crawl_status == "FALLBACK":
             overall_confidence *= 0.8
         
+        # Final risk score (0-1.0)
+        risk_score = mfa_probability
+        
         return {
-            "risk_score": round(mfa_probability * 100, 2),
+            "risk_score": round(risk_score, 4),
             "mfa_probability": round(mfa_probability, 4),
             "confidence": round(overall_confidence, 4),
-            "risk_level": self._get_risk_level(mfa_probability),
+            "risk_level": self._get_risk_level(risk_score),
             "components": components,
             "scoring_mode": "full",
             "crawl_status": crawl_status,
@@ -118,11 +121,14 @@ class RiskEngine:
         # GAM-only has lower confidence but can still detect MFA signals
         confidence = 0.6  # Lower than full scoring
         
+        # Final risk score (0-1.0)
+        risk_score = gam_score
+        
         return {
-            "risk_score": round(gam_score * 100, 2),
+            "risk_score": round(risk_score, 4),
             "mfa_probability": round(gam_score, 4),
             "confidence": confidence,
-            "risk_level": self._get_risk_level(gam_score),
+            "risk_level": self._get_risk_level(risk_score),
             "components": {
                 "gam": {"score": gam_score, "weight": 1.0, "confidence": confidence}
             },

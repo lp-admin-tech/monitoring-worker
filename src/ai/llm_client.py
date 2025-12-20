@@ -72,9 +72,15 @@ class LLMClient:
         REPORT STRUCTURE:
         1. Executive Summary (1-2 sentences)
         2. Critical Findings (Bulleted list of highest risk signals)
-        3. Recommendation (Actionable advice for the publisher)
+        3. Remediation Plan (Specific, actionable steps to fix detected MFA signals and improve site health)
         
-        Keep the tone professional and data-driven.
+        REMEDIATION GUIDANCE:
+        - If Ad Layout risk is high: Suggest reducing ad density, removing stacked/hidden ads, and improving ad-to-content ratio.
+        - If Content Quality is low: Suggest increasing word count, improving information density, and ensuring original, non-AI content.
+        - If Traffic/IVT risk is high: Suggest reviewing traffic sources, eliminating arbitrage, and implementing better bot protection.
+        - If Policy pages are missing: Suggest adding clear Privacy, Terms, and About Us pages.
+        
+        Keep the tone professional, data-driven, and helpful.
         """
         
         try:

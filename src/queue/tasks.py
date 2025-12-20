@@ -230,6 +230,12 @@ async def _run_audit_async(
             domain_health=domain_health_result.get("health_score", 0),
         )
         
+        # Detailed findings logging (similar to JS worker)
+        _log_detailed_findings("CONTENT", content_result)
+        _log_detailed_findings("ADVERTISING", ad_result)
+        _log_detailed_findings("POLICY", policy_result)
+        _log_detailed_findings("TECHNICAL", technical_result)
+        
         # Merge domain health into technical result for database storage
         technical_result["domain_health"] = domain_health_result
         technical_result["dns"] = domain_health_result.get("dns", {})
@@ -552,3 +558,29 @@ async def _recover_jobs_async() -> dict[str, Any]:
 
 # NOTE: Alert rule evaluation was moved to Supabase Edge Function (evaluate-alert-rules)
 # The pg_cron job in database calls the Edge Function hourly.
+
+
+def _log_detailed_findings(module_name: str, result: dict[str, Any]) -> None:
+    """Log detailed findings for a module in a structured way."""
+    findings = result.get("findings", [])
+    violations = result.get("violations", [])
+    issues = result.get("issues", [])
+    
+    # Combine all negative signals
+    all_issues = findings + violations + issues
+    
+    if not all_issues:
+        logger.info(f"[{module_name}] No issues detected")
+        return
+        
+    logger.info(f"[{module_name}] DETAILED FINDINGS:")
+    for issue in all_issues:
+        if isinstance(issue, str):
+            logger.info(f"  ✗ {issue}")
+        elif isinstance(issue, dict):
+            msg = issue.get("message") or issue.get("description") or str(issue)
+            logger.info(f"  ✗ {msg}")
+
+    # Log some key metrics if available
+    if "risk_score" in result:
+        logger.info(f"  → Risk Score: {result['risk_score']:.4f} ({result.get('risk_level', 'unknown')})")
