@@ -3,6 +3,7 @@ Celery application configuration.
 """
 
 from celery import Celery
+from celery.signals import setup_logging
 
 from src.config import settings
 
@@ -38,6 +39,9 @@ celery_app.conf.update(
     # Retry settings
     task_default_retry_delay=60,
     task_max_retries=3,
+    
+    # Disable Celery's default hijack of root logger
+    worker_hijack_root_logger=False,
 )
 
 # Task routes (optional - for scaling)
@@ -61,3 +65,40 @@ celery_app.conf.beat_schedule = {
     },
     # NOTE: Alert rule evaluation moved to Edge Function + pg_cron
 }
+
+
+@setup_logging.connect
+def configure_celery_logging(**kwargs):
+    """
+    Configure clean, readable logging for Celery.
+    Overrides Celery's default logging to use a simple format.
+    """
+    import logging
+    
+    # Simple format: [LEVEL] message
+    simple_format = logging.Formatter('[%(levelname)s] %(message)s')
+    
+    # Configure root logger
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    
+    # Clear existing handlers
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+    
+    # Add simple console handler
+    console = logging.StreamHandler()
+    console.setFormatter(simple_format)
+    root.addHandler(console)
+    
+    # Configure celery logger
+    celery_logger = logging.getLogger('celery')
+    celery_logger.setLevel(logging.INFO)
+    
+    # Configure task logger
+    task_logger = logging.getLogger('celery.task')
+    task_logger.setLevel(logging.INFO)
+    
+    # Suppress noisy loggers
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('httpcore').setLevel(logging.WARNING)
