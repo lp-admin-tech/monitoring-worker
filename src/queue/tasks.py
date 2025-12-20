@@ -41,7 +41,6 @@ def run_site_audit(
     
     This is the main Celery task that orchestrates the entire audit flow:
     1. Crawl the site using crawl4ai
-    2. Run all analyzers (content, ads, technical, policy)
     3. Calculate risk scores
     4. Generate AI report
     5. Save results to database

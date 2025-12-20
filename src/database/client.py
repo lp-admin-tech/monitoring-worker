@@ -133,59 +133,6 @@ class DatabaseClient:
             logger.error("Failed to fetch publisher", publisher_id=publisher_id, error=str(e))
             return None
     
-    async def create_site_audit(self, publisher_id: str, site_name: str, audit_queue_id: str | None = None) -> str | None:
-        """Create a new site audit record, returns the audit ID."""
-        from datetime import datetime, timezone
-        
-        insert_data = {
-            "publisher_id": publisher_id,
-            "site_name": site_name,
-            "status": "pending",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        
-        # Helper to execute insert
-        async def _do_insert(data: dict[str, Any]) -> str | None:
-            result = self.client.table("site_audits").insert(data).execute()
-            return result.data[0]["id"] if result.data else None
-
-        try:
-            # Try with audit_queue_id if provided
-            if audit_queue_id:
-                data_with_job = insert_data.copy()
-                data_with_job["audit_queue_id"] = audit_queue_id
-                return await _do_insert(data_with_job)
-            else:
-                return await _do_insert(insert_data)
-                
-        except Exception as e:
-            # Check for Foreign Key violation (Postgres code 23503)
-            error_str = str(e)
-            if "23503" in error_str and audit_queue_id:
-                logger.warning(
-                    "Audit queue job missing, linking skipped",
-                    publisher_id=publisher_id,
-                    audit_queue_id=audit_queue_id,
-                )
-                # Retry without the job link
-                try:
-                    return await _do_insert(insert_data)
-                except Exception as retry_e:
-                    logger.error(
-                        "Failed to create site audit (retry)",
-                        publisher_id=publisher_id,
-                        error=str(retry_e),
-                    )
-                    return None
-            
-            logger.error(
-                "Failed to create site audit",
-                publisher_id=publisher_id,
-                site_name=site_name,
-                error=error_str,
-            )
-            return None
-    
     async def update_site_audit(
         self,
         audit_id: str,
