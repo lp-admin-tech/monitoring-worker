@@ -45,11 +45,10 @@ class DomainHealthChecker:
         
         try:
             # Run checks in parallel
-            dns_result, safe_browsing_result, pagespeed_result, domain_age_result = await asyncio.gather(
+            dns_result, safe_browsing_result, pagespeed_result = await asyncio.gather(
                 self._check_dns(domain),
                 self._check_safe_browsing(url),
                 self._check_pagespeed(url),
-                self._check_domain_age(domain),
                 return_exceptions=True,
             )
             
@@ -60,12 +59,10 @@ class DomainHealthChecker:
                 safe_browsing_result = {"error": str(safe_browsing_result), "is_safe": None}
             if isinstance(pagespeed_result, Exception):
                 pagespeed_result = {"error": str(pagespeed_result)}
-            if isinstance(domain_age_result, Exception):
-                domain_age_result = {"error": str(domain_age_result), "age_years": 0}
             
             # Calculate overall health score
             health_score = self._calculate_health_score(
-                dns_result, safe_browsing_result, pagespeed_result, domain_age_result
+                dns_result, safe_browsing_result, pagespeed_result
             )
             
             return {
@@ -73,7 +70,6 @@ class DomainHealthChecker:
                 "dns": dns_result,
                 "safe_browsing": safe_browsing_result,
                 "pagespeed": pagespeed_result,
-                "domain_age": domain_age_result,
                 "health_score": round(health_score, 2),
                 "risk_level": self._get_risk_level(health_score),
             }
@@ -238,42 +234,12 @@ class DomainHealthChecker:
                 result["desktop_error"] = str(e)
         
         return result
-            
-    async def _check_domain_age(self, domain: str) -> dict[str, Any]:
-        """Estimate domain age using WHOIS."""
-        try:
-            import whois
-            from datetime import datetime
-            
-            # Run in thread pool as whois is blocking
-            w = await asyncio.to_thread(whois.whois, domain)
-            
-            creation_date = w.creation_date
-            if isinstance(creation_date, list):
-                creation_date = creation_date[0]
-                
-            if creation_date:
-                now = datetime.now()
-                age_days = (now - creation_date).days
-                age_years = age_days / 365.25
-                
-                return {
-                    "creation_date": creation_date.isoformat(),
-                    "age_years": round(age_years, 2),
-                    "age_days": age_days,
-                    "registrar": w.registrar,
-                }
-        except Exception as e:
-            logger.debug("WHOIS lookup failed", domain=domain, error=str(e))
-            
-        return {"age_years": 0, "note": "WHOIS lookup unavailable"}
     
     def _calculate_health_score(
         self,
         dns_result: dict[str, Any],
         safe_browsing_result: dict[str, Any],
         pagespeed_result: dict[str, Any],
-        domain_age_result: dict[str, Any],
     ) -> float:
         """Calculate overall domain health score (0-100)."""
         score = 0.0
@@ -286,30 +252,19 @@ class DomainHealthChecker:
         if dns_result.get("nameservers"):
             score += 5
             
-        # Domain Age (15 points)
-        age_years = domain_age_result.get("age_years", 0)
-        if age_years >= 5:
-            score += 15
-        elif age_years >= 2:
-            score += 10
-        elif age_years >= 1:
-            score += 5
-        elif age_years > 0:
-            score += 2
-        
-        # Safe Browsing (30 points)
+        # Safe Browsing (35 points)
         if safe_browsing_result.get("is_safe") is True:
             score += 35
         elif safe_browsing_result.get("is_safe") is None:
             score += 17.5  # Unknown, give partial credit
         # If is_safe is False, no points
         
-        # PageSpeed (40 points)
+        # PageSpeed (45 points)
         mobile = pagespeed_result.get("mobile_score")
         desktop = pagespeed_result.get("desktop_score")
         
         if mobile is not None:
-            score += (mobile / 100) * 20
+            score += (mobile / 100) * 25
         if desktop is not None:
             score += (desktop / 100) * 15
         if pagespeed_result.get("mobile_friendly"):

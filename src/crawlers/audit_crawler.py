@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel
+import certifi
+import random
 
 from src.config import settings
 from src.utils.logger import get_logger
@@ -159,19 +161,70 @@ class AuditCrawler:
         self._crawler = None
         self._captured_requests: list[dict[str, Any]] = []
     
+    async def _ensure_playwright_browsers(self):
+        """
+        Ensure Playwright browsers are installed.
+        """
+        import subprocess
+        import sys
+        import os
+        
+        # Check if chromium is already installed in the default location
+        # This is a bit tricky as the location varies, but we can try to run a simple check
+        try:
+            from playwright.async_api import async_playwright
+            async with async_playwright() as p:
+                try:
+                    browser = await p.chromium.launch(headless=True)
+                    await browser.close()
+                    return # Already installed
+                except Exception as e:
+                    if "Executable doesn't exist" in str(e):
+                        logger.info("Playwright browsers missing, installing...")
+                    else:
+                        raise e
+        except ImportError:
+            logger.error("Playwright not installed in Python environment")
+            return
+
+        # If we reach here, we need to install
+        try:
+            logger.info("Installing Playwright chromium browser...")
+            subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            logger.info("✓ Playwright chromium installed successfully")
+        except subprocess.CalledProcessError as e:
+            logger.error("Failed to install Playwright browsers", error=e.stderr)
+        except Exception as e:
+            logger.error("Unexpected error installing Playwright", error=str(e))
+
     async def crawl(self, url: str) -> CrawlResult:
         """
         Crawl a URL and extract all relevant data for MFA analysis.
         """
+        # Ensure browsers are installed before crawling
+        await self._ensure_playwright_browsers()
+        
         from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
         
         logger.info("Starting crawl", url=url)
         
         try:
             # Configure browser
+            user_agents = [
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            ]
+            
             browser_config = BrowserConfig(
                 headless=settings.crawler_headless,
                 verbose=False,
+                user_agent=random.choice(user_agents),
                 extra_args=[
                     "--disable-blink-features=AutomationControlled",
                     "--disable-infobars",

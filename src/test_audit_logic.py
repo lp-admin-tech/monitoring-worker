@@ -32,8 +32,9 @@ async def test_audit():
         policy = result.get("policy_check", {})
         ad_analysis = result.get("ad_analysis", {})
         
-        logger.info("Checking new signals...")
-        logger.info("Domain Age:", domain_age=technical.get("domain_health", {}).get("domain_age"))
+        logger.info("Checking signals...")
+        logger.info("DNS:", dns=technical.get("dns"))
+        logger.info("Safe Browsing:", safe_browsing=technical.get("safe_browsing"))
         logger.info("Broken Links:", broken_links=technical.get("broken_links"))
         logger.info("Policy Validation:", policy_validation=policy.get("content_validation"))
         logger.info("eCPM Analysis:", ecpm_analysis=ad_analysis.get("traffic_quality", {}).get("ecpm_analysis"))

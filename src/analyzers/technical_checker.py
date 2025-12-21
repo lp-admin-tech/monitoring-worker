@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+import certifi
 
 from src.config import settings
 from src.utils.logger import get_logger
@@ -101,7 +102,7 @@ class TechnicalChecker:
         from datetime import datetime, timezone
         
         try:
-            context = ssl.create_default_context()
+            context = ssl.create_default_context(cafile=certifi.where())
             
             with socket.create_connection((domain, 443), timeout=10) as sock:
                 with context.wrap_socket(sock, server_hostname=domain) as ssock:
@@ -137,7 +138,12 @@ class TechnicalChecker:
     async def _check_ads_txt(self, domain: str) -> dict[str, Any]:
         """Check ads.txt presence and parse its contents."""
         try:
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True, headers=headers, verify=certifi.where()) as client:
                 response = await client.get(f"https://{domain}/ads.txt")
                 
                 if response.status_code == 404:
