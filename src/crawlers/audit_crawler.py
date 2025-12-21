@@ -180,7 +180,7 @@ class AuditCrawler:
             
             # Configure crawl run with enhanced JS for comprehensive MFA detection
             js_code = """
-            () => {
+            (() => {
                 const viewportHeight = window.innerHeight;
                 const scrollY = window.scrollY || 0;
                 
@@ -378,7 +378,7 @@ class AuditCrawler:
                     layout: layout,
                     stats: stats
                 });
-            }
+            })()
             """
 
             
@@ -400,7 +400,20 @@ class AuditCrawler:
                 
                 if not result.success:
                     logger.warning("Crawl failed", url=url, error=result.error_message)
-                    return CrawlResult(url=url, error=result.error_message)
+                    # Check for blocking even in failed result
+                    is_blocked = any(x in str(result.error_message).lower() for x in ["403", "429", "cloudflare", "captcha", "challenge", "blocked", "forbidden", "access denied"])
+                    if is_blocked:
+                        return await self._crawl_with_cloudscraper(url)
+                    return CrawlResult(url=url, error=result.error_message, crawl_status="FAILED")
+                
+                # Check for silent blocks (200 OK but challenge page)
+                if result.html and len(result.html) < 2000:
+                    html_lower = result.html.lower()
+                    if any(x in html_lower for x in ["cloudflare", "captcha", "challenge", "access denied", "blocked"]):
+                        logger.warning("Silent block detected (Cloudflare/CAPTCHA)", url=url)
+                        return await self._crawl_with_cloudscraper(url)
+                
+                logger.info("Crawl result", url=url, html_len=len(result.html), text_len=len(result.text))
                 
                 # Parse JS extraction result (returns JSON with ads, videos, widgets, popups, etc.)
                 ad_elements = []

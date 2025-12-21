@@ -40,6 +40,9 @@ class AdAnalyzer:
             ad_count = len(ad_elements)
             ad_request_count = len(ad_requests)
             
+            if ad_count == 0:
+                logger.info("No ad elements detected by JS extraction", url=crawl_result.url)
+            
             # Identify ad iframes
             ad_iframes = [
                 iframe for iframe in iframes

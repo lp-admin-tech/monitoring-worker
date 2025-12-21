@@ -51,7 +51,8 @@ class ContentAnalyzer:
         html = crawl_result.html or ""
         
         if not text:
-            return self._empty_result()
+            logger.warning("No content found for analysis", url=crawl_result.url, html_len=len(html))
+            return self._empty_result(error="No content found")
         
         try:
             import textstat
